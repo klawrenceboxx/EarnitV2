@@ -14,17 +14,17 @@ class EarnItAccessibilityService : AccessibilityService() {
     private val handler = Handler(Looper.getMainLooper())
     private var lastBlockedLaunchAt = 0L
     private var activeBlockedPackage: String? = null
-    private var activeBlockedAppName: String? = null
+    private var activeRule: EarnItRuleStore.Rule? = null
     private var lastConsumptionAt = 0L
 
     private val consumeRunnable = object : Runnable {
         override fun run() {
             consumeActiveBlockedUsage()
-            if (activeBlockedPackage != null) {
-                if (RewardLedger.snapshot(this@EarnItAccessibilityService).remainingRewardSeconds <= 0L) {
-                    val appName = activeBlockedAppName ?: "This app"
+            val rule = activeRule
+            if (activeBlockedPackage != null && rule != null) {
+                if (RewardLedger.snapshot(this@EarnItAccessibilityService, rule).remainingRewardSeconds <= 0L) {
                     clearActiveBlockedApp()
-                    launchBlockedActivity(appName, ignoreDebounce = true)
+                    launchBlockedActivity(rule, ignoreDebounce = true)
                 } else {
                     handler.postDelayed(this, CONSUMPTION_TICK_MILLIS)
                 }
@@ -41,18 +41,18 @@ class EarnItAccessibilityService : AccessibilityService() {
             return
         }
 
-        val blockedAppName = AppPackages.getBlockedAppName(foregroundPackage)
-        if (blockedAppName == null) {
+        val rule = EarnItRuleStore.getRule(this)
+        if (foregroundPackage != rule.blockedPackage) {
             stopActiveBlockedUsage()
             return
         }
 
-        creditLatestProductiveUsage()
-        if (RewardLedger.snapshot(this).remainingRewardSeconds > 0L) {
-            startActiveBlockedUsage(foregroundPackage, blockedAppName)
+        creditLatestProductiveUsage(rule)
+        if (RewardLedger.snapshot(this, rule).remainingRewardSeconds > 0L) {
+            startActiveBlockedUsage(rule)
         } else {
             stopActiveBlockedUsage()
-            launchBlockedActivity(blockedAppName)
+            launchBlockedActivity(rule)
         }
     }
 
@@ -63,12 +63,12 @@ class EarnItAccessibilityService : AccessibilityService() {
         super.onDestroy()
     }
 
-    private fun startActiveBlockedUsage(packageName: String, appName: String) {
-        if (activeBlockedPackage == packageName) return
+    private fun startActiveBlockedUsage(rule: EarnItRuleStore.Rule) {
+        if (activeBlockedPackage == rule.blockedPackage) return
 
         stopActiveBlockedUsage()
-        activeBlockedPackage = packageName
-        activeBlockedAppName = appName
+        activeBlockedPackage = rule.blockedPackage
+        activeRule = rule
         lastConsumptionAt = SystemClock.elapsedRealtime()
         handler.postDelayed(consumeRunnable, CONSUMPTION_TICK_MILLIS)
     }
@@ -81,11 +81,12 @@ class EarnItAccessibilityService : AccessibilityService() {
     private fun clearActiveBlockedApp() {
         handler.removeCallbacks(consumeRunnable)
         activeBlockedPackage = null
-        activeBlockedAppName = null
+        activeRule = null
         lastConsumptionAt = 0L
     }
 
     private fun consumeActiveBlockedUsage() {
+        val rule = activeRule ?: return
         if (activeBlockedPackage == null || lastConsumptionAt == 0L) return
 
         val now = SystemClock.elapsedRealtime()
@@ -93,10 +94,10 @@ class EarnItAccessibilityService : AccessibilityService() {
         if (elapsedSeconds <= 0L) return
 
         lastConsumptionAt += elapsedSeconds * 1_000L
-        RewardLedger.consumeRewardSeconds(this, elapsedSeconds)
+        RewardLedger.consumeRewardSeconds(this, rule, elapsedSeconds)
     }
 
-    private fun creditLatestProductiveUsage() {
+    private fun creditLatestProductiveUsage(rule: EarnItRuleStore.Rule) {
         if (!hasUsageAccess()) return
 
         val usageStatsManager = getSystemService(UsageStatsManager::class.java)
@@ -110,8 +111,8 @@ class EarnItAccessibilityService : AccessibilityService() {
             calendar.timeInMillis,
             System.currentTimeMillis()
         )
-        val productiveSecondsToday = (usageStats[AppPackages.PRODUCTIVE_APP]?.totalTimeInForeground ?: 0L) / 1_000L
-        RewardLedger.creditProductiveUsage(this, productiveSecondsToday)
+        val productiveSecondsToday = (usageStats[rule.productivePackage]?.totalTimeInForeground ?: 0L) / 1_000L
+        RewardLedger.creditProductiveUsage(this, rule, productiveSecondsToday)
     }
 
     private fun hasUsageAccess(): Boolean {
@@ -124,12 +125,14 @@ class EarnItAccessibilityService : AccessibilityService() {
         return mode == AppOpsManager.MODE_ALLOWED
     }
 
-    private fun launchBlockedActivity(blockedAppName: String, ignoreDebounce: Boolean = false) {
+    private fun launchBlockedActivity(rule: EarnItRuleStore.Rule, ignoreDebounce: Boolean = false) {
         if (!ignoreDebounce && !canLaunchBlockedActivity()) return
 
         lastBlockedLaunchAt = System.currentTimeMillis()
         val intent = Intent(this, BlockedActivity::class.java).apply {
-            putExtra(BlockedActivity.EXTRA_BLOCKED_APP_NAME, blockedAppName)
+            putExtra(BlockedActivity.EXTRA_BLOCKED_APP_NAME, rule.blockedName)
+            putExtra(BlockedActivity.EXTRA_PRODUCTIVE_APP_NAME, rule.productiveName)
+            putExtra(BlockedActivity.EXTRA_PRODUCTIVE_PACKAGE, rule.productivePackage)
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
             addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)

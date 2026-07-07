@@ -8,6 +8,10 @@
         <package android:name="com.duolingo" />
         <package android:name="com.instagram.android" />
         <package android:name="org.lichess.mobileV2" />
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
     </queries>
 
     <application

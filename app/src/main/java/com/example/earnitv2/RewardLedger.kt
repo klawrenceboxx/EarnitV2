@@ -9,6 +9,7 @@ import java.util.Locale
 object RewardLedger {
     private const val PREFS_NAME = "earnit_reward_ledger"
     private const val KEY_ACCOUNTING_DAY = "accounting_day"
+    private const val KEY_RULE_ID = "rule_id"
     private const val KEY_PRODUCTIVE_CREDITED_SECONDS = "productive_credited_seconds"
     private const val KEY_REWARD_ISSUED_SECONDS = "reward_issued_seconds"
     private const val KEY_REWARD_CONSUMED_SECONDS = "reward_consumed_seconds"
@@ -23,8 +24,12 @@ object RewardLedger {
     }
 
     @Synchronized
-    fun creditProductiveUsage(context: Context, productiveUsageSecondsToday: Long): Snapshot {
-        val prefs = currentDayPrefs(context)
+    fun creditProductiveUsage(
+        context: Context,
+        rule: EarnItRuleStore.Rule,
+        productiveUsageSecondsToday: Long
+    ): Snapshot {
+        val prefs = currentPrefs(context, rule)
         val creditedSeconds = prefs.getLong(KEY_PRODUCTIVE_CREDITED_SECONDS, 0L)
         val rewardIssuedSeconds = prefs.getLong(KEY_REWARD_ISSUED_SECONDS, 0L)
         val rewardConsumedSeconds = prefs.getLong(KEY_REWARD_CONSUMED_SECONDS, 0L)
@@ -32,30 +37,25 @@ object RewardLedger {
         val newlyEarnedSeconds = (safeProductiveSeconds - creditedSeconds).coerceAtLeast(0L)
 
         if (newlyEarnedSeconds <= 0L) {
-            return Snapshot(
-                productiveCreditedSeconds = creditedSeconds,
-                rewardIssuedSeconds = rewardIssuedSeconds,
-                rewardConsumedSeconds = rewardConsumedSeconds
-            )
+            return Snapshot(creditedSeconds, rewardIssuedSeconds, rewardConsumedSeconds)
         }
 
-        val updatedCreditedSeconds = safeProductiveSeconds
-        val updatedRewardIssuedSeconds = rewardIssuedSeconds + issueRewardSeconds(newlyEarnedSeconds)
+        val updatedRewardIssuedSeconds = rewardIssuedSeconds + issueRewardSeconds(newlyEarnedSeconds, rule)
         prefs.edit()
-            .putLong(KEY_PRODUCTIVE_CREDITED_SECONDS, updatedCreditedSeconds)
+            .putLong(KEY_PRODUCTIVE_CREDITED_SECONDS, safeProductiveSeconds)
             .putLong(KEY_REWARD_ISSUED_SECONDS, updatedRewardIssuedSeconds)
             .commit()
 
-        return Snapshot(
-            productiveCreditedSeconds = updatedCreditedSeconds,
-            rewardIssuedSeconds = updatedRewardIssuedSeconds,
-            rewardConsumedSeconds = rewardConsumedSeconds
-        )
+        return Snapshot(safeProductiveSeconds, updatedRewardIssuedSeconds, rewardConsumedSeconds)
     }
 
     @Synchronized
-    fun consumeRewardSeconds(context: Context, consumedSeconds: Long): Snapshot {
-        val prefs = currentDayPrefs(context)
+    fun consumeRewardSeconds(
+        context: Context,
+        rule: EarnItRuleStore.Rule,
+        consumedSeconds: Long
+    ): Snapshot {
+        val prefs = currentPrefs(context, rule)
         val productiveCreditedSeconds = prefs.getLong(KEY_PRODUCTIVE_CREDITED_SECONDS, 0L)
         val rewardIssuedSeconds = prefs.getLong(KEY_REWARD_ISSUED_SECONDS, 0L)
         val rewardConsumedSeconds = prefs.getLong(KEY_REWARD_CONSUMED_SECONDS, 0L)
@@ -63,11 +63,7 @@ object RewardLedger {
         val secondsToConsume = consumedSeconds.coerceAtLeast(0L).coerceAtMost(remainingRewardSeconds)
 
         if (secondsToConsume <= 0L) {
-            return Snapshot(
-                productiveCreditedSeconds = productiveCreditedSeconds,
-                rewardIssuedSeconds = rewardIssuedSeconds,
-                rewardConsumedSeconds = rewardConsumedSeconds
-            )
+            return Snapshot(productiveCreditedSeconds, rewardIssuedSeconds, rewardConsumedSeconds)
         }
 
         val updatedRewardConsumedSeconds = rewardConsumedSeconds + secondsToConsume
@@ -75,16 +71,12 @@ object RewardLedger {
             .putLong(KEY_REWARD_CONSUMED_SECONDS, updatedRewardConsumedSeconds)
             .commit()
 
-        return Snapshot(
-            productiveCreditedSeconds = productiveCreditedSeconds,
-            rewardIssuedSeconds = rewardIssuedSeconds,
-            rewardConsumedSeconds = updatedRewardConsumedSeconds
-        )
+        return Snapshot(productiveCreditedSeconds, rewardIssuedSeconds, updatedRewardConsumedSeconds)
     }
 
     @Synchronized
-    fun snapshot(context: Context): Snapshot {
-        val prefs = currentDayPrefs(context)
+    fun snapshot(context: Context, rule: EarnItRuleStore.Rule): Snapshot {
+        val prefs = currentPrefs(context, rule)
         return Snapshot(
             productiveCreditedSeconds = prefs.getLong(KEY_PRODUCTIVE_CREDITED_SECONDS, 0L),
             rewardIssuedSeconds = prefs.getLong(KEY_REWARD_ISSUED_SECONDS, 0L),
@@ -92,12 +84,14 @@ object RewardLedger {
         )
     }
 
-    private fun currentDayPrefs(context: Context): SharedPreferences {
+    private fun currentPrefs(context: Context, rule: EarnItRuleStore.Rule): SharedPreferences {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val today = todayKey()
-        if (prefs.getString(KEY_ACCOUNTING_DAY, null) != today) {
+        val ruleId = rule.id()
+        if (prefs.getString(KEY_ACCOUNTING_DAY, null) != today || prefs.getString(KEY_RULE_ID, null) != ruleId) {
             prefs.edit()
                 .putString(KEY_ACCOUNTING_DAY, today)
+                .putString(KEY_RULE_ID, ruleId)
                 .putLong(KEY_PRODUCTIVE_CREDITED_SECONDS, 0L)
                 .putLong(KEY_REWARD_ISSUED_SECONDS, 0L)
                 .putLong(KEY_REWARD_CONSUMED_SECONDS, 0L)
@@ -106,8 +100,12 @@ object RewardLedger {
         return prefs
     }
 
-    private fun issueRewardSeconds(productiveSeconds: Long): Long {
-        return productiveSeconds
+    private fun issueRewardSeconds(productiveSeconds: Long, rule: EarnItRuleStore.Rule): Long {
+        return productiveSeconds * rule.rewardSecondsPerProductiveSecond
+    }
+
+    private fun EarnItRuleStore.Rule.id(): String {
+        return "$productivePackage|$blockedPackage|$rewardSecondsPerProductiveSecond"
     }
 
     private fun todayKey(): String {

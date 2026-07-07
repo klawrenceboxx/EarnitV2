@@ -12,9 +12,12 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
@@ -31,13 +34,17 @@ import java.util.Calendar
 import java.util.concurrent.TimeUnit
 
 class MainActivity : ComponentActivity() {
+    private var activeRule by mutableStateOf<EarnItRuleStore.Rule?>(null)
+    private var launchableApps by mutableStateOf(emptyList<EarnItRuleStore.LaunchableApp>())
+    private var selectedProductivePackage by mutableStateOf("")
+    private var selectedBlockedPackage by mutableStateOf("")
+    private var selectedRatio by mutableStateOf(1)
+    private var editingRule by mutableStateOf(false)
     private var usageAccessGranted by mutableStateOf(false)
-    private var duolingoUsageSeconds by mutableStateOf(0L)
-    private var productiveCreditedSeconds by mutableStateOf(0L)
-    private var rewardIssuedSeconds by mutableStateOf(0L)
-    private var rewardConsumedSeconds by mutableStateOf(0L)
+    private var productiveUsageSeconds by mutableStateOf(0L)
     private var remainingRewardSeconds by mutableStateOf(0L)
     private var usageStatusMessage by mutableStateOf("")
+    private var ruleStatusMessage by mutableStateOf("")
     private var accessibilityServiceEnabled by mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -48,12 +55,26 @@ class MainActivity : ComponentActivity() {
             EarnitV2Theme {
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
                     Dashboard(
+                        rule = activeRule ?: EarnItRuleStore.getRule(this),
+                        apps = launchableApps,
+                        selectedProductivePackage = selectedProductivePackage,
+                        selectedBlockedPackage = selectedBlockedPackage,
+                        selectedRatio = selectedRatio,
+                        editingRule = editingRule,
                         usageAccessGranted = usageAccessGranted,
-                        duolingoUsageSeconds = duolingoUsageSeconds,
+                        productiveUsageSeconds = productiveUsageSeconds,
                         remainingRewardSeconds = remainingRewardSeconds,
+                        usageStatusMessage = usageStatusMessage,
+                        ruleStatusMessage = ruleStatusMessage,
                         accessibilityServiceEnabled = accessibilityServiceEnabled,
                         onOpenUsageAccessSettings = ::openUsageAccessSettings,
                         onOpenAccessibilitySettings = ::openAccessibilitySettings,
+                        onStartEditingRule = ::startEditingRule,
+                        onCancelEditingRule = { editingRule = false },
+                        onSelectProductiveApp = { selectedProductivePackage = it },
+                        onSelectBlockedApp = { selectedBlockedPackage = it },
+                        onSelectRatio = { selectedRatio = it },
+                        onSaveRule = ::saveRule,
                         modifier = Modifier.padding(innerPadding)
                     )
                 }
@@ -67,34 +88,65 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun refreshDashboardState() {
-        refreshUsageStats()
+        val rule = EarnItRuleStore.getRule(this)
+        activeRule = rule
+        launchableApps = EarnItRuleStore.launchableApps(this)
+        if (!editingRule) {
+            selectedProductivePackage = rule.productivePackage
+            selectedBlockedPackage = rule.blockedPackage
+            selectedRatio = rule.rewardSecondsPerProductiveSecond
+        }
+        refreshUsageStats(rule)
         accessibilityServiceEnabled = isAccessibilityServiceEnabled()
     }
 
-    private fun refreshUsageStats() {
+    private fun refreshUsageStats(rule: EarnItRuleStore.Rule) {
         usageAccessGranted = hasUsageAccess()
+        ruleStatusMessage = when {
+            !EarnItRuleStore.appInstalled(this, rule.productivePackage) -> "Productive app is not installed: ${rule.productiveName}."
+            !EarnItRuleStore.appInstalled(this, rule.blockedPackage) -> "Blocked app is not installed: ${rule.blockedName}."
+            else -> "Active rule: ${rule.productiveName} earns ${rule.blockedName} at ${rule.ratioLabel}."
+        }
+
         if (!usageAccessGranted) {
-            duolingoUsageSeconds = 0L
-            val snapshot = RewardLedger.snapshot(this)
-            productiveCreditedSeconds = snapshot.productiveCreditedSeconds
-            rewardIssuedSeconds = snapshot.rewardIssuedSeconds
-            rewardConsumedSeconds = snapshot.rewardConsumedSeconds
+            productiveUsageSeconds = 0L
+            val snapshot = RewardLedger.snapshot(this, rule)
             remainingRewardSeconds = snapshot.remainingRewardSeconds
-            usageStatusMessage = "Usage Access is off. Enable it for EarnitV2 to track Duolingo time."
+            usageStatusMessage = "Usage Access is off."
             return
         }
 
-        duolingoUsageSeconds = getTodayForegroundUsageSeconds(AppPackages.PRODUCTIVE_APP)
-        val snapshot = RewardLedger.creditProductiveUsage(this, duolingoUsageSeconds)
-        productiveCreditedSeconds = snapshot.productiveCreditedSeconds
-        rewardIssuedSeconds = snapshot.rewardIssuedSeconds
-        rewardConsumedSeconds = snapshot.rewardConsumedSeconds
+        productiveUsageSeconds = getTodayForegroundUsageSeconds(rule.productivePackage)
+        val snapshot = RewardLedger.creditProductiveUsage(this, rule, productiveUsageSeconds)
         remainingRewardSeconds = snapshot.remainingRewardSeconds
-        usageStatusMessage = if (duolingoUsageSeconds == 0L) {
-            "No Duolingo usage recorded today. Android usage data can be delayed."
+        usageStatusMessage = if (productiveUsageSeconds == 0L) {
+            "No productive app usage recorded today. Android usage data can be delayed."
         } else {
-            "Tracking Duolingo usage today."
+            "Tracking productive app usage today."
         }
+    }
+
+    private fun startEditingRule() {
+        val rule = activeRule ?: EarnItRuleStore.getRule(this)
+        selectedProductivePackage = rule.productivePackage
+        selectedBlockedPackage = rule.blockedPackage
+        selectedRatio = rule.rewardSecondsPerProductiveSecond
+        editingRule = true
+    }
+
+    private fun saveRule() {
+        val productiveApp = launchableApps.firstOrNull { it.packageName == selectedProductivePackage } ?: return
+        val blockedApp = launchableApps.firstOrNull { it.packageName == selectedBlockedPackage } ?: return
+        val rule = EarnItRuleStore.Rule(
+            productivePackage = productiveApp.packageName,
+            productiveName = productiveApp.name,
+            blockedPackage = blockedApp.packageName,
+            blockedName = blockedApp.name,
+            rewardSecondsPerProductiveSecond = selectedRatio
+        )
+        EarnItRuleStore.saveRule(this, rule)
+        editingRule = false
+        refreshDashboardState()
     }
 
     private fun hasUsageAccess(): Boolean {
@@ -115,9 +167,10 @@ class MainActivity : ComponentActivity() {
             set(Calendar.SECOND, 0)
             set(Calendar.MILLISECOND, 0)
         }
-        val startOfDay = calendar.timeInMillis
-        val now = System.currentTimeMillis()
-        val usageStats = usageStatsManager.queryAndAggregateUsageStats(startOfDay, now)
+        val usageStats = usageStatsManager.queryAndAggregateUsageStats(
+            calendar.timeInMillis,
+            System.currentTimeMillis()
+        )
         val foregroundMillis = usageStats[packageName]?.totalTimeInForeground ?: 0L
         return TimeUnit.MILLISECONDS.toSeconds(foregroundMillis)
     }
@@ -151,67 +204,111 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun Dashboard(
+    rule: EarnItRuleStore.Rule,
+    apps: List<EarnItRuleStore.LaunchableApp>,
+    selectedProductivePackage: String,
+    selectedBlockedPackage: String,
+    selectedRatio: Int,
+    editingRule: Boolean,
     usageAccessGranted: Boolean,
-    duolingoUsageSeconds: Long,
+    productiveUsageSeconds: Long,
     remainingRewardSeconds: Long,
+    usageStatusMessage: String,
+    ruleStatusMessage: String,
     accessibilityServiceEnabled: Boolean,
     onOpenUsageAccessSettings: () -> Unit,
     onOpenAccessibilitySettings: () -> Unit,
+    onStartEditingRule: () -> Unit,
+    onCancelEditingRule: () -> Unit,
+    onSelectProductiveApp: (String) -> Unit,
+    onSelectBlockedApp: (String) -> Unit,
+    onSelectRatio: (Int) -> Unit,
+    onSaveRule: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Column(
         modifier = modifier
             .fillMaxSize()
-            .padding(24.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+            .padding(24.dp)
+            .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Text(
-            text = "EarnIt",
-            style = MaterialTheme.typography.headlineMedium
-        )
-        Text(
-            text = "Productive time today: ${formatDuration(duolingoUsageSeconds)}",
-            style = MaterialTheme.typography.titleMedium
-        )
-        Text(
-            text = "Available reward time: ${formatDuration(remainingRewardSeconds)}",
-            style = MaterialTheme.typography.titleMedium
-        )
-        Text(
-            text = if (remainingRewardSeconds > 0L) {
-                "Status: Unlocked"
-            } else {
-                "Status: Locked"
-            },
-            style = MaterialTheme.typography.bodyLarge
-        )
-        Text(
-            text = if (usageAccessGranted) {
-                "Usage Access: On"
-            } else {
-                "Usage Access: Off"
-            },
-            style = MaterialTheme.typography.bodyMedium
-        )
-        Button(
-            onClick = onOpenUsageAccessSettings,
-            modifier = Modifier.fillMaxWidth()
-        ) {
+        Text(text = "EarnIt", style = MaterialTheme.typography.headlineMedium)
+        Text(text = ruleStatusMessage, style = MaterialTheme.typography.bodyMedium)
+        Text(text = "Productive time today: ${formatDuration(productiveUsageSeconds)}")
+        Text(text = "Available reward time: ${formatDuration(remainingRewardSeconds)}")
+        Text(text = if (remainingRewardSeconds > 0L) "Status: Unlocked" else "Status: Locked")
+        Text(text = if (usageAccessGranted) "Usage Access: On" else "Usage Access: Off")
+        Text(text = usageStatusMessage, style = MaterialTheme.typography.bodyMedium)
+        Button(onClick = onOpenUsageAccessSettings, modifier = Modifier.fillMaxWidth()) {
             Text(text = "Open Usage Access Settings")
         }
-        Text(
-            text = if (accessibilityServiceEnabled) {
-                "Accessibility Service: On"
-            } else {
-                "Accessibility Service: Off"
-            },
-            style = MaterialTheme.typography.bodyMedium
-        )
-        Button(
-            onClick = onOpenAccessibilitySettings,
-            modifier = Modifier.fillMaxWidth()
-        ) {
+        Text(text = if (accessibilityServiceEnabled) "Accessibility Service: On" else "Accessibility Service: Off")
+        Button(onClick = onOpenAccessibilitySettings, modifier = Modifier.fillMaxWidth()) {
             Text(text = "Open Accessibility Settings")
+        }
+
+        if (editingRule) {
+            RuleEditor(
+                apps = apps,
+                selectedProductivePackage = selectedProductivePackage,
+                selectedBlockedPackage = selectedBlockedPackage,
+                selectedRatio = selectedRatio,
+                onSelectProductiveApp = onSelectProductiveApp,
+                onSelectBlockedApp = onSelectBlockedApp,
+                onSelectRatio = onSelectRatio,
+                onSaveRule = onSaveRule,
+                onCancel = onCancelEditingRule
+            )
+        } else {
+            Button(onClick = onStartEditingRule, modifier = Modifier.fillMaxWidth()) {
+                Text(text = "Edit EarnIt Rule")
+            }
+        }
+    }
+}
+
+@Composable
+private fun RuleEditor(
+    apps: List<EarnItRuleStore.LaunchableApp>,
+    selectedProductivePackage: String,
+    selectedBlockedPackage: String,
+    selectedRatio: Int,
+    onSelectProductiveApp: (String) -> Unit,
+    onSelectBlockedApp: (String) -> Unit,
+    onSelectRatio: (Int) -> Unit,
+    onSaveRule: () -> Unit,
+    onCancel: () -> Unit
+) {
+    Text(text = "Productive app", style = MaterialTheme.typography.titleSmall)
+    AppChoiceList(apps, selectedProductivePackage, onSelectProductiveApp)
+    Text(text = "Blocked app", style = MaterialTheme.typography.titleSmall)
+    AppChoiceList(apps, selectedBlockedPackage, onSelectBlockedApp)
+    Text(text = "Ratio", style = MaterialTheme.typography.titleSmall)
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        EarnItRuleStore.allowedRatios.forEach { ratio ->
+            Button(onClick = { onSelectRatio(ratio) }) {
+                Text(text = if (selectedRatio == ratio) "1:$ratio *" else "1:$ratio")
+            }
+        }
+    }
+    Button(onClick = onSaveRule, modifier = Modifier.fillMaxWidth()) {
+        Text(text = "Save Rule")
+    }
+    Button(onClick = onCancel, modifier = Modifier.fillMaxWidth()) {
+        Text(text = "Cancel")
+    }
+}
+
+@Composable
+private fun AppChoiceList(
+    apps: List<EarnItRuleStore.LaunchableApp>,
+    selectedPackage: String,
+    onSelectApp: (String) -> Unit
+) {
+    apps.forEach { app ->
+        Button(onClick = { onSelectApp(app.packageName) }, modifier = Modifier.fillMaxWidth()) {
+            Text(text = if (app.packageName == selectedPackage) "${app.name} *" else app.name)
         }
     }
 }
@@ -220,24 +317,35 @@ private fun formatDuration(totalSeconds: Long): String {
     val safeSeconds = totalSeconds.coerceAtLeast(0L)
     val minutes = safeSeconds / 60L
     val seconds = safeSeconds % 60L
-    return if (minutes > 0L) {
-        "${minutes}m ${seconds}s"
-    } else {
-        "${seconds}s"
-    }
+    return if (minutes > 0L) "${minutes}m ${seconds}s" else "${seconds}s"
 }
+
 
 @Preview(showBackground = true)
 @Composable
 fun DashboardPreview() {
     EarnitV2Theme {
         Dashboard(
+            rule = EarnItRuleStore.Rule("com.duolingo", "Duolingo", "com.instagram.android", "Instagram", 1),
+            apps = emptyList(),
+            selectedProductivePackage = "com.duolingo",
+            selectedBlockedPackage = "com.instagram.android",
+            selectedRatio = 1,
+            editingRule = false,
             usageAccessGranted = true,
-            duolingoUsageSeconds = 735,
+            productiveUsageSeconds = 735,
             remainingRewardSeconds = 180,
+            usageStatusMessage = "Tracking productive app usage today.",
+            ruleStatusMessage = "Active rule: Duolingo earns Instagram at 1:1.",
             accessibilityServiceEnabled = true,
             onOpenUsageAccessSettings = {},
-            onOpenAccessibilitySettings = {}
+            onOpenAccessibilitySettings = {},
+            onStartEditingRule = {},
+            onCancelEditingRule = {},
+            onSelectProductiveApp = {},
+            onSelectBlockedApp = {},
+            onSelectRatio = {},
+            onSaveRule = {}
         )
     }
 }

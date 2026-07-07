@@ -25,21 +25,24 @@ import com.example.earnitv2.ui.theme.EarnitV2Theme
 
 class BlockedActivity : ComponentActivity() {
     private var blockedAppName by mutableStateOf("Instagram")
+    private var productiveAppName by mutableStateOf("Duolingo")
+    private var productivePackage by mutableStateOf(AppPackages.DEFAULT_PRODUCTIVE_APP)
     private var availableRewardSeconds by mutableStateOf(0L)
     private var fallbackMessage by mutableStateOf<String?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        updateBlockedAppName(intent)
+        updateRuleFromIntent(intent)
         refreshRewardBalance()
         setContent {
             EarnitV2Theme {
                 BlockedScreen(
                     blockedAppName = blockedAppName,
+                    productiveAppName = productiveAppName,
                     availableRewardSeconds = availableRewardSeconds,
                     fallbackMessage = fallbackMessage,
-                    onOpenDuolingo = ::openDuolingo
+                    onOpenProductiveApp = ::openProductiveApp
                 )
             }
         }
@@ -48,12 +51,8 @@ class BlockedActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        updateBlockedAppName(intent)
+        updateRuleFromIntent(intent)
         refreshRewardBalance()
-    }
-
-    private fun updateBlockedAppName(intent: Intent?) {
-        blockedAppName = intent?.getStringExtra(EXTRA_BLOCKED_APP_NAME) ?: "Instagram"
     }
 
     override fun onResume() {
@@ -61,14 +60,22 @@ class BlockedActivity : ComponentActivity() {
         refreshRewardBalance()
     }
 
-    private fun refreshRewardBalance() {
-        availableRewardSeconds = RewardLedger.snapshot(this).remainingRewardSeconds
+    private fun updateRuleFromIntent(intent: Intent?) {
+        val rule = EarnItRuleStore.getRule(this)
+        blockedAppName = intent?.getStringExtra(EXTRA_BLOCKED_APP_NAME) ?: rule.blockedName
+        productiveAppName = intent?.getStringExtra(EXTRA_PRODUCTIVE_APP_NAME) ?: rule.productiveName
+        productivePackage = intent?.getStringExtra(EXTRA_PRODUCTIVE_PACKAGE) ?: rule.productivePackage
     }
 
-    private fun openDuolingo() {
-        val launchIntent = packageManager.getLaunchIntentForPackage(AppPackages.PRODUCTIVE_APP)
+    private fun refreshRewardBalance() {
+        val rule = EarnItRuleStore.getRule(this)
+        availableRewardSeconds = RewardLedger.snapshot(this, rule).remainingRewardSeconds
+    }
+
+    private fun openProductiveApp() {
+        val launchIntent = packageManager.getLaunchIntentForPackage(productivePackage)
         if (launchIntent == null) {
-            fallbackMessage = "Duolingo is not installed on this device."
+            fallbackMessage = "$productiveAppName is not installed on this device."
             return
         }
 
@@ -79,15 +86,18 @@ class BlockedActivity : ComponentActivity() {
 
     companion object {
         const val EXTRA_BLOCKED_APP_NAME = "com.example.earnitv2.extra.BLOCKED_APP_NAME"
+        const val EXTRA_PRODUCTIVE_APP_NAME = "com.example.earnitv2.extra.PRODUCTIVE_APP_NAME"
+        const val EXTRA_PRODUCTIVE_PACKAGE = "com.example.earnitv2.extra.PRODUCTIVE_PACKAGE"
     }
 }
 
 @Composable
 fun BlockedScreen(
     blockedAppName: String,
+    productiveAppName: String,
     availableRewardSeconds: Long,
     fallbackMessage: String?,
-    onOpenDuolingo: () -> Unit,
+    onOpenProductiveApp: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -107,17 +117,17 @@ fun BlockedScreen(
             modifier = Modifier.padding(top = 12.dp)
         )
         Text(
-            text = "Use Duolingo to earn access to $blockedAppName.",
+            text = "Use $productiveAppName to earn access to $blockedAppName.",
             style = MaterialTheme.typography.bodyLarge,
             modifier = Modifier.padding(top = 12.dp)
         )
         Button(
-            onClick = onOpenDuolingo,
+            onClick = onOpenProductiveApp,
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(top = 24.dp)
         ) {
-            Text(text = "Open Duolingo")
+            Text(text = "Open $productiveAppName")
         }
         if (fallbackMessage != null) {
             Text(
@@ -139,15 +149,17 @@ private fun formatBlockedDuration(totalSeconds: Long): String {
         "${seconds}s"
     }
 }
+
 @Preview(showBackground = true)
 @Composable
 fun BlockedScreenPreview() {
     EarnitV2Theme {
         BlockedScreen(
             blockedAppName = "Instagram",
+            productiveAppName = "Duolingo",
             availableRewardSeconds = 0,
             fallbackMessage = null,
-            onOpenDuolingo = {}
+            onOpenProductiveApp = {}
         )
     }
 }
