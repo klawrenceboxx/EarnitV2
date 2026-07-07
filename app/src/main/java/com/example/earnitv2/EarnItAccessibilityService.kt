@@ -14,6 +14,7 @@ class EarnItAccessibilityService : AccessibilityService() {
     private val handler = Handler(Looper.getMainLooper())
     private var lastBlockedLaunchAt = 0L
     private var activeBlockedPackage: String? = null
+    private var activeBlockedAppName: String? = null
     private var activeRule: EarnItRuleStore.Rule? = null
     private var lastConsumptionAt = 0L
 
@@ -21,10 +22,11 @@ class EarnItAccessibilityService : AccessibilityService() {
         override fun run() {
             consumeActiveBlockedUsage()
             val rule = activeRule
-            if (activeBlockedPackage != null && rule != null) {
+            val blockedAppName = activeBlockedAppName
+            if (activeBlockedPackage != null && rule != null && blockedAppName != null) {
                 if (RewardLedger.snapshot(this@EarnItAccessibilityService, rule).remainingRewardSeconds <= 0L) {
                     clearActiveBlockedApp()
-                    launchBlockedActivity(rule, ignoreDebounce = true)
+                    launchBlockedActivity(rule, blockedAppName, ignoreDebounce = true)
                 } else {
                     handler.postDelayed(this, CONSUMPTION_TICK_MILLIS)
                 }
@@ -42,17 +44,18 @@ class EarnItAccessibilityService : AccessibilityService() {
         }
 
         val rule = EarnItRuleStore.getRule(this)
-        if (foregroundPackage != rule.blockedPackage) {
+        val blockedApp = rule.blockedAppForPackage(foregroundPackage)
+        if (blockedApp == null) {
             stopActiveBlockedUsage()
             return
         }
 
         creditLatestProductiveUsage(rule)
         if (RewardLedger.snapshot(this, rule).remainingRewardSeconds > 0L) {
-            startActiveBlockedUsage(rule)
+            startActiveBlockedUsage(rule, blockedApp)
         } else {
             stopActiveBlockedUsage()
-            launchBlockedActivity(rule)
+            launchBlockedActivity(rule, blockedApp.name)
         }
     }
 
@@ -63,11 +66,12 @@ class EarnItAccessibilityService : AccessibilityService() {
         super.onDestroy()
     }
 
-    private fun startActiveBlockedUsage(rule: EarnItRuleStore.Rule) {
-        if (activeBlockedPackage == rule.blockedPackage) return
+    private fun startActiveBlockedUsage(rule: EarnItRuleStore.Rule, blockedApp: EarnItRuleStore.RuleApp) {
+        if (activeBlockedPackage == blockedApp.packageName) return
 
         stopActiveBlockedUsage()
-        activeBlockedPackage = rule.blockedPackage
+        activeBlockedPackage = blockedApp.packageName
+        activeBlockedAppName = blockedApp.name
         activeRule = rule
         lastConsumptionAt = SystemClock.elapsedRealtime()
         handler.postDelayed(consumeRunnable, CONSUMPTION_TICK_MILLIS)
@@ -81,6 +85,7 @@ class EarnItAccessibilityService : AccessibilityService() {
     private fun clearActiveBlockedApp() {
         handler.removeCallbacks(consumeRunnable)
         activeBlockedPackage = null
+        activeBlockedAppName = null
         activeRule = null
         lastConsumptionAt = 0L
     }
@@ -125,12 +130,16 @@ class EarnItAccessibilityService : AccessibilityService() {
         return mode == AppOpsManager.MODE_ALLOWED
     }
 
-    private fun launchBlockedActivity(rule: EarnItRuleStore.Rule, ignoreDebounce: Boolean = false) {
+    private fun launchBlockedActivity(
+        rule: EarnItRuleStore.Rule,
+        blockedAppName: String,
+        ignoreDebounce: Boolean = false
+    ) {
         if (!ignoreDebounce && !canLaunchBlockedActivity()) return
 
         lastBlockedLaunchAt = System.currentTimeMillis()
         val intent = Intent(this, BlockedActivity::class.java).apply {
-            putExtra(BlockedActivity.EXTRA_BLOCKED_APP_NAME, rule.blockedName)
+            putExtra(BlockedActivity.EXTRA_BLOCKED_APP_NAME, blockedAppName)
             putExtra(BlockedActivity.EXTRA_PRODUCTIVE_APP_NAME, rule.productiveName)
             putExtra(BlockedActivity.EXTRA_PRODUCTIVE_PACKAGE, rule.productivePackage)
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)

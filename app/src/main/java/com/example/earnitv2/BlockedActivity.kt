@@ -62,7 +62,7 @@ class BlockedActivity : ComponentActivity() {
 
     private fun updateRuleFromIntent(intent: Intent?) {
         val rule = EarnItRuleStore.getRule(this)
-        blockedAppName = intent?.getStringExtra(EXTRA_BLOCKED_APP_NAME) ?: rule.blockedName
+        blockedAppName = intent?.getStringExtra(EXTRA_BLOCKED_APP_NAME) ?: rule.blockedApps.firstOrNull()?.name ?: "Blocked app"
         productiveAppName = intent?.getStringExtra(EXTRA_PRODUCTIVE_APP_NAME) ?: rule.productiveName
         productivePackage = intent?.getStringExtra(EXTRA_PRODUCTIVE_PACKAGE) ?: rule.productivePackage
     }

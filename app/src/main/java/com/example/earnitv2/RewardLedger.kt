@@ -105,7 +105,8 @@ object RewardLedger {
     }
 
     private fun EarnItRuleStore.Rule.id(): String {
-        return "$productivePackage|$blockedPackage|$rewardSecondsPerProductiveSecond"
+        val blockedRuleId = blockedApps.map { it.packageName }.sorted().joinToString(",")
+        return "$productivePackage|$blockedRuleId|$rewardSecondsPerProductiveSecond"
     }
 
     private fun todayKey(): String {

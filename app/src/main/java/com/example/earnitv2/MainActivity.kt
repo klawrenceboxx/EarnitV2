@@ -37,7 +37,7 @@ class MainActivity : ComponentActivity() {
     private var activeRule by mutableStateOf<EarnItRuleStore.Rule?>(null)
     private var launchableApps by mutableStateOf(emptyList<EarnItRuleStore.LaunchableApp>())
     private var selectedProductivePackage by mutableStateOf("")
-    private var selectedBlockedPackage by mutableStateOf("")
+    private var selectedBlockedPackages by mutableStateOf(emptySet<String>())
     private var selectedRatio by mutableStateOf(1)
     private var editingRule by mutableStateOf(false)
     private var usageAccessGranted by mutableStateOf(false)
@@ -58,7 +58,7 @@ class MainActivity : ComponentActivity() {
                         rule = activeRule ?: EarnItRuleStore.getRule(this),
                         apps = launchableApps,
                         selectedProductivePackage = selectedProductivePackage,
-                        selectedBlockedPackage = selectedBlockedPackage,
+                        selectedBlockedPackages = selectedBlockedPackages,
                         selectedRatio = selectedRatio,
                         editingRule = editingRule,
                         usageAccessGranted = usageAccessGranted,
@@ -72,7 +72,7 @@ class MainActivity : ComponentActivity() {
                         onStartEditingRule = ::startEditingRule,
                         onCancelEditingRule = { editingRule = false },
                         onSelectProductiveApp = { selectedProductivePackage = it },
-                        onSelectBlockedApp = { selectedBlockedPackage = it },
+                        onToggleBlockedApp = ::toggleBlockedApp,
                         onSelectRatio = { selectedRatio = it },
                         onSaveRule = ::saveRule,
                         modifier = Modifier.padding(innerPadding)
@@ -93,7 +93,7 @@ class MainActivity : ComponentActivity() {
         launchableApps = EarnItRuleStore.launchableApps(this)
         if (!editingRule) {
             selectedProductivePackage = rule.productivePackage
-            selectedBlockedPackage = rule.blockedPackage
+            selectedBlockedPackages = rule.blockedApps.map { it.packageName }.toSet()
             selectedRatio = rule.rewardSecondsPerProductiveSecond
         }
         refreshUsageStats(rule)
@@ -104,8 +104,8 @@ class MainActivity : ComponentActivity() {
         usageAccessGranted = hasUsageAccess()
         ruleStatusMessage = when {
             !EarnItRuleStore.appInstalled(this, rule.productivePackage) -> "Productive app is not installed: ${rule.productiveName}."
-            !EarnItRuleStore.appInstalled(this, rule.blockedPackage) -> "Blocked app is not installed: ${rule.blockedName}."
-            else -> "Active rule: ${rule.productiveName} earns ${rule.blockedName} at ${rule.ratioLabel}."
+            rule.blockedApps.none { EarnItRuleStore.appInstalled(this, it.packageName) } -> "No selected blocked apps are installed."
+            else -> "Active rule: ${rule.productiveName} earns access to ${rule.blockedAppCount} blocked app${if (rule.blockedAppCount == 1) "" else "s"} at ${rule.ratioLabel}."
         }
 
         if (!usageAccessGranted) {
@@ -129,19 +129,30 @@ class MainActivity : ComponentActivity() {
     private fun startEditingRule() {
         val rule = activeRule ?: EarnItRuleStore.getRule(this)
         selectedProductivePackage = rule.productivePackage
-        selectedBlockedPackage = rule.blockedPackage
+        selectedBlockedPackages = rule.blockedApps.map { it.packageName }.toSet()
         selectedRatio = rule.rewardSecondsPerProductiveSecond
         editingRule = true
     }
 
+    private fun toggleBlockedApp(packageName: String) {
+        selectedBlockedPackages = if (packageName in selectedBlockedPackages) {
+            selectedBlockedPackages - packageName
+        } else {
+            selectedBlockedPackages + packageName
+        }
+    }
+
     private fun saveRule() {
         val productiveApp = launchableApps.firstOrNull { it.packageName == selectedProductivePackage } ?: return
-        val blockedApp = launchableApps.firstOrNull { it.packageName == selectedBlockedPackage } ?: return
+        val blockedApps = launchableApps
+            .filter { it.packageName in selectedBlockedPackages }
+            .map { EarnItRuleStore.RuleApp(packageName = it.packageName, name = it.name) }
+        if (blockedApps.isEmpty()) return
+
         val rule = EarnItRuleStore.Rule(
             productivePackage = productiveApp.packageName,
             productiveName = productiveApp.name,
-            blockedPackage = blockedApp.packageName,
-            blockedName = blockedApp.name,
+            blockedApps = blockedApps,
             rewardSecondsPerProductiveSecond = selectedRatio
         )
         EarnItRuleStore.saveRule(this, rule)
@@ -207,7 +218,7 @@ fun Dashboard(
     rule: EarnItRuleStore.Rule,
     apps: List<EarnItRuleStore.LaunchableApp>,
     selectedProductivePackage: String,
-    selectedBlockedPackage: String,
+    selectedBlockedPackages: Set<String>,
     selectedRatio: Int,
     editingRule: Boolean,
     usageAccessGranted: Boolean,
@@ -221,7 +232,7 @@ fun Dashboard(
     onStartEditingRule: () -> Unit,
     onCancelEditingRule: () -> Unit,
     onSelectProductiveApp: (String) -> Unit,
-    onSelectBlockedApp: (String) -> Unit,
+    onToggleBlockedApp: (String) -> Unit,
     onSelectRatio: (Int) -> Unit,
     onSaveRule: () -> Unit,
     modifier: Modifier = Modifier
@@ -252,10 +263,10 @@ fun Dashboard(
             RuleEditor(
                 apps = apps,
                 selectedProductivePackage = selectedProductivePackage,
-                selectedBlockedPackage = selectedBlockedPackage,
+                selectedBlockedPackages = selectedBlockedPackages,
                 selectedRatio = selectedRatio,
                 onSelectProductiveApp = onSelectProductiveApp,
-                onSelectBlockedApp = onSelectBlockedApp,
+                onToggleBlockedApp = onToggleBlockedApp,
                 onSelectRatio = onSelectRatio,
                 onSaveRule = onSaveRule,
                 onCancel = onCancelEditingRule
@@ -272,18 +283,18 @@ fun Dashboard(
 private fun RuleEditor(
     apps: List<EarnItRuleStore.LaunchableApp>,
     selectedProductivePackage: String,
-    selectedBlockedPackage: String,
+    selectedBlockedPackages: Set<String>,
     selectedRatio: Int,
     onSelectProductiveApp: (String) -> Unit,
-    onSelectBlockedApp: (String) -> Unit,
+    onToggleBlockedApp: (String) -> Unit,
     onSelectRatio: (Int) -> Unit,
     onSaveRule: () -> Unit,
     onCancel: () -> Unit
 ) {
     Text(text = "Productive app", style = MaterialTheme.typography.titleSmall)
     AppChoiceList(apps, selectedProductivePackage, onSelectProductiveApp)
-    Text(text = "Blocked app", style = MaterialTheme.typography.titleSmall)
-    AppChoiceList(apps, selectedBlockedPackage, onSelectBlockedApp)
+    Text(text = "Blocked apps", style = MaterialTheme.typography.titleSmall)
+    BlockedAppChoiceList(apps, selectedBlockedPackages, onToggleBlockedApp)
     Text(text = "Ratio", style = MaterialTheme.typography.titleSmall)
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         EarnItRuleStore.allowedRatios.forEach { ratio ->
@@ -313,6 +324,18 @@ private fun AppChoiceList(
     }
 }
 
+@Composable
+private fun BlockedAppChoiceList(
+    apps: List<EarnItRuleStore.LaunchableApp>,
+    selectedPackages: Set<String>,
+    onToggleApp: (String) -> Unit
+) {
+    apps.forEach { app ->
+        Button(onClick = { onToggleApp(app.packageName) }, modifier = Modifier.fillMaxWidth()) {
+            Text(text = if (app.packageName in selectedPackages) "${app.name} *" else app.name)
+        }
+    }
+}
 private fun formatDuration(totalSeconds: Long): String {
     val safeSeconds = totalSeconds.coerceAtLeast(0L)
     val minutes = safeSeconds / 60L
@@ -326,10 +349,15 @@ private fun formatDuration(totalSeconds: Long): String {
 fun DashboardPreview() {
     EarnitV2Theme {
         Dashboard(
-            rule = EarnItRuleStore.Rule("com.duolingo", "Duolingo", "com.instagram.android", "Instagram", 1),
+            rule = EarnItRuleStore.Rule(
+                productivePackage = "com.duolingo",
+                productiveName = "Duolingo",
+                blockedApps = listOf(EarnItRuleStore.RuleApp("com.instagram.android", "Instagram")),
+                rewardSecondsPerProductiveSecond = 1
+            ),
             apps = emptyList(),
             selectedProductivePackage = "com.duolingo",
-            selectedBlockedPackage = "com.instagram.android",
+            selectedBlockedPackages = setOf("com.instagram.android"),
             selectedRatio = 1,
             editingRule = false,
             usageAccessGranted = true,
@@ -343,7 +371,7 @@ fun DashboardPreview() {
             onStartEditingRule = {},
             onCancelEditingRule = {},
             onSelectProductiveApp = {},
-            onSelectBlockedApp = {},
+            onToggleBlockedApp = {},
             onSelectRatio = {},
             onSaveRule = {}
         )
