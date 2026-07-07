@@ -2,9 +2,11 @@ package com.example.earnitv2
 
 import android.app.AppOpsManager
 import android.app.usage.UsageStatsManager
+import android.content.ComponentName
 import android.content.Intent
 import android.os.Bundle
 import android.provider.Settings
+import android.text.TextUtils
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -32,11 +34,12 @@ class MainActivity : ComponentActivity() {
     private var usageAccessGranted by mutableStateOf(false)
     private var duolingoUsageMinutes by mutableStateOf(0L)
     private var usageStatusMessage by mutableStateOf("")
+    private var accessibilityServiceEnabled by mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        refreshUsageStats()
+        refreshDashboardState()
         setContent {
             EarnitV2Theme {
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
@@ -44,7 +47,9 @@ class MainActivity : ComponentActivity() {
                         usageAccessGranted = usageAccessGranted,
                         duolingoUsageMinutes = duolingoUsageMinutes,
                         usageStatusMessage = usageStatusMessage,
+                        accessibilityServiceEnabled = accessibilityServiceEnabled,
                         onOpenUsageAccessSettings = ::openUsageAccessSettings,
+                        onOpenAccessibilitySettings = ::openAccessibilitySettings,
                         modifier = Modifier.padding(innerPadding)
                     )
                 }
@@ -54,7 +59,12 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        refreshDashboardState()
+    }
+
+    private fun refreshDashboardState() {
         refreshUsageStats()
+        accessibilityServiceEnabled = isAccessibilityServiceEnabled()
     }
 
     private fun refreshUsageStats() {
@@ -98,8 +108,30 @@ class MainActivity : ComponentActivity() {
         return usageStats[packageName]?.totalTimeInForeground ?: 0L
     }
 
+    private fun isAccessibilityServiceEnabled(): Boolean {
+        val expectedService = ComponentName(this, EarnItAccessibilityService::class.java)
+        val enabledServices = Settings.Secure.getString(
+            contentResolver,
+            Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+        ) ?: return false
+
+        val splitter = TextUtils.SimpleStringSplitter(':')
+        splitter.setString(enabledServices)
+        splitter.forEach { enabledService ->
+            val componentName = ComponentName.unflattenFromString(enabledService)
+            if (componentName == expectedService) {
+                return true
+            }
+        }
+        return false
+    }
+
     private fun openUsageAccessSettings() {
         startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
+    }
+
+    private fun openAccessibilitySettings() {
+        startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
     }
 }
 
@@ -108,7 +140,9 @@ fun Dashboard(
     usageAccessGranted: Boolean,
     duolingoUsageMinutes: Long,
     usageStatusMessage: String,
+    accessibilityServiceEnabled: Boolean,
     onOpenUsageAccessSettings: () -> Unit,
+    onOpenAccessibilitySettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -145,6 +179,26 @@ fun Dashboard(
                 }
             )
         }
+        Text(
+            text = if (accessibilityServiceEnabled) {
+                "Accessibility Service is on."
+            } else {
+                "Accessibility Service is off. Enable it to lock Instagram."
+            },
+            style = MaterialTheme.typography.bodyMedium
+        )
+        Button(
+            onClick = onOpenAccessibilitySettings,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(
+                text = if (accessibilityServiceEnabled) {
+                    "Open Accessibility Settings"
+                } else {
+                    "Enable Accessibility Service"
+                }
+            )
+        }
     }
 }
 
@@ -156,7 +210,9 @@ fun DashboardPreview() {
             usageAccessGranted = true,
             duolingoUsageMinutes = 12,
             usageStatusMessage = "Tracking Duolingo usage today.",
-            onOpenUsageAccessSettings = {}
+            accessibilityServiceEnabled = true,
+            onOpenUsageAccessSettings = {},
+            onOpenAccessibilitySettings = {}
         )
     }
 }

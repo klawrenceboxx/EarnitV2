@@ -1,3 +1,5 @@
 <resources>
     <string name="app_name">EarnitV2</string>
+    <string name="accessibility_service_label">EarnIt Instagram Lock</string>
+    <string name="accessibility_service_description">Detects when Instagram opens so EarnIt can show the locked screen.</string>
 </resources>
