@@ -25,16 +25,19 @@ import com.example.earnitv2.ui.theme.EarnitV2Theme
 
 class BlockedActivity : ComponentActivity() {
     private var blockedAppName by mutableStateOf("Instagram")
+    private var availableRewardSeconds by mutableStateOf(0L)
     private var fallbackMessage by mutableStateOf<String?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         updateBlockedAppName(intent)
+        refreshRewardBalance()
         setContent {
             EarnitV2Theme {
                 BlockedScreen(
                     blockedAppName = blockedAppName,
+                    availableRewardSeconds = availableRewardSeconds,
                     fallbackMessage = fallbackMessage,
                     onOpenDuolingo = ::openDuolingo
                 )
@@ -46,10 +49,20 @@ class BlockedActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         updateBlockedAppName(intent)
+        refreshRewardBalance()
     }
 
     private fun updateBlockedAppName(intent: Intent?) {
         blockedAppName = intent?.getStringExtra(EXTRA_BLOCKED_APP_NAME) ?: "Instagram"
+    }
+
+    override fun onResume() {
+        super.onResume()
+        refreshRewardBalance()
+    }
+
+    private fun refreshRewardBalance() {
+        availableRewardSeconds = RewardLedger.snapshot(this).remainingRewardSeconds
     }
 
     private fun openDuolingo() {
@@ -72,6 +85,7 @@ class BlockedActivity : ComponentActivity() {
 @Composable
 fun BlockedScreen(
     blockedAppName: String,
+    availableRewardSeconds: Long,
     fallbackMessage: String?,
     onOpenDuolingo: () -> Unit,
     modifier: Modifier = Modifier
@@ -88,7 +102,12 @@ fun BlockedScreen(
             style = MaterialTheme.typography.headlineMedium
         )
         Text(
-            text = "Use Duolingo to unlock $blockedAppName.",
+            text = "Available reward time: ${formatBlockedDuration(availableRewardSeconds)}",
+            style = MaterialTheme.typography.bodyLarge,
+            modifier = Modifier.padding(top = 12.dp)
+        )
+        Text(
+            text = "Use Duolingo to earn access to $blockedAppName.",
             style = MaterialTheme.typography.bodyLarge,
             modifier = Modifier.padding(top = 12.dp)
         )
@@ -110,12 +129,23 @@ fun BlockedScreen(
     }
 }
 
+private fun formatBlockedDuration(totalSeconds: Long): String {
+    val safeSeconds = totalSeconds.coerceAtLeast(0L)
+    val minutes = safeSeconds / 60L
+    val seconds = safeSeconds % 60L
+    return if (minutes > 0L) {
+        "${minutes}m ${seconds}s"
+    } else {
+        "${seconds}s"
+    }
+}
 @Preview(showBackground = true)
 @Composable
 fun BlockedScreenPreview() {
     EarnitV2Theme {
         BlockedScreen(
             blockedAppName = "Instagram",
+            availableRewardSeconds = 0,
             fallbackMessage = null,
             onOpenDuolingo = {}
         )

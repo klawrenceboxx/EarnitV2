@@ -51,7 +51,6 @@ class MainActivity : ComponentActivity() {
                         usageAccessGranted = usageAccessGranted,
                         duolingoUsageSeconds = duolingoUsageSeconds,
                         remainingRewardSeconds = remainingRewardSeconds,
-                        usageStatusMessage = usageStatusMessage,
                         accessibilityServiceEnabled = accessibilityServiceEnabled,
                         onOpenUsageAccessSettings = ::openUsageAccessSettings,
                         onOpenAccessibilitySettings = ::openAccessibilitySettings,
@@ -155,7 +154,6 @@ fun Dashboard(
     usageAccessGranted: Boolean,
     duolingoUsageSeconds: Long,
     remainingRewardSeconds: Long,
-    usageStatusMessage: String,
     accessibilityServiceEnabled: Boolean,
     onOpenUsageAccessSettings: () -> Unit,
     onOpenAccessibilitySettings: () -> Unit,
@@ -172,50 +170,40 @@ fun Dashboard(
             style = MaterialTheme.typography.headlineMedium
         )
         Text(
-            text = "Duolingo today",
+            text = "Productive time today: ${formatDuration(duolingoUsageSeconds)}",
             style = MaterialTheme.typography.titleMedium
         )
         Text(
-            text = formatDuration(duolingoUsageSeconds),
-            style = MaterialTheme.typography.displaySmall
-        )
-        Text(
-            text = "Productive time measured today: ${formatDuration(duolingoUsageSeconds)}",
-            style = MaterialTheme.typography.bodyMedium
-        )
-        Text(
-            text = "Reward time available: ${formatDuration(remainingRewardSeconds)}",
-            style = MaterialTheme.typography.bodyMedium
+            text = "Available reward time: ${formatDuration(remainingRewardSeconds)}",
+            style = MaterialTheme.typography.titleMedium
         )
         Text(
             text = if (remainingRewardSeconds > 0L) {
-                "Blocked apps are unlocked."
+                "Status: Unlocked"
             } else {
-                "Blocked apps are locked."
+                "Status: Locked"
             },
-            style = MaterialTheme.typography.bodyMedium
+            style = MaterialTheme.typography.bodyLarge
         )
         Text(
-            text = usageStatusMessage,
+            text = if (usageAccessGranted) {
+                "Usage Access: On"
+            } else {
+                "Usage Access: Off"
+            },
             style = MaterialTheme.typography.bodyMedium
         )
         Button(
             onClick = onOpenUsageAccessSettings,
             modifier = Modifier.fillMaxWidth()
         ) {
-            Text(
-                text = if (usageAccessGranted) {
-                    "Open Usage Access Settings"
-                } else {
-                    "Enable Usage Access"
-                }
-            )
+            Text(text = "Open Usage Access Settings")
         }
         Text(
             text = if (accessibilityServiceEnabled) {
-                "Accessibility Service is on."
+                "Accessibility Service: On"
             } else {
-                "Accessibility Service is off. Enable it to lock Instagram and Lichess."
+                "Accessibility Service: Off"
             },
             style = MaterialTheme.typography.bodyMedium
         )
@@ -223,13 +211,7 @@ fun Dashboard(
             onClick = onOpenAccessibilitySettings,
             modifier = Modifier.fillMaxWidth()
         ) {
-            Text(
-                text = if (accessibilityServiceEnabled) {
-                    "Open Accessibility Settings"
-                } else {
-                    "Enable Accessibility Service"
-                }
-            )
+            Text(text = "Open Accessibility Settings")
         }
     }
 }
@@ -253,7 +235,6 @@ fun DashboardPreview() {
             usageAccessGranted = true,
             duolingoUsageSeconds = 735,
             remainingRewardSeconds = 180,
-            usageStatusMessage = "Tracking Duolingo usage today.",
             accessibilityServiceEnabled = true,
             onOpenUsageAccessSettings = {},
             onOpenAccessibilitySettings = {}
