@@ -1,12 +1,14 @@
 package com.example.earnitv2
 
 import android.app.AppOpsManager
+import android.app.TimePickerDialog
 import android.app.usage.UsageStatsManager
 import android.content.ComponentName
 import android.content.Intent
 import android.os.Bundle
 import android.provider.Settings
 import android.text.TextUtils
+import android.text.format.DateFormat
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -22,6 +24,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextField
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -30,8 +33,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.example.earnitv2.ui.theme.EarnitV2Theme
-import java.util.Calendar
-import java.util.concurrent.TimeUnit
 
 class MainActivity : ComponentActivity() {
     private var activeRule by mutableStateOf<EarnItRuleStore.Rule?>(null)
@@ -39,7 +40,14 @@ class MainActivity : ComponentActivity() {
     private var selectedProductivePackage by mutableStateOf("")
     private var selectedBlockedPackages by mutableStateOf(emptySet<String>())
     private var selectedRatio by mutableStateOf(1)
+    private var selectedActiveDays by mutableStateOf(EarnItRuleStore.allDays.toSet())
+    private var selectedStartMinute by mutableStateOf(0)
+    private var selectedEndMinute by mutableStateOf(1_440)
     private var editingRule by mutableStateOf(false)
+    private var productivePickerOpen by mutableStateOf(false)
+    private var blockedPickerOpen by mutableStateOf(false)
+    private var productiveSearch by mutableStateOf("")
+    private var blockedSearch by mutableStateOf("")
     private var usageAccessGranted by mutableStateOf(false)
     private var productiveUsageSeconds by mutableStateOf(0L)
     private var remainingRewardSeconds by mutableStateOf(0L)
@@ -60,7 +68,14 @@ class MainActivity : ComponentActivity() {
                         selectedProductivePackage = selectedProductivePackage,
                         selectedBlockedPackages = selectedBlockedPackages,
                         selectedRatio = selectedRatio,
+                        selectedActiveDays = selectedActiveDays,
+                        selectedStartMinute = selectedStartMinute,
+                        selectedEndMinute = selectedEndMinute,
                         editingRule = editingRule,
+                        productivePickerOpen = productivePickerOpen,
+                        blockedPickerOpen = blockedPickerOpen,
+                        productiveSearch = productiveSearch,
+                        blockedSearch = blockedSearch,
                         usageAccessGranted = usageAccessGranted,
                         productiveUsageSeconds = productiveUsageSeconds,
                         remainingRewardSeconds = remainingRewardSeconds,
@@ -70,10 +85,19 @@ class MainActivity : ComponentActivity() {
                         onOpenUsageAccessSettings = ::openUsageAccessSettings,
                         onOpenAccessibilitySettings = ::openAccessibilitySettings,
                         onStartEditingRule = ::startEditingRule,
-                        onCancelEditingRule = { editingRule = false },
-                        onSelectProductiveApp = { selectedProductivePackage = it },
+                        onCancelEditingRule = ::cancelEditingRule,
+                        onOpenProductivePicker = { productivePickerOpen = true },
+                        onCloseProductivePicker = { productivePickerOpen = false },
+                        onOpenBlockedPicker = { blockedPickerOpen = true },
+                        onCloseBlockedPicker = { blockedPickerOpen = false },
+                        onProductiveSearchChange = { productiveSearch = it },
+                        onBlockedSearchChange = { blockedSearch = it },
+                        onSelectProductiveApp = ::selectProductiveApp,
                         onToggleBlockedApp = ::toggleBlockedApp,
                         onSelectRatio = { selectedRatio = it },
+                        onToggleActiveDay = ::toggleActiveDay,
+                        onEditStartTime = ::showStartTimePicker,
+                        onEditEndTime = ::showEndTimePicker,
                         onSaveRule = ::saveRule,
                         modifier = Modifier.padding(innerPadding)
                     )
@@ -95,6 +119,9 @@ class MainActivity : ComponentActivity() {
             selectedProductivePackage = rule.productivePackage
             selectedBlockedPackages = rule.blockedApps.map { it.packageName }.toSet()
             selectedRatio = rule.rewardSecondsPerProductiveSecond
+            selectedActiveDays = rule.activeDays
+            selectedStartMinute = rule.startMinute
+            selectedEndMinute = rule.endMinute
         }
         refreshUsageStats(rule)
         accessibilityServiceEnabled = isAccessibilityServiceEnabled()
@@ -105,7 +132,7 @@ class MainActivity : ComponentActivity() {
         ruleStatusMessage = when {
             !EarnItRuleStore.appInstalled(this, rule.productivePackage) -> "Productive app is not installed: ${rule.productiveName}."
             rule.blockedApps.none { EarnItRuleStore.appInstalled(this, it.packageName) } -> "No selected blocked apps are installed."
-            else -> "Active rule: ${rule.productiveName} earns access to ${rule.blockedAppCount} blocked app${if (rule.blockedAppCount == 1) "" else "s"} at ${rule.ratioLabel}."
+            else -> "Active rule: ${rule.productiveName} earns access to ${rule.blockedAppCount} blocked app${if (rule.blockedAppCount == 1) "" else "s"} at ${rule.ratioLabel}. ${rule.scheduleLabel}."
         }
 
         if (!usageAccessGranted) {
@@ -116,7 +143,7 @@ class MainActivity : ComponentActivity() {
             return
         }
 
-        productiveUsageSeconds = getTodayForegroundUsageSeconds(rule.productivePackage)
+        productiveUsageSeconds = getTodayActiveProductiveUsageSeconds(rule)
         val snapshot = RewardLedger.creditProductiveUsage(this, rule, productiveUsageSeconds)
         remainingRewardSeconds = snapshot.remainingRewardSeconds
         usageStatusMessage = if (productiveUsageSeconds == 0L) {
@@ -131,7 +158,34 @@ class MainActivity : ComponentActivity() {
         selectedProductivePackage = rule.productivePackage
         selectedBlockedPackages = rule.blockedApps.map { it.packageName }.toSet()
         selectedRatio = rule.rewardSecondsPerProductiveSecond
+        selectedActiveDays = rule.activeDays
+        selectedStartMinute = rule.startMinute
+        selectedEndMinute = rule.endMinute
+        productivePickerOpen = false
+        blockedPickerOpen = false
+        productiveSearch = ""
+        blockedSearch = ""
         editingRule = true
+    }
+
+    private fun cancelEditingRule() {
+        editingRule = false
+        productivePickerOpen = false
+        blockedPickerOpen = false
+    }
+
+    private fun selectProductiveApp(packageName: String) {
+        selectedProductivePackage = packageName
+        productivePickerOpen = false
+        productiveSearch = ""
+    }
+
+    private fun toggleActiveDay(day: Int) {
+        selectedActiveDays = if (day in selectedActiveDays) {
+            (selectedActiveDays - day).ifEmpty { setOf(day) }
+        } else {
+            selectedActiveDays + day
+        }
     }
 
     private fun toggleBlockedApp(packageName: String) {
@@ -142,21 +196,54 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun showStartTimePicker() {
+        showTimePicker(selectedStartMinute) { selectedStartMinute = it.coerceIn(0, 1_439) }
+    }
+
+    private fun showEndTimePicker() {
+        val dialogMinute = if (selectedEndMinute == 1_440) 0 else selectedEndMinute
+        showTimePicker(dialogMinute) { selectedMinute ->
+            selectedEndMinute = if (selectedMinute == 0) 1_440 else selectedMinute.coerceIn(1, 1_439)
+        }
+    }
+
+    private fun showTimePicker(initialMinute: Int, onTimeSelected: (Int) -> Unit) {
+        val safeMinute = initialMinute.coerceIn(0, 1_439)
+        TimePickerDialog(
+            this,
+            { _, hourOfDay, minute -> onTimeSelected(hourOfDay * 60 + minute) },
+            safeMinute / 60,
+            safeMinute % 60,
+            DateFormat.is24HourFormat(this)
+        ).show()
+    }
+
     private fun saveRule() {
-        val productiveApp = launchableApps.firstOrNull { it.packageName == selectedProductivePackage } ?: return
-        val blockedApps = launchableApps
-            .filter { it.packageName in selectedBlockedPackages }
-            .map { EarnItRuleStore.RuleApp(packageName = it.packageName, name = it.name) }
+        val currentRule = activeRule ?: EarnItRuleStore.getRule(this)
+        val productiveApp = launchableApps.firstOrNull { it.packageName == selectedProductivePackage }
+            ?: EarnItRuleStore.LaunchableApp(currentRule.productivePackage, currentRule.productiveName)
+        val savedBlockedApps = currentRule.blockedApps.associateBy { it.packageName }
+        val launchableBlockedApps = launchableApps.associateBy { it.packageName }
+        val blockedApps = selectedBlockedPackages.mapNotNull { packageName ->
+            launchableBlockedApps[packageName]?.let {
+                EarnItRuleStore.RuleApp(packageName = it.packageName, name = it.name)
+            } ?: savedBlockedApps[packageName]
+        }
         if (blockedApps.isEmpty()) return
 
         val rule = EarnItRuleStore.Rule(
             productivePackage = productiveApp.packageName,
             productiveName = productiveApp.name,
             blockedApps = blockedApps,
-            rewardSecondsPerProductiveSecond = selectedRatio
+            rewardSecondsPerProductiveSecond = selectedRatio,
+            activeDays = selectedActiveDays,
+            startMinute = selectedStartMinute,
+            endMinute = selectedEndMinute
         )
         EarnItRuleStore.saveRule(this, rule)
         editingRule = false
+        productivePickerOpen = false
+        blockedPickerOpen = false
         refreshDashboardState()
     }
 
@@ -170,20 +257,9 @@ class MainActivity : ComponentActivity() {
         return mode == AppOpsManager.MODE_ALLOWED
     }
 
-    private fun getTodayForegroundUsageSeconds(packageName: String): Long {
+    private fun getTodayActiveProductiveUsageSeconds(rule: EarnItRuleStore.Rule): Long {
         val usageStatsManager = getSystemService(UsageStatsManager::class.java)
-        val calendar = Calendar.getInstance().apply {
-            set(Calendar.HOUR_OF_DAY, 0)
-            set(Calendar.MINUTE, 0)
-            set(Calendar.SECOND, 0)
-            set(Calendar.MILLISECOND, 0)
-        }
-        val usageStats = usageStatsManager.queryAndAggregateUsageStats(
-            calendar.timeInMillis,
-            System.currentTimeMillis()
-        )
-        val foregroundMillis = usageStats[packageName]?.totalTimeInForeground ?: 0L
-        return TimeUnit.MILLISECONDS.toSeconds(foregroundMillis)
+        return RewardLedger.activeProductiveUsageSecondsToday(usageStatsManager, rule)
     }
 
     private fun isAccessibilityServiceEnabled(): Boolean {
@@ -220,7 +296,14 @@ fun Dashboard(
     selectedProductivePackage: String,
     selectedBlockedPackages: Set<String>,
     selectedRatio: Int,
+    selectedActiveDays: Set<Int>,
+    selectedStartMinute: Int,
+    selectedEndMinute: Int,
     editingRule: Boolean,
+    productivePickerOpen: Boolean,
+    blockedPickerOpen: Boolean,
+    productiveSearch: String,
+    blockedSearch: String,
     usageAccessGranted: Boolean,
     productiveUsageSeconds: Long,
     remainingRewardSeconds: Long,
@@ -231,9 +314,18 @@ fun Dashboard(
     onOpenAccessibilitySettings: () -> Unit,
     onStartEditingRule: () -> Unit,
     onCancelEditingRule: () -> Unit,
+    onOpenProductivePicker: () -> Unit,
+    onCloseProductivePicker: () -> Unit,
+    onOpenBlockedPicker: () -> Unit,
+    onCloseBlockedPicker: () -> Unit,
+    onProductiveSearchChange: (String) -> Unit,
+    onBlockedSearchChange: (String) -> Unit,
     onSelectProductiveApp: (String) -> Unit,
     onToggleBlockedApp: (String) -> Unit,
     onSelectRatio: (Int) -> Unit,
+    onToggleActiveDay: (Int) -> Unit,
+    onEditStartTime: () -> Unit,
+    onEditEndTime: () -> Unit,
     onSaveRule: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -261,13 +353,30 @@ fun Dashboard(
 
         if (editingRule) {
             RuleEditor(
+                rule = rule,
                 apps = apps,
                 selectedProductivePackage = selectedProductivePackage,
                 selectedBlockedPackages = selectedBlockedPackages,
                 selectedRatio = selectedRatio,
+                selectedActiveDays = selectedActiveDays,
+                selectedStartMinute = selectedStartMinute,
+                selectedEndMinute = selectedEndMinute,
+                productivePickerOpen = productivePickerOpen,
+                blockedPickerOpen = blockedPickerOpen,
+                productiveSearch = productiveSearch,
+                blockedSearch = blockedSearch,
+                onOpenProductivePicker = onOpenProductivePicker,
+                onCloseProductivePicker = onCloseProductivePicker,
+                onOpenBlockedPicker = onOpenBlockedPicker,
+                onCloseBlockedPicker = onCloseBlockedPicker,
+                onProductiveSearchChange = onProductiveSearchChange,
+                onBlockedSearchChange = onBlockedSearchChange,
                 onSelectProductiveApp = onSelectProductiveApp,
                 onToggleBlockedApp = onToggleBlockedApp,
                 onSelectRatio = onSelectRatio,
+                onToggleActiveDay = onToggleActiveDay,
+                onEditStartTime = onEditStartTime,
+                onEditEndTime = onEditEndTime,
                 onSaveRule = onSaveRule,
                 onCancel = onCancelEditingRule
             )
@@ -281,20 +390,55 @@ fun Dashboard(
 
 @Composable
 private fun RuleEditor(
+    rule: EarnItRuleStore.Rule,
     apps: List<EarnItRuleStore.LaunchableApp>,
     selectedProductivePackage: String,
     selectedBlockedPackages: Set<String>,
     selectedRatio: Int,
+    selectedActiveDays: Set<Int>,
+    selectedStartMinute: Int,
+    selectedEndMinute: Int,
+    productivePickerOpen: Boolean,
+    blockedPickerOpen: Boolean,
+    productiveSearch: String,
+    blockedSearch: String,
+    onOpenProductivePicker: () -> Unit,
+    onCloseProductivePicker: () -> Unit,
+    onOpenBlockedPicker: () -> Unit,
+    onCloseBlockedPicker: () -> Unit,
+    onProductiveSearchChange: (String) -> Unit,
+    onBlockedSearchChange: (String) -> Unit,
     onSelectProductiveApp: (String) -> Unit,
     onToggleBlockedApp: (String) -> Unit,
     onSelectRatio: (Int) -> Unit,
+    onToggleActiveDay: (Int) -> Unit,
+    onEditStartTime: () -> Unit,
+    onEditEndTime: () -> Unit,
     onSaveRule: () -> Unit,
     onCancel: () -> Unit
 ) {
-    Text(text = "Productive app", style = MaterialTheme.typography.titleSmall)
-    AppChoiceList(apps, selectedProductivePackage, onSelectProductiveApp)
-    Text(text = "Blocked apps", style = MaterialTheme.typography.titleSmall)
-    BlockedAppChoiceList(apps, selectedBlockedPackages, onToggleBlockedApp)
+    ProductiveAppSection(
+        rule = rule,
+        apps = apps,
+        selectedProductivePackage = selectedProductivePackage,
+        pickerOpen = productivePickerOpen,
+        search = productiveSearch,
+        onOpenPicker = onOpenProductivePicker,
+        onClosePicker = onCloseProductivePicker,
+        onSearchChange = onProductiveSearchChange,
+        onSelectApp = onSelectProductiveApp
+    )
+    BlockedAppsSection(
+        rule = rule,
+        apps = apps,
+        selectedBlockedPackages = selectedBlockedPackages,
+        pickerOpen = blockedPickerOpen,
+        search = blockedSearch,
+        onOpenPicker = onOpenBlockedPicker,
+        onClosePicker = onCloseBlockedPicker,
+        onSearchChange = onBlockedSearchChange,
+        onToggleApp = onToggleBlockedApp
+    )
     Text(text = "Ratio", style = MaterialTheme.typography.titleSmall)
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         EarnItRuleStore.allowedRatios.forEach { ratio ->
@@ -302,6 +446,16 @@ private fun RuleEditor(
                 Text(text = if (selectedRatio == ratio) "1:$ratio *" else "1:$ratio")
             }
         }
+    }
+    Text(text = "Active days", style = MaterialTheme.typography.titleSmall)
+    DayButtons(selectedActiveDays = selectedActiveDays, onToggleActiveDay = onToggleActiveDay)
+    Text(text = "Start time", style = MaterialTheme.typography.titleSmall)
+    Button(onClick = onEditStartTime, modifier = Modifier.fillMaxWidth()) {
+        Text(text = EarnItRuleStore.formatMinute(selectedStartMinute))
+    }
+    Text(text = "End time", style = MaterialTheme.typography.titleSmall)
+    Button(onClick = onEditEndTime, modifier = Modifier.fillMaxWidth()) {
+        Text(text = EarnItRuleStore.formatMinute(selectedEndMinute))
     }
     Button(onClick = onSaveRule, modifier = Modifier.fillMaxWidth()) {
         Text(text = "Save Rule")
@@ -312,37 +466,130 @@ private fun RuleEditor(
 }
 
 @Composable
-private fun AppChoiceList(
+private fun ProductiveAppSection(
+    rule: EarnItRuleStore.Rule,
     apps: List<EarnItRuleStore.LaunchableApp>,
-    selectedPackage: String,
+    selectedProductivePackage: String,
+    pickerOpen: Boolean,
+    search: String,
+    onOpenPicker: () -> Unit,
+    onClosePicker: () -> Unit,
+    onSearchChange: (String) -> Unit,
     onSelectApp: (String) -> Unit
 ) {
-    apps.forEach { app ->
-        Button(onClick = { onSelectApp(app.packageName) }, modifier = Modifier.fillMaxWidth()) {
-            Text(text = if (app.packageName == selectedPackage) "${app.name} *" else app.name)
+    val selectedName = apps.firstOrNull { it.packageName == selectedProductivePackage }?.name
+        ?: if (rule.productivePackage == selectedProductivePackage) rule.productiveName else "None selected"
+    Text(text = "Productive app", style = MaterialTheme.typography.titleSmall)
+    Text(text = selectedName)
+    Button(onClick = onOpenPicker, modifier = Modifier.fillMaxWidth()) {
+        Text(text = "Choose Productive App")
+    }
+    if (pickerOpen) {
+        AppSearchField(value = search, onValueChange = onSearchChange)
+        AppPickerList(
+            apps = apps.filteredBy(search),
+            selectedPackages = setOf(selectedProductivePackage),
+            onClickApp = onSelectApp
+        )
+        Button(onClick = onClosePicker, modifier = Modifier.fillMaxWidth()) {
+            Text(text = "Done")
         }
     }
 }
 
 @Composable
-private fun BlockedAppChoiceList(
+private fun BlockedAppsSection(
+    rule: EarnItRuleStore.Rule,
     apps: List<EarnItRuleStore.LaunchableApp>,
-    selectedPackages: Set<String>,
+    selectedBlockedPackages: Set<String>,
+    pickerOpen: Boolean,
+    search: String,
+    onOpenPicker: () -> Unit,
+    onClosePicker: () -> Unit,
+    onSearchChange: (String) -> Unit,
     onToggleApp: (String) -> Unit
 ) {
+    val selectedNamesByPackage = rule.blockedApps.associate { it.packageName to it.name } +
+        apps.associate { it.packageName to it.name }
+    val selectedNames = selectedBlockedPackages.mapNotNull { selectedNamesByPackage[it] }
+    Text(text = "Blocked apps", style = MaterialTheme.typography.titleSmall)
+    Text(text = "${selectedBlockedPackages.size} app${if (selectedBlockedPackages.size == 1) "" else "s"} selected")
+    if (selectedNames.isNotEmpty()) {
+        Text(text = selectedNames.take(3).joinToString(", "))
+    }
+    Button(onClick = onOpenPicker, modifier = Modifier.fillMaxWidth()) {
+        Text(text = "Choose Blocked Apps")
+    }
+    if (pickerOpen) {
+        AppSearchField(value = search, onValueChange = onSearchChange)
+        AppPickerList(
+            apps = apps.filteredBy(search),
+            selectedPackages = selectedBlockedPackages,
+            onClickApp = onToggleApp
+        )
+        Button(onClick = onClosePicker, modifier = Modifier.fillMaxWidth()) {
+            Text(text = "Done")
+        }
+    }
+}
+
+@Composable
+private fun AppSearchField(value: String, onValueChange: (String) -> Unit) {
+    TextField(
+        value = value,
+        onValueChange = onValueChange,
+        label = { Text(text = "Search apps") },
+        modifier = Modifier.fillMaxWidth(),
+        singleLine = true
+    )
+}
+
+@Composable
+private fun AppPickerList(
+    apps: List<EarnItRuleStore.LaunchableApp>,
+    selectedPackages: Set<String>,
+    onClickApp: (String) -> Unit
+) {
     apps.forEach { app ->
-        Button(onClick = { onToggleApp(app.packageName) }, modifier = Modifier.fillMaxWidth()) {
+        Button(onClick = { onClickApp(app.packageName) }, modifier = Modifier.fillMaxWidth()) {
             Text(text = if (app.packageName in selectedPackages) "${app.name} *" else app.name)
         }
     }
 }
+
+@Composable
+private fun DayButtons(selectedActiveDays: Set<Int>, onToggleActiveDay: (Int) -> Unit) {
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        EarnItRuleStore.allDays.take(4).forEach { day ->
+            DayButton(day = day, selectedActiveDays = selectedActiveDays, onToggleActiveDay = onToggleActiveDay)
+        }
+    }
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        EarnItRuleStore.allDays.drop(4).forEach { day ->
+            DayButton(day = day, selectedActiveDays = selectedActiveDays, onToggleActiveDay = onToggleActiveDay)
+        }
+    }
+}
+
+@Composable
+private fun DayButton(day: Int, selectedActiveDays: Set<Int>, onToggleActiveDay: (Int) -> Unit) {
+    Button(onClick = { onToggleActiveDay(day) }) {
+        Text(text = if (day in selectedActiveDays) "${EarnItRuleStore.dayShortName(day)} *" else EarnItRuleStore.dayShortName(day))
+    }
+}
+
+private fun List<EarnItRuleStore.LaunchableApp>.filteredBy(query: String): List<EarnItRuleStore.LaunchableApp> {
+    val trimmedQuery = query.trim()
+    if (trimmedQuery.isEmpty()) return this
+    return filter { it.name.contains(trimmedQuery, ignoreCase = true) }
+}
+
 private fun formatDuration(totalSeconds: Long): String {
     val safeSeconds = totalSeconds.coerceAtLeast(0L)
     val minutes = safeSeconds / 60L
     val seconds = safeSeconds % 60L
     return if (minutes > 0L) "${minutes}m ${seconds}s" else "${seconds}s"
 }
-
 
 @Preview(showBackground = true)
 @Composable
@@ -353,13 +600,23 @@ fun DashboardPreview() {
                 productivePackage = "com.duolingo",
                 productiveName = "Duolingo",
                 blockedApps = listOf(EarnItRuleStore.RuleApp("com.instagram.android", "Instagram")),
-                rewardSecondsPerProductiveSecond = 1
+                rewardSecondsPerProductiveSecond = 1,
+                activeDays = EarnItRuleStore.allDays.toSet(),
+                startMinute = 0,
+                endMinute = 1_440
             ),
             apps = emptyList(),
             selectedProductivePackage = "com.duolingo",
             selectedBlockedPackages = setOf("com.instagram.android"),
             selectedRatio = 1,
+            selectedActiveDays = EarnItRuleStore.allDays.toSet(),
+            selectedStartMinute = 0,
+            selectedEndMinute = 1_440,
             editingRule = false,
+            productivePickerOpen = false,
+            blockedPickerOpen = false,
+            productiveSearch = "",
+            blockedSearch = "",
             usageAccessGranted = true,
             productiveUsageSeconds = 735,
             remainingRewardSeconds = 180,
@@ -370,9 +627,18 @@ fun DashboardPreview() {
             onOpenAccessibilitySettings = {},
             onStartEditingRule = {},
             onCancelEditingRule = {},
+            onOpenProductivePicker = {},
+            onCloseProductivePicker = {},
+            onOpenBlockedPicker = {},
+            onCloseBlockedPicker = {},
+            onProductiveSearchChange = {},
+            onBlockedSearchChange = {},
             onSelectProductiveApp = {},
             onToggleBlockedApp = {},
             onSelectRatio = {},
+            onToggleActiveDay = {},
+            onEditStartTime = {},
+            onEditEndTime = {},
             onSaveRule = {}
         )
     }

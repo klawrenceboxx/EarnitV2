@@ -8,7 +8,6 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.view.accessibility.AccessibilityEvent
-import java.util.Calendar
 
 class EarnItAccessibilityService : AccessibilityService() {
     private val handler = Handler(Looper.getMainLooper())
@@ -24,6 +23,10 @@ class EarnItAccessibilityService : AccessibilityService() {
             val rule = activeRule
             val blockedAppName = activeBlockedAppName
             if (activeBlockedPackage != null && rule != null && blockedAppName != null) {
+                if (!rule.isActiveNow()) {
+                    clearActiveBlockedApp()
+                    return
+                }
                 if (RewardLedger.snapshot(this@EarnItAccessibilityService, rule).remainingRewardSeconds <= 0L) {
                     clearActiveBlockedApp()
                     launchBlockedActivity(rule, blockedAppName, ignoreDebounce = true)
@@ -45,7 +48,7 @@ class EarnItAccessibilityService : AccessibilityService() {
 
         val rule = EarnItRuleStore.getRule(this)
         val blockedApp = rule.blockedAppForPackage(foregroundPackage)
-        if (blockedApp == null) {
+        if (blockedApp == null || !rule.isActiveNow()) {
             stopActiveBlockedUsage()
             return
         }
@@ -106,17 +109,7 @@ class EarnItAccessibilityService : AccessibilityService() {
         if (!hasUsageAccess()) return
 
         val usageStatsManager = getSystemService(UsageStatsManager::class.java)
-        val calendar = Calendar.getInstance().apply {
-            set(Calendar.HOUR_OF_DAY, 0)
-            set(Calendar.MINUTE, 0)
-            set(Calendar.SECOND, 0)
-            set(Calendar.MILLISECOND, 0)
-        }
-        val usageStats = usageStatsManager.queryAndAggregateUsageStats(
-            calendar.timeInMillis,
-            System.currentTimeMillis()
-        )
-        val productiveSecondsToday = (usageStats[rule.productivePackage]?.totalTimeInForeground ?: 0L) / 1_000L
+        val productiveSecondsToday = RewardLedger.activeProductiveUsageSecondsToday(usageStatsManager, rule)
         RewardLedger.creditProductiveUsage(this, rule, productiveSecondsToday)
     }
 

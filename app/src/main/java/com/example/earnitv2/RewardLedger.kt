@@ -1,8 +1,11 @@
 package com.example.earnitv2
 
+import android.app.usage.UsageEvents
+import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.content.SharedPreferences
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 
@@ -84,6 +87,68 @@ object RewardLedger {
         )
     }
 
+    fun activeProductiveUsageSecondsToday(
+        usageStatsManager: UsageStatsManager,
+        rule: EarnItRuleStore.Rule
+    ): Long {
+        val now = System.currentTimeMillis()
+        val startOfDay = Calendar.getInstance().apply {
+            set(Calendar.HOUR_OF_DAY, 0)
+            set(Calendar.MINUTE, 0)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }.timeInMillis
+        val events = usageStatsManager.queryEvents(startOfDay, now)
+        val event = UsageEvents.Event()
+        var foregroundStartedAt: Long? = null
+        var totalMillis = 0L
+
+        while (events.hasNextEvent()) {
+            events.getNextEvent(event)
+            if (event.packageName != rule.productivePackage) continue
+
+            when (event.eventType) {
+                UsageEvents.Event.ACTIVITY_RESUMED, UsageEvents.Event.MOVE_TO_FOREGROUND -> {
+                    foregroundStartedAt = event.timeStamp
+                }
+                UsageEvents.Event.ACTIVITY_PAUSED, UsageEvents.Event.MOVE_TO_BACKGROUND -> {
+                    val startedAt = foregroundStartedAt
+                    if (startedAt != null && event.timeStamp > startedAt) {
+                        totalMillis += activeOverlapMillis(startedAt, event.timeStamp, rule)
+                    }
+                    foregroundStartedAt = null
+                }
+            }
+        }
+
+        val startedAt = foregroundStartedAt
+        if (startedAt != null && now > startedAt) {
+            totalMillis += activeOverlapMillis(startedAt, now, rule)
+        }
+
+        return totalMillis / 1_000L
+    }
+
+    private fun activeOverlapMillis(startMillis: Long, endMillis: Long, rule: EarnItRuleStore.Rule): Long {
+        if (endMillis <= startMillis) return 0L
+        var total = 0L
+        val cursor = Calendar.getInstance().apply { timeInMillis = startMillis }
+        while (cursor.timeInMillis < endMillis) {
+            val day = cursor.toEarnItDay()
+            val minute = cursor.get(Calendar.HOUR_OF_DAY) * 60 + cursor.get(Calendar.MINUTE)
+            val nextMinute = cursor.clone() as Calendar
+            nextMinute.set(Calendar.SECOND, 0)
+            nextMinute.set(Calendar.MILLISECOND, 0)
+            nextMinute.add(Calendar.MINUTE, 1)
+            val segmentEnd = minOf(endMillis, nextMinute.timeInMillis)
+            if (rule.isActiveAt(day, minute)) {
+                total += segmentEnd - cursor.timeInMillis
+            }
+            cursor.timeInMillis = segmentEnd
+        }
+        return total
+    }
+
     private fun currentPrefs(context: Context, rule: EarnItRuleStore.Rule): SharedPreferences {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val today = todayKey()
@@ -106,10 +171,23 @@ object RewardLedger {
 
     private fun EarnItRuleStore.Rule.id(): String {
         val blockedRuleId = blockedApps.map { it.packageName }.sorted().joinToString(",")
-        return "$productivePackage|$blockedRuleId|$rewardSecondsPerProductiveSecond"
+        val activeDaysId = activeDays.sorted().joinToString(",")
+        return "$productivePackage|$blockedRuleId|$rewardSecondsPerProductiveSecond|$activeDaysId|$startMinute|$endMinute"
     }
 
     private fun todayKey(): String {
         return SimpleDateFormat("yyyyMMdd", Locale.US).format(Date())
+    }
+
+    private fun Calendar.toEarnItDay(): Int {
+        return when (get(Calendar.DAY_OF_WEEK)) {
+            Calendar.MONDAY -> 1
+            Calendar.TUESDAY -> 2
+            Calendar.WEDNESDAY -> 3
+            Calendar.THURSDAY -> 4
+            Calendar.FRIDAY -> 5
+            Calendar.SATURDAY -> 6
+            else -> 7
+        }
     }
 }
