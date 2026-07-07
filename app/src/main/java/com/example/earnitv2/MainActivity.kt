@@ -32,7 +32,11 @@ import java.util.concurrent.TimeUnit
 
 class MainActivity : ComponentActivity() {
     private var usageAccessGranted by mutableStateOf(false)
-    private var duolingoUsageMinutes by mutableStateOf(0L)
+    private var duolingoUsageSeconds by mutableStateOf(0L)
+    private var productiveCreditedSeconds by mutableStateOf(0L)
+    private var rewardIssuedSeconds by mutableStateOf(0L)
+    private var rewardConsumedSeconds by mutableStateOf(0L)
+    private var remainingRewardSeconds by mutableStateOf(0L)
     private var usageStatusMessage by mutableStateOf("")
     private var accessibilityServiceEnabled by mutableStateOf(false)
 
@@ -45,7 +49,8 @@ class MainActivity : ComponentActivity() {
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
                     Dashboard(
                         usageAccessGranted = usageAccessGranted,
-                        duolingoUsageMinutes = duolingoUsageMinutes,
+                        duolingoUsageSeconds = duolingoUsageSeconds,
+                        remainingRewardSeconds = remainingRewardSeconds,
                         usageStatusMessage = usageStatusMessage,
                         accessibilityServiceEnabled = accessibilityServiceEnabled,
                         onOpenUsageAccessSettings = ::openUsageAccessSettings,
@@ -70,14 +75,23 @@ class MainActivity : ComponentActivity() {
     private fun refreshUsageStats() {
         usageAccessGranted = hasUsageAccess()
         if (!usageAccessGranted) {
-            duolingoUsageMinutes = 0L
+            duolingoUsageSeconds = 0L
+            val snapshot = RewardLedger.snapshot(this)
+            productiveCreditedSeconds = snapshot.productiveCreditedSeconds
+            rewardIssuedSeconds = snapshot.rewardIssuedSeconds
+            rewardConsumedSeconds = snapshot.rewardConsumedSeconds
+            remainingRewardSeconds = snapshot.remainingRewardSeconds
             usageStatusMessage = "Usage Access is off. Enable it for EarnitV2 to track Duolingo time."
             return
         }
 
-        val foregroundMillis = getTodayForegroundUsageMillis(AppPackages.PRODUCTIVE_APP)
-        duolingoUsageMinutes = TimeUnit.MILLISECONDS.toMinutes(foregroundMillis)
-        usageStatusMessage = if (foregroundMillis == 0L) {
+        duolingoUsageSeconds = getTodayForegroundUsageSeconds(AppPackages.PRODUCTIVE_APP)
+        val snapshot = RewardLedger.creditProductiveUsage(this, duolingoUsageSeconds)
+        productiveCreditedSeconds = snapshot.productiveCreditedSeconds
+        rewardIssuedSeconds = snapshot.rewardIssuedSeconds
+        rewardConsumedSeconds = snapshot.rewardConsumedSeconds
+        remainingRewardSeconds = snapshot.remainingRewardSeconds
+        usageStatusMessage = if (duolingoUsageSeconds == 0L) {
             "No Duolingo usage recorded today. Android usage data can be delayed."
         } else {
             "Tracking Duolingo usage today."
@@ -94,7 +108,7 @@ class MainActivity : ComponentActivity() {
         return mode == AppOpsManager.MODE_ALLOWED
     }
 
-    private fun getTodayForegroundUsageMillis(packageName: String): Long {
+    private fun getTodayForegroundUsageSeconds(packageName: String): Long {
         val usageStatsManager = getSystemService(UsageStatsManager::class.java)
         val calendar = Calendar.getInstance().apply {
             set(Calendar.HOUR_OF_DAY, 0)
@@ -105,7 +119,8 @@ class MainActivity : ComponentActivity() {
         val startOfDay = calendar.timeInMillis
         val now = System.currentTimeMillis()
         val usageStats = usageStatsManager.queryAndAggregateUsageStats(startOfDay, now)
-        return usageStats[packageName]?.totalTimeInForeground ?: 0L
+        val foregroundMillis = usageStats[packageName]?.totalTimeInForeground ?: 0L
+        return TimeUnit.MILLISECONDS.toSeconds(foregroundMillis)
     }
 
     private fun isAccessibilityServiceEnabled(): Boolean {
@@ -138,7 +153,8 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun Dashboard(
     usageAccessGranted: Boolean,
-    duolingoUsageMinutes: Long,
+    duolingoUsageSeconds: Long,
+    remainingRewardSeconds: Long,
     usageStatusMessage: String,
     accessibilityServiceEnabled: Boolean,
     onOpenUsageAccessSettings: () -> Unit,
@@ -160,8 +176,24 @@ fun Dashboard(
             style = MaterialTheme.typography.titleMedium
         )
         Text(
-            text = "$duolingoUsageMinutes minutes",
+            text = formatDuration(duolingoUsageSeconds),
             style = MaterialTheme.typography.displaySmall
+        )
+        Text(
+            text = "Productive time measured today: ${formatDuration(duolingoUsageSeconds)}",
+            style = MaterialTheme.typography.bodyMedium
+        )
+        Text(
+            text = "Reward time available: ${formatDuration(remainingRewardSeconds)}",
+            style = MaterialTheme.typography.bodyMedium
+        )
+        Text(
+            text = if (remainingRewardSeconds > 0L) {
+                "Blocked apps are unlocked."
+            } else {
+                "Blocked apps are locked."
+            },
+            style = MaterialTheme.typography.bodyMedium
         )
         Text(
             text = usageStatusMessage,
@@ -183,7 +215,7 @@ fun Dashboard(
             text = if (accessibilityServiceEnabled) {
                 "Accessibility Service is on."
             } else {
-                "Accessibility Service is off. Enable it to lock Instagram."
+                "Accessibility Service is off. Enable it to lock Instagram and Lichess."
             },
             style = MaterialTheme.typography.bodyMedium
         )
@@ -202,13 +234,25 @@ fun Dashboard(
     }
 }
 
+private fun formatDuration(totalSeconds: Long): String {
+    val safeSeconds = totalSeconds.coerceAtLeast(0L)
+    val minutes = safeSeconds / 60L
+    val seconds = safeSeconds % 60L
+    return if (minutes > 0L) {
+        "${minutes}m ${seconds}s"
+    } else {
+        "${seconds}s"
+    }
+}
+
 @Preview(showBackground = true)
 @Composable
 fun DashboardPreview() {
     EarnitV2Theme {
         Dashboard(
             usageAccessGranted = true,
-            duolingoUsageMinutes = 12,
+            duolingoUsageSeconds = 735,
+            remainingRewardSeconds = 180,
             usageStatusMessage = "Tracking Duolingo usage today.",
             accessibilityServiceEnabled = true,
             onOpenUsageAccessSettings = {},
