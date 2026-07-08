@@ -12,7 +12,7 @@ import java.util.Locale
 object RewardLedger {
     private const val PREFS_NAME = "earnit_reward_ledger"
     private const val KEY_ACCOUNTING_DAY = "accounting_day"
-    private const val KEY_RULE_ID = "rule_id"
+    private const val KEY_RULE_SIGNATURE = "rule_signature"
     private const val KEY_PRODUCTIVE_CREDITED_SECONDS = "productive_credited_seconds"
     private const val KEY_REWARD_ISSUED_SECONDS = "reward_issued_seconds"
     private const val KEY_REWARD_CONSUMED_SECONDS = "reward_consumed_seconds"
@@ -33,9 +33,9 @@ object RewardLedger {
         productiveUsageSecondsToday: Long
     ): Snapshot {
         val prefs = currentPrefs(context, rule)
-        val creditedSeconds = prefs.getLong(KEY_PRODUCTIVE_CREDITED_SECONDS, 0L)
-        val rewardIssuedSeconds = prefs.getLong(KEY_REWARD_ISSUED_SECONDS, 0L)
-        val rewardConsumedSeconds = prefs.getLong(KEY_REWARD_CONSUMED_SECONDS, 0L)
+        val creditedSeconds = prefs.getLong(ruleKey(rule, KEY_PRODUCTIVE_CREDITED_SECONDS), 0L)
+        val rewardIssuedSeconds = prefs.getLong(ruleKey(rule, KEY_REWARD_ISSUED_SECONDS), 0L)
+        val rewardConsumedSeconds = prefs.getLong(ruleKey(rule, KEY_REWARD_CONSUMED_SECONDS), 0L)
         val safeProductiveSeconds = productiveUsageSecondsToday.coerceAtLeast(0L)
         val newlyEarnedSeconds = (safeProductiveSeconds - creditedSeconds).coerceAtLeast(0L)
 
@@ -45,8 +45,8 @@ object RewardLedger {
 
         val updatedRewardIssuedSeconds = rewardIssuedSeconds + issueRewardSeconds(newlyEarnedSeconds, rule)
         prefs.edit()
-            .putLong(KEY_PRODUCTIVE_CREDITED_SECONDS, safeProductiveSeconds)
-            .putLong(KEY_REWARD_ISSUED_SECONDS, updatedRewardIssuedSeconds)
+            .putLong(ruleKey(rule, KEY_PRODUCTIVE_CREDITED_SECONDS), safeProductiveSeconds)
+            .putLong(ruleKey(rule, KEY_REWARD_ISSUED_SECONDS), updatedRewardIssuedSeconds)
             .commit()
 
         return Snapshot(safeProductiveSeconds, updatedRewardIssuedSeconds, rewardConsumedSeconds)
@@ -59,9 +59,9 @@ object RewardLedger {
         consumedSeconds: Long
     ): Snapshot {
         val prefs = currentPrefs(context, rule)
-        val productiveCreditedSeconds = prefs.getLong(KEY_PRODUCTIVE_CREDITED_SECONDS, 0L)
-        val rewardIssuedSeconds = prefs.getLong(KEY_REWARD_ISSUED_SECONDS, 0L)
-        val rewardConsumedSeconds = prefs.getLong(KEY_REWARD_CONSUMED_SECONDS, 0L)
+        val productiveCreditedSeconds = prefs.getLong(ruleKey(rule, KEY_PRODUCTIVE_CREDITED_SECONDS), 0L)
+        val rewardIssuedSeconds = prefs.getLong(ruleKey(rule, KEY_REWARD_ISSUED_SECONDS), 0L)
+        val rewardConsumedSeconds = prefs.getLong(ruleKey(rule, KEY_REWARD_CONSUMED_SECONDS), 0L)
         val remainingRewardSeconds = (rewardIssuedSeconds - rewardConsumedSeconds).coerceAtLeast(0L)
         val secondsToConsume = consumedSeconds.coerceAtLeast(0L).coerceAtMost(remainingRewardSeconds)
 
@@ -71,7 +71,7 @@ object RewardLedger {
 
         val updatedRewardConsumedSeconds = rewardConsumedSeconds + secondsToConsume
         prefs.edit()
-            .putLong(KEY_REWARD_CONSUMED_SECONDS, updatedRewardConsumedSeconds)
+            .putLong(ruleKey(rule, KEY_REWARD_CONSUMED_SECONDS), updatedRewardConsumedSeconds)
             .commit()
 
         return Snapshot(productiveCreditedSeconds, rewardIssuedSeconds, updatedRewardConsumedSeconds)
@@ -81,9 +81,9 @@ object RewardLedger {
     fun snapshot(context: Context, rule: EarnItRuleStore.Rule): Snapshot {
         val prefs = currentPrefs(context, rule)
         return Snapshot(
-            productiveCreditedSeconds = prefs.getLong(KEY_PRODUCTIVE_CREDITED_SECONDS, 0L),
-            rewardIssuedSeconds = prefs.getLong(KEY_REWARD_ISSUED_SECONDS, 0L),
-            rewardConsumedSeconds = prefs.getLong(KEY_REWARD_CONSUMED_SECONDS, 0L)
+            productiveCreditedSeconds = prefs.getLong(ruleKey(rule, KEY_PRODUCTIVE_CREDITED_SECONDS), 0L),
+            rewardIssuedSeconds = prefs.getLong(ruleKey(rule, KEY_REWARD_ISSUED_SECONDS), 0L),
+            rewardConsumedSeconds = prefs.getLong(ruleKey(rule, KEY_REWARD_CONSUMED_SECONDS), 0L)
         )
     }
 
@@ -152,24 +152,60 @@ object RewardLedger {
     private fun currentPrefs(context: Context, rule: EarnItRuleStore.Rule): SharedPreferences {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val today = todayKey()
-        val ruleId = rule.id()
-        if (prefs.getString(KEY_ACCOUNTING_DAY, null) != today || prefs.getString(KEY_RULE_ID, null) != ruleId) {
+        val dayKey = ruleKey(rule, KEY_ACCOUNTING_DAY)
+        val signatureKey = ruleKey(rule, KEY_RULE_SIGNATURE)
+        val ruleSignature = rule.signature()
+        if (!prefs.contains(dayKey)) {
+            migrateLegacyLedgerIfPresent(prefs, rule, today, ruleSignature)
+        }
+        if (prefs.getString(dayKey, null) != today || prefs.getString(signatureKey, null) != ruleSignature) {
             prefs.edit()
-                .putString(KEY_ACCOUNTING_DAY, today)
-                .putString(KEY_RULE_ID, ruleId)
-                .putLong(KEY_PRODUCTIVE_CREDITED_SECONDS, 0L)
-                .putLong(KEY_REWARD_ISSUED_SECONDS, 0L)
-                .putLong(KEY_REWARD_CONSUMED_SECONDS, 0L)
+                .putString(dayKey, today)
+                .putString(signatureKey, ruleSignature)
+                .putLong(ruleKey(rule, KEY_PRODUCTIVE_CREDITED_SECONDS), 0L)
+                .putLong(ruleKey(rule, KEY_REWARD_ISSUED_SECONDS), 0L)
+                .putLong(ruleKey(rule, KEY_REWARD_CONSUMED_SECONDS), 0L)
                 .commit()
         }
         return prefs
+    }
+
+    private fun migrateLegacyLedgerIfPresent(
+        prefs: SharedPreferences,
+        rule: EarnItRuleStore.Rule,
+        today: String,
+        ruleSignature: String
+    ) {
+        val legacyDay = prefs.getString(KEY_ACCOUNTING_DAY, null)
+        if (rule.id != "default" || legacyDay != today) return
+
+        prefs.edit()
+            .putString(ruleKey(rule, KEY_ACCOUNTING_DAY), legacyDay)
+            .putString(ruleKey(rule, KEY_RULE_SIGNATURE), ruleSignature)
+            .putLong(
+                ruleKey(rule, KEY_PRODUCTIVE_CREDITED_SECONDS),
+                prefs.getLong(KEY_PRODUCTIVE_CREDITED_SECONDS, 0L)
+            )
+            .putLong(
+                ruleKey(rule, KEY_REWARD_ISSUED_SECONDS),
+                prefs.getLong(KEY_REWARD_ISSUED_SECONDS, 0L)
+            )
+            .putLong(
+                ruleKey(rule, KEY_REWARD_CONSUMED_SECONDS),
+                prefs.getLong(KEY_REWARD_CONSUMED_SECONDS, 0L)
+            )
+            .commit()
     }
 
     private fun issueRewardSeconds(productiveSeconds: Long, rule: EarnItRuleStore.Rule): Long {
         return productiveSeconds * rule.rewardSecondsPerProductiveSecond
     }
 
-    private fun EarnItRuleStore.Rule.id(): String {
+    private fun ruleKey(rule: EarnItRuleStore.Rule, key: String): String {
+        return "${rule.id}_$key"
+    }
+
+    private fun EarnItRuleStore.Rule.signature(): String {
         val blockedRuleId = blockedApps.map { it.packageName }.sorted().joinToString(",")
         val activeDaysId = activeDays.sorted().joinToString(",")
         return "$productivePackage|$blockedRuleId|$rewardSecondsPerProductiveSecond|$activeDaysId|$startMinute|$endMinute"

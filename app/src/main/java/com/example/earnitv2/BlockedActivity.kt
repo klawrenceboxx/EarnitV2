@@ -24,6 +24,7 @@ import androidx.compose.ui.unit.dp
 import com.example.earnitv2.ui.theme.EarnitV2Theme
 
 class BlockedActivity : ComponentActivity() {
+    private var ruleId by mutableStateOf<String?>(null)
     private var blockedAppName by mutableStateOf("Instagram")
     private var productiveAppName by mutableStateOf("Duolingo")
     private var productivePackage by mutableStateOf(AppPackages.DEFAULT_PRODUCTIVE_APP)
@@ -61,14 +62,15 @@ class BlockedActivity : ComponentActivity() {
     }
 
     private fun updateRuleFromIntent(intent: Intent?) {
-        val rule = EarnItRuleStore.getRule(this)
+        ruleId = intent?.getStringExtra(EXTRA_RULE_ID)
+        val rule = ruleId?.let { EarnItRuleStore.findRule(this, it) } ?: EarnItRuleStore.getRule(this)
         blockedAppName = intent?.getStringExtra(EXTRA_BLOCKED_APP_NAME) ?: rule.blockedApps.firstOrNull()?.name ?: "Blocked app"
         productiveAppName = intent?.getStringExtra(EXTRA_PRODUCTIVE_APP_NAME) ?: rule.productiveName
         productivePackage = intent?.getStringExtra(EXTRA_PRODUCTIVE_PACKAGE) ?: rule.productivePackage
     }
 
     private fun refreshRewardBalance() {
-        val rule = EarnItRuleStore.getRule(this)
+        val rule = ruleId?.let { EarnItRuleStore.findRule(this, it) } ?: EarnItRuleStore.getRule(this)
         availableRewardSeconds = RewardLedger.snapshot(this, rule).remainingRewardSeconds
     }
 
@@ -85,6 +87,7 @@ class BlockedActivity : ComponentActivity() {
     }
 
     companion object {
+        const val EXTRA_RULE_ID = "com.example.earnitv2.extra.RULE_ID"
         const val EXTRA_BLOCKED_APP_NAME = "com.example.earnitv2.extra.BLOCKED_APP_NAME"
         const val EXTRA_PRODUCTIVE_APP_NAME = "com.example.earnitv2.extra.PRODUCTIVE_APP_NAME"
         const val EXTRA_PRODUCTIVE_PACKAGE = "com.example.earnitv2.extra.PRODUCTIVE_PACKAGE"

@@ -23,7 +23,7 @@ class EarnItAccessibilityService : AccessibilityService() {
             val rule = activeRule
             val blockedAppName = activeBlockedAppName
             if (activeBlockedPackage != null && rule != null && blockedAppName != null) {
-                if (!rule.isActiveNow()) {
+                if (!rule.enabled || !rule.isActiveNow()) {
                     clearActiveBlockedApp()
                     return
                 }
@@ -46,20 +46,30 @@ class EarnItAccessibilityService : AccessibilityService() {
             return
         }
 
-        val rule = EarnItRuleStore.getRule(this)
-        val blockedApp = rule.blockedAppForPackage(foregroundPackage)
-        if (blockedApp == null || !rule.isActiveNow()) {
+        val rules = EarnItRuleStore.getRules(this)
+        creditLatestProductiveUsage(rules)
+
+        val matchingRules = rules.filter { rule ->
+            rule.enabled && rule.isActiveNow() && rule.blockedAppForPackage(foregroundPackage) != null
+        }
+        if (matchingRules.isEmpty()) {
             stopActiveBlockedUsage()
             return
         }
 
-        creditLatestProductiveUsage(rule)
-        if (RewardLedger.snapshot(this, rule).remainingRewardSeconds > 0L) {
-            startActiveBlockedUsage(rule, blockedApp)
-        } else {
-            stopActiveBlockedUsage()
-            launchBlockedActivity(rule, blockedApp.name)
+        val ruleWithReward = matchingRules.firstOrNull { rule ->
+            RewardLedger.snapshot(this, rule).remainingRewardSeconds > 0L
         }
+        if (ruleWithReward != null) {
+            val blockedApp = ruleWithReward.blockedAppForPackage(foregroundPackage) ?: return
+            startActiveBlockedUsage(ruleWithReward, blockedApp)
+            return
+        }
+
+        stopActiveBlockedUsage()
+        val blockingRule = matchingRules.first()
+        val blockedApp = blockingRule.blockedAppForPackage(foregroundPackage) ?: return
+        launchBlockedActivity(blockingRule, blockedApp.name)
     }
 
     override fun onInterrupt() = Unit
@@ -70,7 +80,7 @@ class EarnItAccessibilityService : AccessibilityService() {
     }
 
     private fun startActiveBlockedUsage(rule: EarnItRuleStore.Rule, blockedApp: EarnItRuleStore.RuleApp) {
-        if (activeBlockedPackage == blockedApp.packageName) return
+        if (activeBlockedPackage == blockedApp.packageName && activeRule?.id == rule.id) return
 
         stopActiveBlockedUsage()
         activeBlockedPackage = blockedApp.packageName
@@ -105,12 +115,14 @@ class EarnItAccessibilityService : AccessibilityService() {
         RewardLedger.consumeRewardSeconds(this, rule, elapsedSeconds)
     }
 
-    private fun creditLatestProductiveUsage(rule: EarnItRuleStore.Rule) {
+    private fun creditLatestProductiveUsage(rules: List<EarnItRuleStore.Rule>) {
         if (!hasUsageAccess()) return
 
         val usageStatsManager = getSystemService(UsageStatsManager::class.java)
-        val productiveSecondsToday = RewardLedger.activeProductiveUsageSecondsToday(usageStatsManager, rule)
-        RewardLedger.creditProductiveUsage(this, rule, productiveSecondsToday)
+        rules.filter { it.enabled }.forEach { rule ->
+            val productiveSecondsToday = RewardLedger.activeProductiveUsageSecondsToday(usageStatsManager, rule)
+            RewardLedger.creditProductiveUsage(this, rule, productiveSecondsToday)
+        }
     }
 
     private fun hasUsageAccess(): Boolean {
@@ -132,6 +144,7 @@ class EarnItAccessibilityService : AccessibilityService() {
 
         lastBlockedLaunchAt = System.currentTimeMillis()
         val intent = Intent(this, BlockedActivity::class.java).apply {
+            putExtra(BlockedActivity.EXTRA_RULE_ID, rule.id)
             putExtra(BlockedActivity.EXTRA_BLOCKED_APP_NAME, blockedAppName)
             putExtra(BlockedActivity.EXTRA_PRODUCTIVE_APP_NAME, rule.productiveName)
             putExtra(BlockedActivity.EXTRA_PRODUCTIVE_PACKAGE, rule.productivePackage)

@@ -3,10 +3,15 @@ package com.example.earnitv2
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import java.net.URLDecoder
+import java.net.URLEncoder
 import java.util.Calendar
+import java.util.UUID
 
 object EarnItRuleStore {
     private const val PREFS_NAME = "earnit_rule"
+    private const val KEY_RULES = "rules"
+    private const val KEY_RULES_INITIALIZED = "rules_initialized"
     private const val KEY_PRODUCTIVE_PACKAGE = "productive_package"
     private const val KEY_PRODUCTIVE_NAME = "productive_name"
     private const val KEY_BLOCKED_PACKAGE = "blocked_package"
@@ -19,18 +24,23 @@ object EarnItRuleStore {
     private const val APP_FIELD_SEPARATOR = "\t"
     private const val APP_RECORD_SEPARATOR = "\n"
     private const val DAY_SEPARATOR = ","
+    private const val RULE_FIELD_SEPARATOR = "\u001F"
+    private const val RULE_RECORD_SEPARATOR = "\u001E"
+    private const val MIGRATED_RULE_ID = "default"
 
     val allowedRatios = listOf(1, 2, 4, 5)
     val allDays = listOf(1, 2, 3, 4, 5, 6, 7)
 
     data class Rule(
+        val id: String = newRuleId(),
         val productivePackage: String,
         val productiveName: String,
         val blockedApps: List<RuleApp>,
         val rewardSecondsPerProductiveSecond: Int,
         val activeDays: Set<Int>,
         val startMinute: Int,
-        val endMinute: Int
+        val endMinute: Int,
+        val enabled: Boolean = true
     ) {
         val ratioLabel: String = "1:$rewardSecondsPerProductiveSecond"
         val blockedAppCount: Int = blockedApps.size
@@ -79,43 +89,58 @@ object EarnItRuleStore {
         val name: String
     )
 
-    fun getRule(context: Context): Rule {
+    fun getRules(context: Context): List<Rule> {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val blockedApps = decodeBlockedApps(prefs.getString(KEY_BLOCKED_APPS, null))
-            .ifEmpty {
-                listOf(
-                    RuleApp(
-                        packageName = prefs.getString(KEY_BLOCKED_PACKAGE, null) ?: AppPackages.DEFAULT_BLOCKED_APP,
-                        name = prefs.getString(KEY_BLOCKED_NAME, null) ?: "Instagram"
-                    )
-                )
-            }
+        val savedRules = decodeRules(prefs.getString(KEY_RULES, null))
+        if (savedRules.isNotEmpty() || prefs.getBoolean(KEY_RULES_INITIALIZED, false)) return savedRules
 
-        return Rule(
-            productivePackage = prefs.getString(KEY_PRODUCTIVE_PACKAGE, null) ?: AppPackages.DEFAULT_PRODUCTIVE_APP,
-            productiveName = prefs.getString(KEY_PRODUCTIVE_NAME, null) ?: "Duolingo",
-            blockedApps = blockedApps,
-            rewardSecondsPerProductiveSecond = prefs.getInt(KEY_REWARD_SECONDS_PER_PRODUCTIVE_SECOND, 1)
-                .takeIf { it in allowedRatios } ?: 1,
-            activeDays = decodeActiveDays(prefs.getString(KEY_ACTIVE_DAYS, null)),
-            startMinute = prefs.getInt(KEY_START_MINUTE, 0).coerceIn(0, 1_439),
-            endMinute = prefs.getInt(KEY_END_MINUTE, 1_440).coerceIn(1, 1_440)
-        )
+        val migratedRule = migratedSingleRule(context)
+        saveRules(context, listOf(migratedRule))
+        return listOf(migratedRule)
+    }
+
+    fun getRule(context: Context): Rule {
+        return getRules(context).firstOrNull() ?: migratedSingleRule(context)
+    }
+
+    fun findRule(context: Context, ruleId: String): Rule? {
+        return getRules(context).firstOrNull { it.id == ruleId }
+    }
+
+    fun saveRules(context: Context, rules: List<Rule>) {
+        val cleanRules = rules
+            .filter { it.blockedApps.isNotEmpty() }
+            .distinctBy { it.id }
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putString(KEY_RULES, encodeRules(cleanRules))
+            .putBoolean(KEY_RULES_INITIALIZED, true)
+            .commit()
     }
 
     fun saveRule(context: Context, rule: Rule) {
-        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            .edit()
-            .putString(KEY_PRODUCTIVE_PACKAGE, rule.productivePackage)
-            .putString(KEY_PRODUCTIVE_NAME, rule.productiveName)
-            .putString(KEY_BLOCKED_APPS, encodeBlockedApps(rule.blockedApps))
-            .remove(KEY_BLOCKED_PACKAGE)
-            .remove(KEY_BLOCKED_NAME)
-            .putInt(KEY_REWARD_SECONDS_PER_PRODUCTIVE_SECOND, rule.rewardSecondsPerProductiveSecond)
-            .putString(KEY_ACTIVE_DAYS, encodeActiveDays(rule.activeDays))
-            .putInt(KEY_START_MINUTE, rule.startMinute)
-            .putInt(KEY_END_MINUTE, rule.endMinute)
-            .commit()
+        val rules = getRules(context)
+        val updatedRules = if (rules.any { it.id == rule.id }) {
+            rules.map { if (it.id == rule.id) rule else it }
+        } else {
+            rules + rule
+        }
+        saveRules(context, updatedRules)
+    }
+
+    fun deleteRule(context: Context, ruleId: String) {
+        saveRules(context, getRules(context).filterNot { it.id == ruleId })
+    }
+
+    fun setRuleEnabled(context: Context, ruleId: String, enabled: Boolean) {
+        saveRules(context, getRules(context).map { rule ->
+            if (rule.id == ruleId) rule.copy(enabled = enabled) else rule
+        })
+    }
+
+    fun newRuleFromDefault(context: Context): Rule {
+        val baseRule = getRule(context)
+        return baseRule.copy(id = newRuleId(), enabled = true)
     }
 
     fun launchableApps(context: Context): List<LaunchableApp> {
@@ -164,6 +189,32 @@ object EarnItRuleStore {
         return hour.toString().padStart(2, '0') + ":" + minutes.toString().padStart(2, '0')
     }
 
+    private fun migratedSingleRule(context: Context): Rule {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val blockedApps = decodeBlockedApps(prefs.getString(KEY_BLOCKED_APPS, null))
+            .ifEmpty {
+                listOf(
+                    RuleApp(
+                        packageName = prefs.getString(KEY_BLOCKED_PACKAGE, null) ?: AppPackages.DEFAULT_BLOCKED_APP,
+                        name = prefs.getString(KEY_BLOCKED_NAME, null) ?: "Instagram"
+                    )
+                )
+            }
+
+        return Rule(
+            id = MIGRATED_RULE_ID,
+            productivePackage = prefs.getString(KEY_PRODUCTIVE_PACKAGE, null) ?: AppPackages.DEFAULT_PRODUCTIVE_APP,
+            productiveName = prefs.getString(KEY_PRODUCTIVE_NAME, null) ?: "Duolingo",
+            blockedApps = blockedApps,
+            rewardSecondsPerProductiveSecond = prefs.getInt(KEY_REWARD_SECONDS_PER_PRODUCTIVE_SECOND, 1)
+                .takeIf { it in allowedRatios } ?: 1,
+            activeDays = decodeActiveDays(prefs.getString(KEY_ACTIVE_DAYS, null)),
+            startMinute = prefs.getInt(KEY_START_MINUTE, 0).coerceIn(0, 1_439),
+            endMinute = prefs.getInt(KEY_END_MINUTE, 1_440).coerceIn(1, 1_440),
+            enabled = true
+        )
+    }
+
     private fun encodeBlockedApps(blockedApps: List<RuleApp>): String {
         return blockedApps.joinToString(APP_RECORD_SEPARATOR) { app ->
             app.packageName + APP_FIELD_SEPARATOR + app.name.replace(APP_RECORD_SEPARATOR, " ")
@@ -195,6 +246,59 @@ object EarnItRuleStore {
             .ifEmpty { allDays.toSet() }
     }
 
+    private fun encodeRules(rules: List<Rule>): String {
+        return rules.joinToString(RULE_RECORD_SEPARATOR) { rule ->
+            listOf(
+                rule.id,
+                rule.productivePackage,
+                rule.productiveName,
+                encodeBlockedApps(rule.blockedApps),
+                rule.rewardSecondsPerProductiveSecond.toString(),
+                encodeActiveDays(rule.activeDays),
+                rule.startMinute.toString(),
+                rule.endMinute.toString(),
+                rule.enabled.toString()
+            ).joinToString(RULE_FIELD_SEPARATOR) { encodeField(it) }
+        }
+    }
+
+    private fun decodeRules(rawValue: String?): List<Rule> {
+        if (rawValue.isNullOrBlank()) return emptyList()
+        return rawValue.split(RULE_RECORD_SEPARATOR)
+            .mapNotNull { record ->
+                val fields = record.split(RULE_FIELD_SEPARATOR).map { decodeField(it) }
+                val id = fields.getOrNull(0)?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                val productivePackage = fields.getOrNull(1)?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                val productiveName = fields.getOrNull(2)?.takeIf { it.isNotBlank() } ?: productivePackage
+                val blockedApps = decodeBlockedApps(fields.getOrNull(3)).ifEmpty { return@mapNotNull null }
+                val ratio = fields.getOrNull(4)?.toIntOrNull()?.takeIf { it in allowedRatios } ?: 1
+                val activeDays = decodeActiveDays(fields.getOrNull(5))
+                val startMinute = fields.getOrNull(6)?.toIntOrNull()?.coerceIn(0, 1_439) ?: 0
+                val endMinute = fields.getOrNull(7)?.toIntOrNull()?.coerceIn(1, 1_440) ?: 1_440
+                val enabled = fields.getOrNull(8)?.toBooleanStrictOrNull() ?: true
+                Rule(
+                    id = id,
+                    productivePackage = productivePackage,
+                    productiveName = productiveName,
+                    blockedApps = blockedApps,
+                    rewardSecondsPerProductiveSecond = ratio,
+                    activeDays = activeDays,
+                    startMinute = startMinute,
+                    endMinute = endMinute,
+                    enabled = enabled
+                )
+            }
+            .distinctBy { it.id }
+    }
+
+    private fun encodeField(value: String): String {
+        return URLEncoder.encode(value, "UTF-8")
+    }
+
+    private fun decodeField(value: String): String {
+        return URLDecoder.decode(value, "UTF-8")
+    }
+
     private fun Calendar.toEarnItDay(): Int {
         return when (get(Calendar.DAY_OF_WEEK)) {
             Calendar.MONDAY -> 1
@@ -205,5 +309,9 @@ object EarnItRuleStore {
             Calendar.SATURDAY -> 6
             else -> 7
         }
+    }
+
+    private fun newRuleId(): String {
+        return "rule_" + UUID.randomUUID().toString()
     }
 }
