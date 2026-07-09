@@ -65,6 +65,7 @@ class MainActivity : ComponentActivity() {
     private var accessibilityServiceEnabled by mutableStateOf(false)
     private var manageRulesOpen by mutableStateOf(false)
     private var selectedRuleDetailId by mutableStateOf<String?>(null)
+    private var builderStep by mutableStateOf(RuleBuilderStep.Earn)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -116,6 +117,8 @@ class MainActivity : ComponentActivity() {
                         onToggleActiveDay = ::toggleActiveDay,
                         onEditStartTime = ::showStartTimePicker,
                         onEditEndTime = ::showEndTimePicker,
+                        builderStep = builderStep,
+                        onBuilderStepChange = { builderStep = it },
                         onSaveRule = ::saveRule,
                         modifier = Modifier.padding(innerPadding)
                     )
@@ -180,12 +183,14 @@ class MainActivity : ComponentActivity() {
 
     private fun startAddingRule() {
         selectedRuleDetailId = null
+        builderStep = RuleBuilderStep.Earn
         manageRulesOpen = false
         startEditingRule(EarnItRuleStore.newRuleFromDefault(this))
     }
 
     private fun startEditingRule(rule: EarnItRuleStore.Rule) {
         selectedRuleDetailId = null
+        builderStep = RuleBuilderStep.Earn
         manageRulesOpen = false
         editingRuleTemplate = rule
         selectedProductivePackage = rule.productivePackage
@@ -201,6 +206,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun cancelEditingRule() {
+        builderStep = RuleBuilderStep.Earn
         editingRuleTemplate = null
         productivePickerOpen = false
         blockedPickerOpen = false
@@ -292,6 +298,7 @@ class MainActivity : ComponentActivity() {
         )
         EarnItRuleStore.saveRule(this, rule)
         editingRuleTemplate = null
+        builderStep = RuleBuilderStep.Earn
         productivePickerOpen = false
         blockedPickerOpen = false
         refreshDashboardState()
@@ -388,6 +395,8 @@ fun Dashboard(
     onToggleActiveDay: (Int) -> Unit,
     onEditStartTime: () -> Unit,
     onEditEndTime: () -> Unit,
+    builderStep: RuleBuilderStep,
+    onBuilderStepChange: (RuleBuilderStep) -> Unit,
     onSaveRule: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -477,6 +486,8 @@ fun Dashboard(
                 onToggleActiveDay = onToggleActiveDay,
                 onEditStartTime = onEditStartTime,
                 onEditEndTime = onEditEndTime,
+                builderStep = builderStep,
+                onBuilderStepChange = onBuilderStepChange,
                 onSaveRule = onSaveRule,
                 onCancel = onCancelEditingRule
             )
@@ -551,86 +562,46 @@ private fun RuleEditor(
     onToggleActiveDay: (Int) -> Unit,
     onEditStartTime: () -> Unit,
     onEditEndTime: () -> Unit,
+    builderStep: RuleBuilderStep,
+    onBuilderStepChange: (RuleBuilderStep) -> Unit,
     onSaveRule: () -> Unit,
     onCancel: () -> Unit
 ) {
-    Text(text = "EarnIt Rule", style = MaterialTheme.typography.titleMedium)
-    EditorSection(
-        title = "Productive app",
-        helperText = "Time in this app earns reward access."
-    ) {
-        ProductiveAppSection(
-            rule = rule,
-            apps = apps,
-            selectedProductivePackage = selectedProductivePackage,
-            pickerOpen = productivePickerOpen,
-            search = productiveSearch,
-            onOpenPicker = onOpenProductivePicker,
-            onClosePicker = onCloseProductivePicker,
-            onSearchChange = onProductiveSearchChange,
-            onSelectApp = onSelectProductiveApp
-        )
-    }
-    EditorSection(
-        title = "Blocked apps",
-        helperText = "Reward time is shared across these selected apps."
-    ) {
-        BlockedAppsSection(
-            rule = rule,
-            apps = apps,
-            selectedBlockedPackages = selectedBlockedPackages,
-            pickerOpen = blockedPickerOpen,
-            search = blockedSearch,
-            onOpenPicker = onOpenBlockedPicker,
-            onClosePicker = onCloseBlockedPicker,
-            onSearchChange = onBlockedSearchChange,
-            onToggleApp = onToggleBlockedApp
-        )
-    }
-    EditorSection(
-        title = "Ratio",
-        helperText = "Choose how much reward time productive time earns."
-    ) {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            EarnItRuleStore.allowedRatios.forEach { ratio ->
-                Button(onClick = { onSelectRatio(ratio) }) {
-                    Text(text = if (selectedRatio == ratio) "Selected 1:$ratio" else "1:$ratio")
-                }
-            }
-        }
-    }
-    EditorSection(
-        title = "Active days",
-        helperText = "The rule only earns and blocks on selected days."
-    ) {
-        DayButtons(selectedActiveDays = selectedActiveDays, onToggleActiveDay = onToggleActiveDay)
-    }
-    EditorSection(
-        title = "Active time window",
-        helperText = "The rule only applies between these local times."
-    ) {
-        Button(onClick = onEditStartTime, modifier = Modifier.fillMaxWidth()) {
-            Text(text = "Start: ${EarnItRuleStore.formatMinute(selectedStartMinute)}")
-        }
-        Button(onClick = onEditEndTime, modifier = Modifier.fillMaxWidth()) {
-            Text(text = "End: ${EarnItRuleStore.formatMinute(selectedEndMinute)}")
-        }
-    }
-    EditorSection(
-        title = "Actions",
-        helperText = "Save this rule or return without saving changes."
-    ) {
-        Button(onClick = onSaveRule, modifier = Modifier.fillMaxWidth()) {
-            Text(text = "Save Rule")
-        }
-        Button(onClick = onCancel, modifier = Modifier.fillMaxWidth()) {
-            Text(text = "Cancel")
-        }
-    }
+    EarnItRuleBuilder(
+        rule = rule,
+        apps = apps,
+        selectedProductivePackage = selectedProductivePackage,
+        selectedBlockedPackages = selectedBlockedPackages,
+        selectedRatio = selectedRatio,
+        selectedActiveDays = selectedActiveDays,
+        selectedStartMinute = selectedStartMinute,
+        selectedEndMinute = selectedEndMinute,
+        productivePickerOpen = productivePickerOpen,
+        blockedPickerOpen = blockedPickerOpen,
+        productiveSearch = productiveSearch,
+        blockedSearch = blockedSearch,
+        builderStep = builderStep,
+        onBuilderStepChange = onBuilderStepChange,
+        onOpenProductivePicker = onOpenProductivePicker,
+        onCloseProductivePicker = onCloseProductivePicker,
+        onOpenBlockedPicker = onOpenBlockedPicker,
+        onCloseBlockedPicker = onCloseBlockedPicker,
+        onProductiveSearchChange = onProductiveSearchChange,
+        onBlockedSearchChange = onBlockedSearchChange,
+        onSelectProductiveApp = onSelectProductiveApp,
+        onToggleBlockedApp = onToggleBlockedApp,
+        onSelectRatio = onSelectRatio,
+        onToggleActiveDay = onToggleActiveDay,
+        onEditStartTime = onEditStartTime,
+        onEditEndTime = onEditEndTime,
+        onSaveRule = onSaveRule,
+        onCancel = onCancel
+    )
 }
 
+
 @Composable
-private fun EditorSection(
+fun EditorSection(
     title: String,
     helperText: String,
     content: @Composable () -> Unit
@@ -653,7 +624,7 @@ private fun EditorSection(
     }
 }
 @Composable
-private fun ProductiveAppSection(
+fun ProductiveAppSection(
     rule: EarnItRuleStore.Rule,
     apps: List<EarnItRuleStore.LaunchableApp>,
     selectedProductivePackage: String,
@@ -683,7 +654,7 @@ private fun ProductiveAppSection(
     }
 }
 @Composable
-private fun BlockedAppsSection(
+fun BlockedAppsSection(
     rule: EarnItRuleStore.Rule,
     apps: List<EarnItRuleStore.LaunchableApp>,
     selectedBlockedPackages: Set<String>,
@@ -752,7 +723,7 @@ private fun AppPickerList(
 }
 
 @Composable
-private fun DayButtons(selectedActiveDays: Set<Int>, onToggleActiveDay: (Int) -> Unit) {
+fun DayButtons(selectedActiveDays: Set<Int>, onToggleActiveDay: (Int) -> Unit) {
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         EarnItRuleStore.allDays.take(4).forEach { day ->
             DayButton(day = day, selectedActiveDays = selectedActiveDays, onToggleActiveDay = onToggleActiveDay)
@@ -843,6 +814,8 @@ fun DashboardPreview() {
             onToggleActiveDay = {},
             onEditStartTime = {},
             onEditEndTime = {},
+            builderStep = RuleBuilderStep.Earn,
+            onBuilderStepChange = {},
             onSaveRule = {}
         )
     }
