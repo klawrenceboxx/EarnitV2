@@ -29,7 +29,7 @@ class EarnItAccessibilityService : AccessibilityService() {
                 }
                 if (RewardLedger.snapshot(this@EarnItAccessibilityService, rule).remainingRewardSeconds <= 0L) {
                     clearActiveBlockedApp()
-                    launchBlockedActivity(rule, blockedAppName, ignoreDebounce = true)
+                    launchBlockedActivity(rule, blockedAppName, activeBlockedPackage, ignoreDebounce = true)
                 } else {
                     handler.postDelayed(this, CONSUMPTION_TICK_MILLIS)
                 }
@@ -69,7 +69,7 @@ class EarnItAccessibilityService : AccessibilityService() {
         stopActiveBlockedUsage()
         val blockingRule = matchingRules.first()
         val blockedApp = blockingRule.blockedAppForPackage(foregroundPackage) ?: return
-        launchBlockedActivity(blockingRule, blockedApp.name)
+        launchBlockedActivity(blockingRule, blockedApp.name, blockedApp.packageName)
     }
 
     override fun onInterrupt() = Unit
@@ -138,6 +138,7 @@ class EarnItAccessibilityService : AccessibilityService() {
     private fun launchBlockedActivity(
         rule: EarnItRuleStore.Rule,
         blockedAppName: String,
+        blockedAppPackage: String?,
         ignoreDebounce: Boolean = false
     ) {
         if (!ignoreDebounce && !canLaunchBlockedActivity()) return
@@ -146,6 +147,9 @@ class EarnItAccessibilityService : AccessibilityService() {
         val intent = Intent(this, BlockedActivity::class.java).apply {
             putExtra(BlockedActivity.EXTRA_RULE_ID, rule.id)
             putExtra(BlockedActivity.EXTRA_BLOCKED_APP_NAME, blockedAppName)
+            if (blockedAppPackage != null) {
+                putExtra(BlockedActivity.EXTRA_BLOCKED_PACKAGE, blockedAppPackage)
+            }
             putExtra(BlockedActivity.EXTRA_PRODUCTIVE_APP_NAME, rule.productiveName)
             putExtra(BlockedActivity.EXTRA_PRODUCTIVE_PACKAGE, rule.productivePackage)
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)

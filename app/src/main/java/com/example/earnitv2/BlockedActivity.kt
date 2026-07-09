@@ -13,7 +13,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -35,6 +34,7 @@ import com.example.earnitv2.ui.theme.EarnitV2Theme
 class BlockedActivity : ComponentActivity() {
     private var ruleId by mutableStateOf<String?>(null)
     private var blockedAppName by mutableStateOf("Instagram")
+    private var blockedPackage by mutableStateOf<String?>(null)
     private var productiveAppName by mutableStateOf("Duolingo")
     private var productivePackage by mutableStateOf(AppPackages.DEFAULT_PRODUCTIVE_APP)
     private var exchangeLabel by mutableStateOf("Every 10 min earns 10 min Reward Time")
@@ -48,7 +48,9 @@ class BlockedActivity : ComponentActivity() {
             EarnitV2Theme {
                 BlockedScreen(
                     blockedAppName = blockedAppName,
+                    blockedPackage = blockedPackage,
                     productiveAppName = productiveAppName,
+                    productivePackage = productivePackage,
                     exchangeLabel = exchangeLabel,
                     fallbackMessage = fallbackMessage,
                     onOpenProductiveApp = ::openProductiveApp,
@@ -75,6 +77,8 @@ class BlockedActivity : ComponentActivity() {
         blockedAppName = intent?.getStringExtra(EXTRA_BLOCKED_APP_NAME)
             ?: rule.blockedApps.firstOrNull()?.name
             ?: "Reward App"
+        blockedPackage = intent?.getStringExtra(EXTRA_BLOCKED_PACKAGE)
+            ?: rule.blockedApps.firstOrNull { it.name == blockedAppName }?.packageName
         productiveAppName = intent?.getStringExtra(EXTRA_PRODUCTIVE_APP_NAME) ?: rule.productiveName
         productivePackage = intent?.getStringExtra(EXTRA_PRODUCTIVE_PACKAGE) ?: rule.productivePackage
         exchangeLabel = EarnItUiFormatters.exchangeSummary(rule.rewardSecondsPerProductiveSecond)
@@ -104,6 +108,7 @@ class BlockedActivity : ComponentActivity() {
     companion object {
         const val EXTRA_RULE_ID = "com.example.earnitv2.extra.RULE_ID"
         const val EXTRA_BLOCKED_APP_NAME = "com.example.earnitv2.extra.BLOCKED_APP_NAME"
+        const val EXTRA_BLOCKED_PACKAGE = "com.example.earnitv2.extra.BLOCKED_PACKAGE"
         const val EXTRA_PRODUCTIVE_APP_NAME = "com.example.earnitv2.extra.PRODUCTIVE_APP_NAME"
         const val EXTRA_PRODUCTIVE_PACKAGE = "com.example.earnitv2.extra.PRODUCTIVE_PACKAGE"
     }
@@ -112,7 +117,9 @@ class BlockedActivity : ComponentActivity() {
 @Composable
 fun BlockedScreen(
     blockedAppName: String,
+    blockedPackage: String?,
     productiveAppName: String,
+    productivePackage: String,
     exchangeLabel: String,
     fallbackMessage: String?,
     onOpenProductiveApp: () -> Unit,
@@ -142,7 +149,7 @@ fun BlockedScreen(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                AppInitialTile(appName = blockedAppName, large = true)
+                EarnItAppIcon(packageName = blockedPackage, appName = blockedAppName, size = 64.dp)
                 Text(text = blockedAppName, style = MaterialTheme.typography.titleLarge)
                 Text(
                     text = "$blockedAppName uses Reward Time from this Rule.",
@@ -158,6 +165,7 @@ fun BlockedScreen(
                 Text(text = "Earn more with", style = MaterialTheme.typography.bodyMedium)
                 EarnAppCard(
                     productiveAppName = productiveAppName,
+                    productivePackage = productivePackage,
                     exchangeLabel = exchangeLabel
                 )
                 Button(
@@ -188,6 +196,7 @@ fun BlockedScreen(
 @Composable
 private fun EarnAppCard(
     productiveAppName: String,
+    productivePackage: String,
     exchangeLabel: String,
     modifier: Modifier = Modifier
 ) {
@@ -201,29 +210,11 @@ private fun EarnAppCard(
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            AppInitialTile(appName = productiveAppName, large = false)
+            EarnItAppIcon(packageName = productivePackage, appName = productiveAppName, size = 48.dp)
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(text = productiveAppName, style = MaterialTheme.typography.titleMedium)
                 Text(text = exchangeLabel, style = MaterialTheme.typography.bodySmall)
             }
-        }
-    }
-}
-
-@Composable
-private fun AppInitialTile(appName: String, large: Boolean) {
-    val tileSize = if (large) 64.dp else 48.dp
-    val initial = appName.trim().firstOrNull()?.uppercaseChar()?.toString() ?: "?"
-    Card(
-        modifier = Modifier.size(tileSize),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
-    ) {
-        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text(
-                text = initial,
-                style = if (large) MaterialTheme.typography.headlineSmall else MaterialTheme.typography.titleMedium
-            )
         }
     }
 }
@@ -234,7 +225,9 @@ fun BlockedScreenPreview() {
     EarnitV2Theme {
         BlockedScreen(
             blockedAppName = "Instagram",
+            blockedPackage = "com.instagram.android",
             productiveAppName = "Duolingo",
+            productivePackage = "com.duolingo",
             exchangeLabel = "Every 10 min earns 20 min Reward Time",
             fallbackMessage = null,
             onOpenProductiveApp = {},

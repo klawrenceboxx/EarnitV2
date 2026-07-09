@@ -21,6 +21,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 
@@ -249,8 +250,10 @@ private fun EarnStep(
     onProductiveSearchChange: (String) -> Unit,
     onSelectProductiveApp: (String) -> Unit
 ) {
-    val selectedAppName = apps.firstOrNull { it.packageName == selectedProductivePackage }?.name
-        ?: if (rule.productivePackage == selectedProductivePackage) rule.productiveName else null
+    val selectedApp = apps.firstOrNull { it.packageName == selectedProductivePackage }
+        ?: EarnItRuleStore.LaunchableApp(rule.productivePackage, rule.productiveName)
+            .takeIf { it.packageName == selectedProductivePackage }
+    val selectedAppName = selectedApp?.name
     val visibleApps = apps.builderFilteredBy(productiveSearch)
     EditorSection(
         title = "How will you earn Reward Time?",
@@ -261,7 +264,8 @@ private fun EarnStep(
         } else {
             AppSelectionSummary(
                 label = "Selected Earn App",
-                text = selectedAppName
+                text = selectedAppName,
+                app = selectedApp?.let { EarnItAppUiState(packageName = it.packageName, name = it.name) }
             )
         }
         BuilderAppSearchField(
@@ -296,7 +300,10 @@ private fun RewardStep(
 ) {
     val namesByPackage = rule.blockedApps.associate { it.packageName to it.name } +
         apps.associate { it.packageName to it.name }
-    val selectedNames = selectedBlockedPackages.mapNotNull { namesByPackage[it] }
+    val selectedApps = selectedBlockedPackages.mapNotNull { packageName ->
+        namesByPackage[packageName]?.let { EarnItAppUiState(packageName = packageName, name = it) }
+    }
+    val selectedNames = selectedApps.map { it.name }
     val visibleApps = apps.builderFilteredBy(blockedSearch)
     EditorSection(
         title = "Where can Reward Time be spent?",
@@ -309,7 +316,8 @@ private fun RewardStep(
             } else {
                 "${selectedNames.size} selected: ${selectedNames.take(3).joinToString(", ")}" +
                     if (selectedNames.size > 3) " +${selectedNames.size - 3} more" else ""
-            }
+            },
+            apps = selectedApps
         )
         BuilderAppSearchField(
             value = blockedSearch,
@@ -332,7 +340,12 @@ private fun RewardStep(
 }
 
 @Composable
-private fun AppSelectionSummary(label: String, text: String) {
+private fun AppSelectionSummary(
+    label: String,
+    text: String,
+    app: EarnItAppUiState? = null,
+    apps: List<EarnItAppUiState> = emptyList()
+) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
@@ -340,14 +353,30 @@ private fun AppSelectionSummary(label: String, text: String) {
     ) {
         Column(
             modifier = Modifier.padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp)
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Text(text = label, style = MaterialTheme.typography.labelSmall)
-            Text(text = text, style = MaterialTheme.typography.bodyMedium)
+            when {
+                app != null -> Row(
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    EarnItAppIcon(packageName = app.packageName, appName = app.name, size = 32.dp)
+                    Text(text = text, style = MaterialTheme.typography.bodyMedium)
+                }
+                apps.isNotEmpty() -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                        apps.take(5).forEach { selectedApp ->
+                            EarnItAppIcon(packageName = selectedApp.packageName, appName = selectedApp.name, size = 28.dp)
+                        }
+                    }
+                    Text(text = text, style = MaterialTheme.typography.bodyMedium)
+                }
+                else -> Text(text = text, style = MaterialTheme.typography.bodyMedium)
+            }
         }
     }
 }
-
 @Composable
 private fun BuilderAppSearchField(
     value: String,
@@ -405,9 +434,13 @@ private fun BuilderAppRow(
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(text = app.name)
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                EarnItAppIcon(packageName = app.packageName, appName = app.name, size = 32.dp)
+                Text(text = app.name)
+            }
             Text(
                 text = when {
                     selected && multiSelect -> "Selected"
@@ -420,7 +453,6 @@ private fun BuilderAppRow(
         }
     }
 }
-
 private fun List<EarnItRuleStore.LaunchableApp>.builderFilteredBy(query: String): List<EarnItRuleStore.LaunchableApp> {
     val trimmedQuery = query.trim()
     if (trimmedQuery.isEmpty()) return this
@@ -658,9 +690,10 @@ private fun ReviewStep(draft: RuleDraftUiState) {
                 modifier = Modifier.padding(14.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                ReviewAgreementSection(
+                ReviewAppSection(
                     label = "WHEN I USE",
-                    value = draft.selectedEarnApp?.name ?: "Choose an Earn App before saving."
+                    app = draft.selectedEarnApp,
+                    missingValue = "Choose an Earn App before saving."
                 )
                 ReviewAgreementSection(
                     label = "I EARN",
@@ -670,13 +703,10 @@ private fun ReviewStep(draft: RuleDraftUiState) {
                         "Choose a Reward Time exchange before saving."
                     }
                 )
-                ReviewAgreementSection(
+                ReviewAppsSection(
                     label = "FOR",
-                    value = if (draft.selectedRewardApps.isEmpty()) {
-                        "Choose at least one Reward App before saving."
-                    } else {
-                        draft.selectedRewardApps.joinToString(", ") { it.name }
-                    }
+                    apps = draft.selectedRewardApps,
+                    missingValue = "Choose at least one Reward App before saving."
                 )
                 ReviewAgreementSection(
                     label = "ACTIVE",
@@ -717,6 +747,39 @@ private fun ReviewAgreementSection(label: String, value: String) {
     }
 }
 
+@Composable
+private fun ReviewAppSection(label: String, app: EarnItAppUiState?, missingValue: String) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(text = label, style = MaterialTheme.typography.labelSmall)
+        if (app == null) {
+            Text(text = missingValue, style = MaterialTheme.typography.bodyLarge)
+        } else {
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                EarnItAppIcon(packageName = app.packageName, appName = app.name, size = 36.dp)
+                Text(text = app.name, style = MaterialTheme.typography.bodyLarge)
+            }
+        }
+    }
+}
+
+@Composable
+private fun ReviewAppsSection(label: String, apps: List<EarnItAppUiState>, missingValue: String) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(text = label, style = MaterialTheme.typography.labelSmall)
+        if (apps.isEmpty()) {
+            Text(text = missingValue, style = MaterialTheme.typography.bodyLarge)
+        } else {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                apps.forEach { app ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                        EarnItAppIcon(packageName = app.packageName, appName = app.name, size = 32.dp)
+                        Text(text = app.name, style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+            }
+        }
+    }
+}
 private fun reviewMissingItems(draft: RuleDraftUiState): List<String> {
     return buildList {
         if (draft.selectedEarnApp == null) add("Earn App")

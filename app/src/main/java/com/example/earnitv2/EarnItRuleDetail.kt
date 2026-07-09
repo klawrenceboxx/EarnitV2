@@ -142,11 +142,19 @@ private fun RuleDetailLiveState(homeRule: HomeRuleUiState) {
     ) {
         Column(
             modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             Text(text = homeRule.primaryText, style = MaterialTheme.typography.headlineMedium)
             if (homeRule.secondaryText != null) {
                 Text(text = homeRule.secondaryText, style = MaterialTheme.typography.bodyMedium)
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                homeRule.card.rewardApps.take(5).forEach { app ->
+                    EarnItAppIcon(packageName = app.packageName, appName = app.name, size = 36.dp)
+                }
+                if (homeRule.card.rewardApps.size > 5) {
+                    DetailCountTile(count = homeRule.card.rewardApps.size - 5)
+                }
             }
             Text(
                 text = homeRule.statusText,
@@ -156,13 +164,12 @@ private fun RuleDetailLiveState(homeRule: HomeRuleUiState) {
         }
     }
 }
-
 @Composable
 private fun RuleDetailRewardApps(apps: List<EarnItAppUiState>) {
     RuleDetailSection(title = "Reward Apps this applies to") {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             apps.take(5).forEach { app ->
-                DetailAppInitialTile(name = app.name, size = 32)
+                EarnItAppIcon(packageName = app.packageName, appName = app.name, size = 32.dp)
             }
             if (apps.size > 5) {
                 DetailCountTile(count = apps.size - 5)
@@ -191,7 +198,7 @@ private fun RuleDetailEarnAction(
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            DetailAppInitialTile(name = earnAppName, size = 28)
+            EarnItAppIcon(packageName = earnAppPackage, appName = earnAppName, size = 28.dp)
             Text(text = earnAppName, style = MaterialTheme.typography.bodyLarge)
             Text(text = "Open", style = MaterialTheme.typography.bodyMedium)
         }

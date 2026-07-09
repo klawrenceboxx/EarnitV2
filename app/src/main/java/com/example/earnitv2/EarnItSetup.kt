@@ -1,12 +1,15 @@
 package com.example.earnitv2
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -17,6 +20,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -48,12 +52,14 @@ fun EarnItFirstLaunch(
     ) {
         Text(text = "EarnIt", style = MaterialTheme.typography.headlineMedium)
         Text(text = "Setup", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        SetupProgress(currentStep = currentStep)
 
         when (currentStep) {
             FirstLaunchStep.ValueIntroduction -> SetupIntroStep(
                 title = "Do the work. Earn the time.",
                 body = "Choose an Earn App. Spend time there. EarnIt turns that time into Reward Time for the apps you choose.",
-                primaryAction = "Continue",
+                primaryAction = "See how it works",
+                showDiagram = true,
                 onPrimaryAction = { onStepChange(FirstLaunchStep.TimeKey) }
             )
             FirstLaunchStep.TimeKey -> SetupIntroStep(
@@ -78,11 +84,59 @@ fun EarnItFirstLaunch(
     }
 }
 
+
+@Composable
+private fun SetupProgress(currentStep: FirstLaunchStep) {
+    val steps = FirstLaunchStep.entries
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.Center
+    ) {
+        steps.forEach { step ->
+            Box(
+                modifier = Modifier
+                    .padding(horizontal = 3.dp)
+                    .size(width = 32.dp, height = 4.dp)
+                    .background(
+                        if (steps.indexOf(step) <= steps.indexOf(currentStep)) {
+                            MaterialTheme.colorScheme.onSurface
+                        } else {
+                            MaterialTheme.colorScheme.surfaceVariant
+                        }
+                    )
+            )
+        }
+    }
+}
+
+@Composable
+private fun SetupValueDiagram() {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        EarnItAppIcon(packageName = AppPackages.DEFAULT_PRODUCTIVE_APP, appName = "Duolingo", size = 56.dp)
+        Text(text = "Duolingo", style = MaterialTheme.typography.bodySmall)
+        Text(text = "earns", style = MaterialTheme.typography.labelSmall)
+        Text(
+            text = "Reward Time",
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier
+                .background(MaterialTheme.colorScheme.surfaceVariant)
+                .padding(horizontal = 12.dp, vertical = 8.dp)
+        )
+        Text(text = "unlocks", style = MaterialTheme.typography.labelSmall)
+        EarnItAppIcon(packageName = AppPackages.DEFAULT_BLOCKED_APP, appName = "Instagram", size = 56.dp)
+        Text(text = "Instagram", style = MaterialTheme.typography.bodySmall)
+    }
+}
 @Composable
 private fun SetupIntroStep(
     title: String,
     body: String,
     primaryAction: String,
+    showDiagram: Boolean = false,
     onPrimaryAction: () -> Unit
 ) {
     Card(
@@ -96,6 +150,9 @@ private fun SetupIntroStep(
         ) {
             Text(text = title, style = MaterialTheme.typography.headlineSmall)
             Text(text = body, style = MaterialTheme.typography.bodyLarge)
+            if (showDiagram) {
+                SetupValueDiagram()
+            }
             Button(onClick = onPrimaryAction, modifier = Modifier.fillMaxWidth()) {
                 Text(text = primaryAction)
             }

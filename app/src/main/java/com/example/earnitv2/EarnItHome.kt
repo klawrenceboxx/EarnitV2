@@ -261,7 +261,7 @@ private fun RewardAppsRow(apps: List<EarnItAppUiState>) {
         Text(text = "For", style = MaterialTheme.typography.labelSmall)
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
             apps.take(5).forEach { app ->
-                AppInitialTile(name = app.name, size = 28)
+                EarnItAppIcon(packageName = app.packageName, appName = app.name, size = 28.dp)
             }
             if (apps.size > 5) {
                 Box(
@@ -301,7 +301,7 @@ private fun EarnAppRow(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            AppInitialTile(name = appName, size = 24)
+            EarnItAppIcon(packageName = packageName, appName = appName, size = 24.dp)
             Text(text = appName, style = MaterialTheme.typography.bodyMedium)
             if (contextText != null) {
                 Text(
