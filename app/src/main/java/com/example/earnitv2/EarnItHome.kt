@@ -46,6 +46,7 @@ fun EarnItHome(
     onOpenEarnApp: (String) -> Unit,
     onOpenUsageAccessSettings: () -> Unit,
     onOpenAccessibilitySettings: () -> Unit,
+    onOpenSettings: () -> Unit,
     onToggleManageRules: () -> Unit,
     onOpenRuleDetail: (String) -> Unit,
     onEditRule: (EarnItRuleStore.Rule) -> Unit,
@@ -60,7 +61,7 @@ fun EarnItHome(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        HomeTopBar()
+        HomeTopBar(onOpenSettings = onOpenSettings)
 
         if (permissionState.needsAttention) {
             HomeAttentionBanner(
@@ -144,14 +145,19 @@ fun homeRuleUiState(
 }
 
 @Composable
-private fun HomeTopBar() {
+private fun HomeTopBar(onOpenSettings: () -> Unit) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(text = "EarnIt", style = MaterialTheme.typography.headlineMedium)
-        Text(text = "Home", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Column {
+            Text(text = "EarnIt", style = MaterialTheme.typography.headlineMedium)
+            Text(text = "Home", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        TextButton(onClick = onOpenSettings) {
+            Text(text = "Settings")
+        }
     }
 }
 

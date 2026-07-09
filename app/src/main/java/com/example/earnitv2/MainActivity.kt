@@ -65,65 +65,87 @@ class MainActivity : ComponentActivity() {
     private var accessibilityServiceEnabled by mutableStateOf(false)
     private var manageRulesOpen by mutableStateOf(false)
     private var selectedRuleDetailId by mutableStateOf<String?>(null)
+    private var settingsOpen by mutableStateOf(false)
+    private var firstLaunchComplete by mutableStateOf(false)
+    private var firstLaunchStep by mutableStateOf(FirstLaunchStep.ValueIntroduction)
     private var builderStep by mutableStateOf(RuleBuilderStep.Earn)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        firstLaunchComplete = isFirstLaunchComplete() || EarnItRuleStore.getRules(this).isNotEmpty()
         refreshDashboardState()
         setContent {
             EarnitV2Theme {
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    Dashboard(
-                        ruleStates = ruleStates,
-                        editingRule = editingRuleTemplate,
-                        apps = launchableApps,
-                        selectedProductivePackage = selectedProductivePackage,
-                        selectedBlockedPackages = selectedBlockedPackages,
-                        selectedRatio = selectedRatio,
-                        selectedActiveDays = selectedActiveDays,
-                        selectedStartMinute = selectedStartMinute,
-                        selectedEndMinute = selectedEndMinute,
-                        productivePickerOpen = productivePickerOpen,
-                        blockedPickerOpen = blockedPickerOpen,
-                        productiveSearch = productiveSearch,
-                        blockedSearch = blockedSearch,
-                        usageAccessGranted = usageAccessGranted,
-                        usageStatusMessage = usageStatusMessage,
-                        ruleStatusMessage = ruleStatusMessage,
-                        accessibilityServiceEnabled = accessibilityServiceEnabled,
-                        manageRulesOpen = manageRulesOpen,
-                        selectedRuleDetailId = selectedRuleDetailId,
-                        onOpenUsageAccessSettings = ::openUsageAccessSettings,
-                        onOpenAccessibilitySettings = ::openAccessibilitySettings,
-                        onOpenEarnApp = ::openEarnApp,
-                        onAddRule = ::startAddingRule,
-                        onEditRule = ::startEditingRule,
-                        onToggleRuleEnabled = ::toggleRuleEnabled,
-                        onDeleteRule = ::deleteRule,
-                        onToggleManageRules = { manageRulesOpen = !manageRulesOpen },
-                        onOpenRuleDetail = { selectedRuleDetailId = it },
-                        onBackFromRuleDetail = { selectedRuleDetailId = null },
-                        onCancelEditingRule = ::cancelEditingRule,
-                        onOpenProductivePicker = { productivePickerOpen = true },
-                        onCloseProductivePicker = { productivePickerOpen = false },
-                        onOpenBlockedPicker = { blockedPickerOpen = true },
-                        onCloseBlockedPicker = { blockedPickerOpen = false },
-                        onProductiveSearchChange = { productiveSearch = it },
-                        onBlockedSearchChange = { blockedSearch = it },
-                        onSelectProductiveApp = ::selectProductiveApp,
-                        onToggleBlockedApp = ::toggleBlockedApp,
-                        onSelectRatio = { selectedRatio = it },
-                        onToggleActiveDay = ::toggleActiveDay,
-                        onSelectActiveDays = { selectedActiveDays = it },
-                        onSelectAllDay = { selectedStartMinute = 0; selectedEndMinute = 1_440 },
-                        onEditStartTime = ::showStartTimePicker,
-                        onEditEndTime = ::showEndTimePicker,
-                        builderStep = builderStep,
-                        onBuilderStepChange = { builderStep = it },
-                        onSaveRule = ::saveRule,
-                        modifier = Modifier.padding(innerPadding)
-                    )
+                    if (!firstLaunchComplete && editingRuleTemplate == null) {
+                        EarnItFirstLaunch(
+                            currentStep = firstLaunchStep,
+                            permissionState = EarnItUiStateAdapters.permissionSetup(
+                                usageAccessGranted = usageAccessGranted,
+                                appBlockingEnabled = accessibilityServiceEnabled
+                            ),
+                            onStepChange = { firstLaunchStep = it },
+                            onOpenUsageAccessSettings = ::openUsageAccessSettings,
+                            onOpenAccessibilitySettings = ::openAccessibilitySettings,
+                            onCreateFirstRule = ::completeFirstLaunchAndCreateRule,
+                            modifier = Modifier.padding(innerPadding)
+                        )
+                    } else {
+                        Dashboard(
+                            ruleStates = ruleStates,
+                            editingRule = editingRuleTemplate,
+                            apps = launchableApps,
+                            selectedProductivePackage = selectedProductivePackage,
+                            selectedBlockedPackages = selectedBlockedPackages,
+                            selectedRatio = selectedRatio,
+                            selectedActiveDays = selectedActiveDays,
+                            selectedStartMinute = selectedStartMinute,
+                            selectedEndMinute = selectedEndMinute,
+                            productivePickerOpen = productivePickerOpen,
+                            blockedPickerOpen = blockedPickerOpen,
+                            productiveSearch = productiveSearch,
+                            blockedSearch = blockedSearch,
+                            usageAccessGranted = usageAccessGranted,
+                            usageStatusMessage = usageStatusMessage,
+                            ruleStatusMessage = ruleStatusMessage,
+                            accessibilityServiceEnabled = accessibilityServiceEnabled,
+                            manageRulesOpen = manageRulesOpen,
+                            selectedRuleDetailId = selectedRuleDetailId,
+                            settingsOpen = settingsOpen,
+                            onOpenUsageAccessSettings = ::openUsageAccessSettings,
+                            onOpenAccessibilitySettings = ::openAccessibilitySettings,
+                            onOpenSettings = { settingsOpen = true },
+                            onCloseSettings = { settingsOpen = false },
+                            onOpenEarnApp = ::openEarnApp,
+                            onAddRule = ::startAddingRule,
+                            onEditRule = ::startEditingRule,
+                            onToggleRuleEnabled = ::toggleRuleEnabled,
+                            onDeleteRule = ::deleteRule,
+                            onToggleManageRules = { manageRulesOpen = !manageRulesOpen },
+                            onOpenRuleDetail = { selectedRuleDetailId = it },
+                            onBackFromRuleDetail = { selectedRuleDetailId = null },
+                            onCancelEditingRule = ::cancelEditingRule,
+                            onOpenProductivePicker = { productivePickerOpen = true },
+                            onCloseProductivePicker = { productivePickerOpen = false },
+                            onOpenBlockedPicker = { blockedPickerOpen = true },
+                            onCloseBlockedPicker = { blockedPickerOpen = false },
+                            onProductiveSearchChange = { productiveSearch = it },
+                            onBlockedSearchChange = { blockedSearch = it },
+                            onSelectProductiveApp = ::selectProductiveApp,
+                            onToggleBlockedApp = ::toggleBlockedApp,
+                            onSelectRatio = { selectedRatio = it },
+                            onToggleActiveDay = ::toggleActiveDay,
+                            onSelectActiveDays = { selectedActiveDays = it },
+                            onSelectAllDay = { selectedStartMinute = 0; selectedEndMinute = 1_440 },
+                            onEditStartTime = ::showStartTimePicker,
+                            onEditEndTime = ::showEndTimePicker,
+                            builderStep = builderStep,
+                            onBuilderStepChange = { builderStep = it },
+                            onSaveRule = ::saveRule,
+                            modifier = Modifier.padding(innerPadding)
+                        )
+                    }
                 }
             }
         }
@@ -184,6 +206,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun startAddingRule() {
+        settingsOpen = false
         selectedRuleDetailId = null
         builderStep = RuleBuilderStep.Earn
         manageRulesOpen = false
@@ -191,6 +214,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun startEditingRule(rule: EarnItRuleStore.Rule) {
+        settingsOpen = false
         selectedRuleDetailId = null
         builderStep = RuleBuilderStep.Earn
         manageRulesOpen = false
@@ -351,6 +375,29 @@ class MainActivity : ComponentActivity() {
         val launchIntent = packageManager.getLaunchIntentForPackage(packageName) ?: return
         startActivity(launchIntent)
     }
+
+    private fun completeFirstLaunchAndCreateRule() {
+        setFirstLaunchComplete()
+        startAddingRule()
+    }
+
+    private fun setFirstLaunchComplete() {
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            .edit()
+            .putBoolean(KEY_FIRST_LAUNCH_COMPLETE, true)
+            .apply()
+        firstLaunchComplete = true
+    }
+
+    private fun isFirstLaunchComplete(): Boolean {
+        return getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            .getBoolean(KEY_FIRST_LAUNCH_COMPLETE, false)
+    }
+
+    private companion object {
+        const val PREFS_NAME = "earnit_setup"
+        const val KEY_FIRST_LAUNCH_COMPLETE = "first_launch_complete"
+    }
 }
 
 @Composable
@@ -374,8 +421,11 @@ fun Dashboard(
     accessibilityServiceEnabled: Boolean,
     manageRulesOpen: Boolean,
     selectedRuleDetailId: String?,
+    settingsOpen: Boolean,
     onOpenUsageAccessSettings: () -> Unit,
     onOpenAccessibilitySettings: () -> Unit,
+    onOpenSettings: () -> Unit,
+    onCloseSettings: () -> Unit,
     onOpenEarnApp: (String) -> Unit,
     onAddRule: () -> Unit,
     onEditRule: (EarnItRuleStore.Rule) -> Unit,
@@ -420,7 +470,17 @@ fun Dashboard(
             homeRules.firstOrNull { it.rule.id == selectedRuleId }
         }
 
-        if (selectedHomeRule != null) {
+        if (settingsOpen) {
+            EarnItSettings(
+                permissionState = permissionState,
+                hasRules = homeRules.isNotEmpty(),
+                onBack = onCloseSettings,
+                onOpenUsageAccessSettings = onOpenUsageAccessSettings,
+                onOpenAccessibilitySettings = onOpenAccessibilitySettings,
+                onCreateFirstRule = onAddRule,
+                modifier = modifier
+            )
+        } else if (selectedHomeRule != null) {
             EarnItRuleDetail(
                 homeRule = selectedHomeRule,
                 detail = EarnItUiStateAdapters.ruleDetail(
@@ -449,6 +509,7 @@ fun Dashboard(
                 onOpenEarnApp = onOpenEarnApp,
                 onOpenUsageAccessSettings = onOpenUsageAccessSettings,
                 onOpenAccessibilitySettings = onOpenAccessibilitySettings,
+                onOpenSettings = onOpenSettings,
                 onToggleManageRules = onToggleManageRules,
                 onOpenRuleDetail = onOpenRuleDetail,
                 onEditRule = onEditRule,
@@ -801,8 +862,11 @@ fun DashboardPreview() {
             accessibilityServiceEnabled = true,
             manageRulesOpen = false,
             selectedRuleDetailId = null,
+            settingsOpen = false,
             onOpenUsageAccessSettings = {},
             onOpenAccessibilitySettings = {},
+            onOpenSettings = {},
+            onCloseSettings = {},
             onOpenEarnApp = {},
             onAddRule = {},
             onEditRule = {},
