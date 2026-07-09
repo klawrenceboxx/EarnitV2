@@ -52,6 +52,12 @@ class MainActivity : ComponentActivity() {
     private var selectedProductivePackage by mutableStateOf("")
     private var selectedProductivePackages by mutableStateOf(emptySet<String>())
     private var selectedBlockedPackages by mutableStateOf(emptySet<String>())
+    private var selectedRequirements by mutableStateOf(emptyList<EarnItRuleStore.RuleRequirement>())
+    private var requirementPickerOpen by mutableStateOf(false)
+    private var requirementSearch by mutableStateOf("")
+    private var selectedRequirementPackage by mutableStateOf<String?>(null)
+    private var selectedRequirementMinutes by mutableStateOf(10)
+    private var editingRequirementIndex by mutableStateOf<Int?>(null)
     private var selectedRatio by mutableStateOf(1)
     private var selectedActiveDays by mutableStateOf(EarnItRuleStore.allDays.toSet())
     private var selectedStartMinute by mutableStateOf(0)
@@ -102,6 +108,12 @@ class MainActivity : ComponentActivity() {
                             selectedProductivePackage = selectedProductivePackage,
                             selectedProductivePackages = selectedProductivePackages,
                             selectedBlockedPackages = selectedBlockedPackages,
+                            selectedRequirements = selectedRequirements,
+                            requirementPickerOpen = requirementPickerOpen,
+                            requirementSearch = requirementSearch,
+                            selectedRequirementPackage = selectedRequirementPackage,
+                            selectedRequirementMinutes = selectedRequirementMinutes,
+                            editingRequirementIndex = editingRequirementIndex,
                             selectedRatio = selectedRatio,
                             selectedActiveDays = selectedActiveDays,
                             selectedStartMinute = selectedStartMinute,
@@ -134,7 +146,7 @@ class MainActivity : ComponentActivity() {
                             onToggleManageRules = { manageRulesOpen = !manageRulesOpen },
                             onOpenRuleDetail = { selectedRuleDetailId = it },
                             onBackFromRuleDetail = { selectedRuleDetailId = null },
-                            onCancelEditingRule = ::cancelEditingRule,
+                            onCancelEditingRule = ::returnToRuleTypeSelection,
                             onOpenProductivePicker = { productivePickerOpen = true },
                             onCloseProductivePicker = { productivePickerOpen = false },
                             onOpenBlockedPicker = { blockedPickerOpen = true },
@@ -142,6 +154,14 @@ class MainActivity : ComponentActivity() {
                             onProductiveSearchChange = { productiveSearch = it },
                             onBlockedSearchChange = { blockedSearch = it },
                             onSelectProductiveApp = ::selectProductiveApp,
+                            onOpenRequirementPicker = ::openRequirementPicker,
+                            onCloseRequirementPicker = { requirementPickerOpen = false },
+                            onRequirementSearchChange = { requirementSearch = it },
+                            onSelectRequirementApp = ::selectRequirementApp,
+                            onSelectRequirementMinutes = { selectedRequirementMinutes = it },
+                            onSaveRequirement = ::saveRequirement,
+                            onEditRequirement = ::editRequirement,
+                            onDeleteRequirement = ::deleteRequirement,
                             onToggleBlockedApp = ::toggleBlockedApp,
                             onSelectRatio = { selectedRatio = it },
                             onToggleActiveDay = ::toggleActiveDay,
@@ -242,9 +262,24 @@ class MainActivity : ComponentActivity() {
         builderStep = if (rule.type == EarnItRuleStore.RuleType.ScheduledBlock) RuleBuilderStep.Reward else RuleBuilderStep.Earn
         manageRulesOpen = false
         editingRuleTemplate = rule
-        selectedProductivePackage = rule.earnApps.firstOrNull()?.packageName ?: rule.productivePackage
-        selectedProductivePackages = rule.earnApps.map { it.packageName }.toSet()
+        val hasEarnSelection = rule.productiveApps.isNotEmpty() || rule.productivePackage.isNotBlank()
+        selectedProductivePackage = if (hasEarnSelection) {
+            rule.earnApps.firstOrNull()?.packageName.orEmpty()
+        } else {
+            ""
+        }
+        selectedProductivePackages = if (hasEarnSelection) {
+            rule.earnApps.map { it.packageName }.filter { it.isNotBlank() }.toSet()
+        } else {
+            emptySet()
+        }
         selectedBlockedPackages = rule.blockedApps.map { it.packageName }.toSet()
+        selectedRequirements = rule.requirements
+        requirementPickerOpen = false
+        requirementSearch = ""
+        selectedRequirementPackage = rule.requirements.firstOrNull()?.app?.packageName
+        selectedRequirementMinutes = (rule.requirements.firstOrNull()?.requiredSeconds?.div(60L)?.toInt() ?: 10).coerceAtLeast(1)
+        editingRequirementIndex = null
         selectedRatio = rule.rewardSecondsPerProductiveSecond
         selectedActiveDays = rule.activeDays
         selectedStartMinute = rule.startMinute
@@ -261,18 +296,77 @@ class MainActivity : ComponentActivity() {
         unavailableRuleType = null
         productivePickerOpen = false
         blockedPickerOpen = false
+        requirementPickerOpen = false
+    }
+
+    private fun returnToRuleTypeSelection() {
+        builderStep = RuleBuilderStep.Earn
+        editingRuleTemplate = null
+        unavailableRuleType = null
+        productivePickerOpen = false
+        blockedPickerOpen = false
+        requirementPickerOpen = false
+        ruleTypeSelectionOpen = true
     }
 
     private fun selectProductiveApp(packageName: String) {
-        selectedProductivePackages = if (packageName in selectedProductivePackages) {
-            (selectedProductivePackages - packageName).ifEmpty { setOf(packageName) }
-        } else {
-            selectedProductivePackages + packageName
-        }
-        selectedProductivePackage = selectedProductivePackages.firstOrNull() ?: packageName
+        selectedProductivePackage = packageName
+        selectedProductivePackages = setOf(packageName)
         productiveSearch = ""
+        productivePickerOpen = false
     }
 
+    private fun openRequirementPicker() {
+        requirementPickerOpen = true
+        requirementSearch = ""
+        selectedRequirementPackage = null
+        selectedRequirementMinutes = 10
+        editingRequirementIndex = null
+    }
+
+    private fun selectRequirementApp(packageName: String) {
+        selectedRequirementPackage = packageName
+        requirementPickerOpen = false
+        requirementSearch = ""
+    }
+
+    private fun saveRequirement() {
+        val packageName = selectedRequirementPackage ?: return
+        val app = launchableApps.firstOrNull { it.packageName == packageName }?.let {
+            EarnItRuleStore.RuleApp(it.packageName, it.name)
+        } ?: selectedRequirements.firstOrNull { it.app.packageName == packageName }?.app
+            ?: return
+        val requirement = EarnItRuleStore.RuleRequirement(
+            app = app,
+            requiredSeconds = selectedRequirementMinutes.coerceAtLeast(1) * 60L
+        )
+        val editIndex = editingRequirementIndex
+        selectedRequirements = if (editIndex != null && editIndex in selectedRequirements.indices) {
+            selectedRequirements.mapIndexed { index, existing -> if (index == editIndex) requirement else existing }
+        } else {
+            (selectedRequirements.filterNot { it.app.packageName == requirement.app.packageName } + requirement)
+        }
+        selectedRequirementPackage = null
+        selectedRequirementMinutes = 10
+        editingRequirementIndex = null
+    }
+
+    private fun editRequirement(index: Int) {
+        val requirement = selectedRequirements.getOrNull(index) ?: return
+        editingRequirementIndex = index
+        selectedRequirementPackage = requirement.app.packageName
+        selectedRequirementMinutes = (requirement.requiredSeconds / 60L).toInt().coerceAtLeast(1)
+        requirementPickerOpen = false
+        requirementSearch = ""
+    }
+
+    private fun deleteRequirement(index: Int) {
+        selectedRequirements = selectedRequirements.filterIndexed { itemIndex, _ -> itemIndex != index }
+        if (editingRequirementIndex == index) {
+            editingRequirementIndex = null
+            selectedRequirementPackage = null
+        }
+    }
     private fun toggleActiveDay(day: Int) {
         selectedActiveDays = if (day in selectedActiveDays) {
             (selectedActiveDays - day).ifEmpty { setOf(day) }
@@ -357,7 +451,10 @@ class MainActivity : ComponentActivity() {
             activeDays = selectedActiveDays,
             startMinute = selectedStartMinute,
             endMinute = selectedEndMinute,
-            enabled = editingRule.enabled
+            enabled = editingRule.enabled,
+            type = editingRule.type,
+            productiveApps = if (editingRule.type == EarnItRuleStore.RuleType.EarnRewardTime) productiveApps else emptyList(),
+            requirements = if (editingRule.type == EarnItRuleStore.RuleType.CompleteToUnlock) selectedRequirements else emptyList()
         )
         EarnItRuleStore.saveRule(this, rule)
         editingRuleTemplate = null
@@ -445,6 +542,12 @@ fun Dashboard(
     selectedProductivePackage: String,
     selectedProductivePackages: Set<String>,
     selectedBlockedPackages: Set<String>,
+    selectedRequirements: List<EarnItRuleStore.RuleRequirement>,
+    requirementPickerOpen: Boolean,
+    requirementSearch: String,
+    selectedRequirementPackage: String?,
+    selectedRequirementMinutes: Int,
+    editingRequirementIndex: Int?,
     selectedRatio: Int,
     selectedActiveDays: Set<Int>,
     selectedStartMinute: Int,
@@ -485,6 +588,14 @@ fun Dashboard(
     onProductiveSearchChange: (String) -> Unit,
     onBlockedSearchChange: (String) -> Unit,
     onSelectProductiveApp: (String) -> Unit,
+    onOpenRequirementPicker: () -> Unit,
+    onCloseRequirementPicker: () -> Unit,
+    onRequirementSearchChange: (String) -> Unit,
+    onSelectRequirementApp: (String) -> Unit,
+    onSelectRequirementMinutes: (Int) -> Unit,
+    onSaveRequirement: () -> Unit,
+    onEditRequirement: (Int) -> Unit,
+    onDeleteRequirement: (Int) -> Unit,
     onToggleBlockedApp: (String) -> Unit,
     onSelectRatio: (Int) -> Unit,
     onToggleActiveDay: (Int) -> Unit,
@@ -571,7 +682,7 @@ fun Dashboard(
         Column(
             modifier = modifier
                 .fillMaxSize()
-                .padding(24.dp)
+                .padding(horizontal = 16.dp, vertical = 12.dp)
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
@@ -581,6 +692,12 @@ fun Dashboard(
                 selectedProductivePackage = selectedProductivePackage,
                 selectedProductivePackages = selectedProductivePackages,
                 selectedBlockedPackages = selectedBlockedPackages,
+                selectedRequirements = selectedRequirements,
+                requirementPickerOpen = requirementPickerOpen,
+                requirementSearch = requirementSearch,
+                selectedRequirementPackage = selectedRequirementPackage,
+                selectedRequirementMinutes = selectedRequirementMinutes,
+                editingRequirementIndex = editingRequirementIndex,
                 selectedRatio = selectedRatio,
                 selectedActiveDays = selectedActiveDays,
                 selectedStartMinute = selectedStartMinute,
@@ -596,6 +713,14 @@ fun Dashboard(
                 onProductiveSearchChange = onProductiveSearchChange,
                 onBlockedSearchChange = onBlockedSearchChange,
                 onSelectProductiveApp = onSelectProductiveApp,
+                onOpenRequirementPicker = onOpenRequirementPicker,
+                onCloseRequirementPicker = onCloseRequirementPicker,
+                onRequirementSearchChange = onRequirementSearchChange,
+                onSelectRequirementApp = onSelectRequirementApp,
+                onSelectRequirementMinutes = onSelectRequirementMinutes,
+                onSaveRequirement = onSaveRequirement,
+                onEditRequirement = onEditRequirement,
+                onDeleteRequirement = onDeleteRequirement,
                 onToggleBlockedApp = onToggleBlockedApp,
                 onSelectRatio = onSelectRatio,
                 onToggleActiveDay = onToggleActiveDay,
@@ -660,6 +785,12 @@ private fun RuleEditor(
     selectedProductivePackage: String,
     selectedProductivePackages: Set<String>,
     selectedBlockedPackages: Set<String>,
+    selectedRequirements: List<EarnItRuleStore.RuleRequirement>,
+    requirementPickerOpen: Boolean,
+    requirementSearch: String,
+    selectedRequirementPackage: String?,
+    selectedRequirementMinutes: Int,
+    editingRequirementIndex: Int?,
     selectedRatio: Int,
     selectedActiveDays: Set<Int>,
     selectedStartMinute: Int,
@@ -675,6 +806,14 @@ private fun RuleEditor(
     onProductiveSearchChange: (String) -> Unit,
     onBlockedSearchChange: (String) -> Unit,
     onSelectProductiveApp: (String) -> Unit,
+    onOpenRequirementPicker: () -> Unit,
+    onCloseRequirementPicker: () -> Unit,
+    onRequirementSearchChange: (String) -> Unit,
+    onSelectRequirementApp: (String) -> Unit,
+    onSelectRequirementMinutes: (Int) -> Unit,
+    onSaveRequirement: () -> Unit,
+    onEditRequirement: (Int) -> Unit,
+    onDeleteRequirement: (Int) -> Unit,
     onToggleBlockedApp: (String) -> Unit,
     onSelectRatio: (Int) -> Unit,
     onToggleActiveDay: (Int) -> Unit,
@@ -693,6 +832,12 @@ private fun RuleEditor(
         selectedProductivePackage = selectedProductivePackage,
         selectedProductivePackages = selectedProductivePackages,
         selectedBlockedPackages = selectedBlockedPackages,
+        selectedRequirements = selectedRequirements,
+        requirementPickerOpen = requirementPickerOpen,
+        requirementSearch = requirementSearch,
+        selectedRequirementPackage = selectedRequirementPackage,
+        selectedRequirementMinutes = selectedRequirementMinutes,
+        editingRequirementIndex = editingRequirementIndex,
         selectedRatio = selectedRatio,
         selectedActiveDays = selectedActiveDays,
         selectedStartMinute = selectedStartMinute,
@@ -710,6 +855,14 @@ private fun RuleEditor(
         onProductiveSearchChange = onProductiveSearchChange,
         onBlockedSearchChange = onBlockedSearchChange,
         onSelectProductiveApp = onSelectProductiveApp,
+        onOpenRequirementPicker = onOpenRequirementPicker,
+        onCloseRequirementPicker = onCloseRequirementPicker,
+        onRequirementSearchChange = onRequirementSearchChange,
+        onSelectRequirementApp = onSelectRequirementApp,
+        onSelectRequirementMinutes = onSelectRequirementMinutes,
+        onSaveRequirement = onSaveRequirement,
+        onEditRequirement = onEditRequirement,
+        onDeleteRequirement = onDeleteRequirement,
         onToggleBlockedApp = onToggleBlockedApp,
         onSelectRatio = onSelectRatio,
         onToggleActiveDay = onToggleActiveDay,
@@ -729,23 +882,20 @@ fun EditorSection(
     helperText: String,
     content: @Composable () -> Unit
 ) {
-    Card(
+    Column(
         modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+        verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Text(text = title, style = MaterialTheme.typography.titleSmall)
-            Text(text = helperText, style = MaterialTheme.typography.bodyMedium)
-            content()
-        }
+        Text(text = title, style = MaterialTheme.typography.headlineSmall)
+        Text(
+            text = helperText,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        content()
     }
 }
+
 @Composable
 fun ProductiveAppSection(
     rule: EarnItRuleStore.Rule,
@@ -862,7 +1012,7 @@ fun DayButtons(selectedActiveDays: Set<Int>, onToggleActiveDay: (Int) -> Unit) {
 @Composable
 private fun DayButton(day: Int, selectedActiveDays: Set<Int>, onToggleActiveDay: (Int) -> Unit) {
     Button(onClick = { onToggleActiveDay(day) }) {
-        Text(text = if (day in selectedActiveDays) "${EarnItRuleStore.dayShortName(day)} selected" else EarnItRuleStore.dayShortName(day))
+        Text(text = EarnItRuleStore.dayShortName(day).take(1))
     }
 }
 
@@ -901,6 +1051,12 @@ fun DashboardPreview() {
             selectedProductivePackage = "com.duolingo",
             selectedProductivePackages = setOf("com.duolingo"),
             selectedBlockedPackages = setOf("com.instagram.android"),
+            selectedRequirements = emptyList(),
+            requirementPickerOpen = false,
+            requirementSearch = "",
+            selectedRequirementPackage = null,
+            selectedRequirementMinutes = 10,
+            editingRequirementIndex = null,
             selectedRatio = 1,
             selectedActiveDays = EarnItRuleStore.allDays.toSet(),
             selectedStartMinute = 0,
@@ -941,6 +1097,14 @@ fun DashboardPreview() {
             onProductiveSearchChange = {},
             onBlockedSearchChange = {},
             onSelectProductiveApp = {},
+            onOpenRequirementPicker = {},
+            onCloseRequirementPicker = {},
+            onRequirementSearchChange = {},
+            onSelectRequirementApp = {},
+            onSelectRequirementMinutes = {},
+            onSaveRequirement = {},
+            onEditRequirement = {},
+            onDeleteRequirement = {},
             onToggleBlockedApp = {},
             onSelectRatio = {},
             onToggleActiveDay = {},

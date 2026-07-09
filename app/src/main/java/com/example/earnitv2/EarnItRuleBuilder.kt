@@ -1,20 +1,31 @@
 package com.example.earnitv2
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -23,8 +34,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-
 enum class RuleBuilderStep(val label: String) {
     Earn("Earn"),
     Reward("Reward"),
@@ -50,6 +62,12 @@ fun EarnItRuleBuilder(
     selectedProductivePackage: String,
     selectedProductivePackages: Set<String>,
     selectedBlockedPackages: Set<String>,
+    selectedRequirements: List<EarnItRuleStore.RuleRequirement>,
+    requirementPickerOpen: Boolean,
+    requirementSearch: String,
+    selectedRequirementPackage: String?,
+    selectedRequirementMinutes: Int,
+    editingRequirementIndex: Int?,
     selectedRatio: Int,
     selectedActiveDays: Set<Int>,
     selectedStartMinute: Int,
@@ -67,6 +85,14 @@ fun EarnItRuleBuilder(
     onProductiveSearchChange: (String) -> Unit,
     onBlockedSearchChange: (String) -> Unit,
     onSelectProductiveApp: (String) -> Unit,
+    onOpenRequirementPicker: () -> Unit,
+    onCloseRequirementPicker: () -> Unit,
+    onRequirementSearchChange: (String) -> Unit,
+    onSelectRequirementApp: (String) -> Unit,
+    onSelectRequirementMinutes: (Int) -> Unit,
+    onSaveRequirement: () -> Unit,
+    onEditRequirement: (Int) -> Unit,
+    onDeleteRequirement: (Int) -> Unit,
     onToggleBlockedApp: (String) -> Unit,
     onSelectRatio: (Int) -> Unit,
     onToggleActiveDay: (Int) -> Unit,
@@ -90,18 +116,42 @@ fun EarnItRuleBuilder(
         selectedStartMinute = selectedStartMinute,
         selectedEndMinute = selectedEndMinute
     )
+    BackHandler(onBack = onCancel)
 
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
         BuilderHeader(
             title = if (rule.id == "default" || rule.id.startsWith("rule_")) "Create Rule" else "Edit Rule",
             currentStep = currentStep,
-            steps = steps
+            steps = steps,
+            ruleType = rule.type,
+            draft = draft,
+            requirements = selectedRequirements,
+            onBack = onCancel,
+            onStepClick = onBuilderStepChange
         )
-        RuleSoFar(draft = draft)
+        if (currentStep != RuleBuilderStep.Review) {
+            RuleSoFar(draft = draft, currentStep = currentStep)
+        }
 
         when (currentStep) {
             RuleBuilderStep.Earn -> if (rule.type == EarnItRuleStore.RuleType.CompleteToUnlock) {
-                RequirementsStep(rule = rule)
+                RequirementsStep(
+                    apps = apps,
+                    requirements = selectedRequirements,
+                    pickerOpen = requirementPickerOpen,
+                    search = requirementSearch,
+                    selectedPackage = selectedRequirementPackage,
+                    selectedMinutes = selectedRequirementMinutes,
+                    editingIndex = editingRequirementIndex,
+                    onOpenPicker = onOpenRequirementPicker,
+                    onClosePicker = onCloseRequirementPicker,
+                    onSearchChange = onRequirementSearchChange,
+                    onSelectApp = onSelectRequirementApp,
+                    onSelectMinutes = onSelectRequirementMinutes,
+                    onSaveRequirement = onSaveRequirement,
+                    onEditRequirement = onEditRequirement,
+                    onDeleteRequirement = onDeleteRequirement
+                )
             } else {
                 EarnStep(
                 rule = rule,
@@ -144,14 +194,14 @@ fun EarnItRuleBuilder(
                 onEditStartTime = onEditStartTime,
                 onEditEndTime = onEditEndTime
             )
-            RuleBuilderStep.Review -> ReviewStep(draft = draft, rule = rule)
+            RuleBuilderStep.Review -> ReviewStep(draft = draft, rule = rule, requirements = selectedRequirements)
         }
 
         BuilderActions(
             currentStep = currentStep,
             steps = steps,
-            canContinue = canContinue(rule.type, currentStep, draft, rule),
-            canSave = canSaveRule(rule.type, draft, rule),
+            canContinue = canContinue(rule.type, currentStep, draft, selectedRequirements),
+            canSave = canSaveRule(rule.type, draft, selectedRequirements),
             onBack = {
                 val previous = currentStep.previous(steps)
                 if (previous == null) onCancel() else onBuilderStepChange(previous)
@@ -159,9 +209,7 @@ fun EarnItRuleBuilder(
             onContinue = {
                 currentStep.next(steps)?.let(onBuilderStepChange)
             },
-            onSaveRule = onSaveRule,
-            onCancel = onCancel
-        )
+            onSaveRule = onSaveRule)
     }
 }
 
@@ -200,36 +248,94 @@ fun ruleDraftUiState(
 }
 
 @Composable
-private fun BuilderHeader(title: String, currentStep: RuleBuilderStep, steps: List<RuleBuilderStep>) {
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text(text = title, style = MaterialTheme.typography.titleMedium)
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+private fun BuilderHeader(
+    title: String,
+    currentStep: RuleBuilderStep,
+    steps: List<RuleBuilderStep>,
+    ruleType: EarnItRuleStore.RuleType,
+    draft: RuleDraftUiState,
+    requirements: List<EarnItRuleStore.RuleRequirement>,
+    onBack: () -> Unit,
+    onStepClick: (RuleBuilderStep) -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            TextButton(onClick = onBack) {
+                Text(text = "<")
+            }
+            Text(text = title, style = MaterialTheme.typography.titleLarge)
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
             steps.forEach { step ->
-                val selected = step == currentStep
-                Card(
-                    colors = CardDefaults.cardColors(
-                        containerColor = if (selected) {
-                            MaterialTheme.colorScheme.surfaceVariant
-                        } else {
-                            MaterialTheme.colorScheme.surface
-                        }
-                    ),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
-                ) {
-                    Text(
-                        text = step.label,
-                        style = MaterialTheme.typography.labelSmall,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
-                    )
-                }
+                val current = step == currentStep
+                val complete = stepIsComplete(ruleType, step, draft, requirements)
+                val enabled = current || stepIsEnabled(ruleType, step, draft, requirements)
+                StageButton(
+                    label = step.label,
+                    current = current,
+                    complete = complete,
+                    enabled = enabled,
+                    onClick = { if (!current && enabled) onStepClick(step) },
+                    modifier = Modifier.weight(1f)
+                )
             }
         }
     }
 }
 
 @Composable
-private fun RuleSoFar(draft: RuleDraftUiState) {
+private fun StageButton(
+    label: String,
+    current: Boolean,
+    complete: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val lineColor = when {
+        current -> MaterialTheme.colorScheme.onSurface
+        complete -> MaterialTheme.colorScheme.primary
+        else -> MaterialTheme.colorScheme.outlineVariant
+    }
+    val textColor = when {
+        current || complete -> MaterialTheme.colorScheme.onSurface
+        enabled -> MaterialTheme.colorScheme.onSurfaceVariant
+        else -> MaterialTheme.colorScheme.outlineVariant
+    }
+    Column(
+        modifier = modifier
+            .clip(RoundedCornerShape(2.dp))
+            .clickable(enabled = enabled && !current, onClick = onClick)
+            .padding(vertical = 4.dp),
+        verticalArrangement = Arrangement.spacedBy(5.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(2.dp)
+                .background(lineColor)
+        )
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = textColor,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+@Composable
+private fun RuleSoFar(draft: RuleDraftUiState, currentStep: RuleBuilderStep) {
     if (draft.selectedEarnApp == null && draft.selectedRewardApps.isEmpty()) return
+    val showExchange = currentStep == RuleBuilderStep.Exchange || currentStep == RuleBuilderStep.Schedule
+    val showSchedule = currentStep == RuleBuilderStep.Schedule && reviewScheduleIsValid(draft)
+
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -237,38 +343,216 @@ private fun RuleSoFar(draft: RuleDraftUiState) {
     ) {
         Column(
             modifier = Modifier.padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Text(text = "Your Rule so far", style = MaterialTheme.typography.titleSmall)
-            draft.selectedEarnApp?.let { app ->
-                Text(text = "Earn App: ${app.name}", style = MaterialTheme.typography.bodyMedium)
-            }
-            if (draft.selectedRewardApps.isNotEmpty()) {
+            Text(
+                text = "YOUR RULE SO FAR",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            RuleIconSummary(
+                earnApp = draft.selectedEarnApp,
+                rewardApps = draft.selectedRewardApps
+            )
+            if (showExchange && draft.selectedEarnApp != null && draft.selectedRewardApps.isNotEmpty()) {
                 Text(
-                    text = "Reward Apps: ${draft.selectedRewardApps.joinToString(", ") { it.name }}",
-                    style = MaterialTheme.typography.bodyMedium
+                    text = EarnItUiFormatters.exchangeSummary(draft.exchangeSelection),
+                    style = MaterialTheme.typography.bodySmall
                 )
             }
-            Text(text = EarnItUiFormatters.exchangeSummary(draft.exchangeSelection), style = MaterialTheme.typography.bodySmall)
+            if (showSchedule) {
+                Text(
+                    text = reviewScheduleSummary(draft.activeDays, draft.startMinute, draft.endMinute),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
     }
 }
 
+@Composable
+private fun RuleIconSummary(
+    earnApp: EarnItAppUiState?,
+    rewardApps: List<EarnItAppUiState>
+) {
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        if (earnApp != null) {
+            EarnItAppIcon(packageName = earnApp.packageName, appName = earnApp.name, size = 28.dp)
+            if (rewardApps.isEmpty()) {
+                Text(text = earnApp.name, style = MaterialTheme.typography.bodyMedium)
+            }
+        }
+        if (earnApp != null && rewardApps.isNotEmpty()) {
+            Text(text = "->", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        rewardApps.take(2).forEach { app ->
+            EarnItAppIcon(packageName = app.packageName, appName = app.name, size = 28.dp)
+        }
+        if (rewardApps.size > 2) {
+            CountChip(count = rewardApps.size - 2)
+        }
+    }
+}
 
 @Composable
-private fun RequirementsStep(rule: EarnItRuleStore.Rule) {
-    EditorSection(
-        title = "Complete all requirements",
-        helperText = "Temporary setup for Complete to Unlock. This minimal surface will be replaced by the finalized requirements editor."
+private fun CountChip(count: Int) {
+    Box(
+        modifier = Modifier
+            .size(28.dp)
+            .clip(RoundedCornerShape(6.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant),
+        contentAlignment = Alignment.Center
     ) {
-        if (rule.requirements.isEmpty()) {
-            Text(text = "No requirements configured yet.", style = MaterialTheme.typography.bodyMedium)
+        Text(text = "+$count", style = MaterialTheme.typography.labelSmall)
+    }
+}
+@Composable
+private fun RequirementsStep(
+    apps: List<EarnItRuleStore.LaunchableApp>,
+    requirements: List<EarnItRuleStore.RuleRequirement>,
+    pickerOpen: Boolean,
+    search: String,
+    selectedPackage: String?,
+    selectedMinutes: Int,
+    editingIndex: Int?,
+    onOpenPicker: () -> Unit,
+    onClosePicker: () -> Unit,
+    onSearchChange: (String) -> Unit,
+    onSelectApp: (String) -> Unit,
+    onSelectMinutes: (Int) -> Unit,
+    onSaveRequirement: () -> Unit,
+    onEditRequirement: (Int) -> Unit,
+    onDeleteRequirement: (Int) -> Unit
+) {
+    val namesByPackage = apps.associate { it.packageName to it.name } +
+        requirements.associate { it.app.packageName to it.app.name }
+    val selectedName = selectedPackage?.let { namesByPackage[it] }
+
+    EditorSection(
+        title = "Complete to Unlock",
+        helperText = "Add productive app requirements. Every requirement must be completed before selected apps unlock."
+    ) {
+        if (requirements.isEmpty()) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+            ) {
+                Column(
+                    modifier = Modifier.padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(text = "No requirements yet", style = MaterialTheme.typography.titleSmall)
+                    Text(text = "Add one productive activity to unlock apps.", style = MaterialTheme.typography.bodyMedium)
+                    Button(onClick = onOpenPicker, modifier = Modifier.fillMaxWidth()) {
+                        Text(text = "Add requirement")
+                    }
+                }
+            }
         } else {
-            rule.requirements.forEach { requirement ->
-                Text(
-                    text = "${requirement.app.name} - ${requirement.requiredSeconds / 60L} min",
-                    style = MaterialTheme.typography.bodyLarge
-                )
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                requirements.forEachIndexed { index, requirement ->
+                    RequirementCard(
+                        requirement = requirement,
+                        onEdit = { onEditRequirement(index) },
+                        onDelete = { onDeleteRequirement(index) }
+                    )
+                }
+                OutlinedButton(onClick = onOpenPicker, modifier = Modifier.fillMaxWidth()) {
+                    Text(text = "Add another requirement")
+                }
+            }
+        }
+
+        if (pickerOpen) {
+            BuilderAppSearchField(
+                value = search,
+                onValueChange = onSearchChange,
+                label = "Search productive apps"
+            )
+            BuilderAppList(
+                apps = apps.builderFilteredBy(search),
+                selectedPackages = selectedPackage?.let { setOf(it) } ?: emptySet(),
+                multiSelect = false,
+                emptyText = "No apps match your search.",
+                onClickApp = { packageName ->
+                    onSelectApp(packageName)
+                    onClosePicker()
+                }
+            )
+        }
+
+        if (selectedPackage != null) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+            ) {
+                Column(
+                    modifier = Modifier.padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Text(
+                        text = if (editingIndex == null) "New requirement" else "Edit requirement",
+                        style = MaterialTheme.typography.titleSmall
+                    )
+                    Text(text = selectedName ?: selectedPackage, style = MaterialTheme.typography.bodyLarge)
+                    Text(text = "Required duration", style = MaterialTheme.typography.labelSmall)
+                    listOf(5, 10, 20, 30).forEach { minutes ->
+                        OutlinedButton(
+                            onClick = { onSelectMinutes(minutes) },
+                            modifier = Modifier.fillMaxWidth(),
+                            border = BorderStroke(
+                                width = if (selectedMinutes == minutes) 2.dp else 1.dp,
+                                color = if (selectedMinutes == minutes) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outlineVariant
+                            ),
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                containerColor = if (selectedMinutes == minutes) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.surface
+                            )
+                        ) {
+                            Text(text = "$minutes min")
+                        }
+                    }
+                    OutlinedButton(onClick = { onSelectMinutes(selectedMinutes) }, modifier = Modifier.fillMaxWidth()) {
+                        Text(text = "Custom")
+                    }
+                    Button(onClick = onSaveRequirement, modifier = Modifier.fillMaxWidth()) {
+                        Text(text = if (editingIndex == null) "Add requirement" else "Save requirement")
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RequirementCard(
+    requirement: EarnItRuleStore.RuleRequirement,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text(text = requirement.app.name, style = MaterialTheme.typography.titleSmall)
+            Text(text = "${requirement.requiredSeconds / 60L} min", style = MaterialTheme.typography.bodyMedium)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = onEdit, modifier = Modifier.weight(1f)) {
+                    Text(text = "Edit")
+                }
+                OutlinedButton(onClick = onDelete, modifier = Modifier.weight(1f)) {
+                    Text(text = "Remove")
+                }
             }
         }
     }
@@ -309,39 +593,52 @@ private fun EarnStep(
     onProductiveSearchChange: (String) -> Unit,
     onSelectProductiveApp: (String) -> Unit
 ) {
-    val selectedApp = apps.firstOrNull { it.packageName == selectedProductivePackage }
-        ?: EarnItRuleStore.LaunchableApp(rule.productivePackage, rule.productiveName)
-            .takeIf { it.packageName == selectedProductivePackage }
-    val selectedAppName = selectedApp?.name
+    val savedEarnApps = rule.earnApps.associateBy { it.packageName }
+    val selectedApp = selectedProductivePackage.takeIf { it.isNotBlank() }?.let { packageName ->
+        apps.firstOrNull { it.packageName == packageName }
+            ?: savedEarnApps[packageName]?.let { EarnItRuleStore.LaunchableApp(it.packageName, it.name) }
+    }
     val visibleApps = apps.builderFilteredBy(productiveSearch)
     EditorSection(
         title = "How will you earn Reward Time?",
-        helperText = "Choose one Earn App where productive time should count."
+        helperText = "Choose an Earn App where productive time should count."
     ) {
-        if (selectedAppName == null) {
-            Text(text = "No Earn App selected yet.", style = MaterialTheme.typography.bodyMedium)
-        } else {
+        if (selectedApp != null) {
             AppSelectionSummary(
                 label = "Selected Earn App",
-                text = selectedAppName,
-                app = selectedApp?.let { EarnItAppUiState(packageName = it.packageName, name = it.name) }
+                text = selectedApp.name,
+                app = EarnItAppUiState(packageName = selectedApp.packageName, name = selectedApp.name)
             )
         }
-        BuilderAppSearchField(
-            value = productiveSearch,
-            onValueChange = onProductiveSearchChange,
-            label = "Search Earn Apps"
-        )
-        BuilderAppList(
-            apps = visibleApps,
-            selectedPackages = selectedProductivePackages,
-            multiSelect = true,
-            emptyText = "No Earn Apps match your search.",
-            onClickApp = { packageName ->
-                onSelectProductiveApp(packageName)
-                onCloseProductivePicker()
+
+        OutlinedButton(onClick = onOpenProductivePicker, modifier = Modifier.fillMaxWidth()) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(text = if (selectedApp == null) "Choose Earn App" else "Change Earn App")
+                Text(text = ">", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-        )
+        }
+
+        if (productivePickerOpen) {
+            BuilderAppSearchField(
+                value = productiveSearch,
+                onValueChange = onProductiveSearchChange,
+                label = "Search Earn Apps"
+            )
+            BuilderAppList(
+                apps = visibleApps,
+                selectedPackages = selectedProductivePackages,
+                multiSelect = false,
+                emptyText = "No Earn Apps match your search.",
+                onClickApp = { packageName ->
+                    onSelectProductiveApp(packageName)
+                    onCloseProductivePicker()
+                }
+            )
+        }
     }
 }
 
@@ -363,7 +660,6 @@ private fun RewardStep(
     val selectedApps = selectedBlockedPackages.mapNotNull { packageName ->
         namesByPackage[packageName]?.let { EarnItAppUiState(packageName = packageName, name = it) }
     }
-    val selectedNames = selectedApps.map { it.name }
     val visibleApps = apps.builderFilteredBy(blockedSearch)
     EditorSection(
         title = when (ruleType) {
@@ -377,36 +673,44 @@ private fun RewardStep(
             EarnItRuleStore.RuleType.EarnRewardTime -> "Choose one or more Reward Apps that share this Rule balance."
         }
     ) {
-        AppSelectionSummary(
-            label = "Selected Reward Apps",
-            text = if (selectedNames.isEmpty()) {
-                "0 selected"
-            } else {
-                "${selectedNames.size} selected: ${selectedNames.take(3).joinToString(", ")}" +
-                    if (selectedNames.size > 3) " +${selectedNames.size - 3} more" else ""
-            },
-            apps = selectedApps
-        )
-        BuilderAppSearchField(
-            value = blockedSearch,
-            onValueChange = onBlockedSearchChange,
-            label = "Search Reward Apps"
-        )
-        BuilderAppList(
-            apps = visibleApps,
-            selectedPackages = selectedBlockedPackages,
-            multiSelect = true,
-            emptyText = "No Reward Apps match your search.",
-            onClickApp = onToggleBlockedApp
-        )
+        if (selectedApps.isNotEmpty()) {
+            AppSelectionSummary(
+                label = "Selected Reward Apps",
+                text = "${selectedApps.size} selected",
+                apps = selectedApps
+            )
+        }
+
+        OutlinedButton(onClick = onOpenBlockedPicker, modifier = Modifier.fillMaxWidth()) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(text = if (selectedApps.isEmpty()) "Choose Reward Apps" else "${selectedApps.size} apps selected")
+                Text(text = ">", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+
         if (blockedPickerOpen) {
+            BuilderAppSearchField(
+                value = blockedSearch,
+                onValueChange = onBlockedSearchChange,
+                label = "Search Reward Apps"
+            )
+            BuilderAppList(
+                apps = visibleApps,
+                selectedPackages = selectedBlockedPackages,
+                multiSelect = true,
+                emptyText = "No Reward Apps match your search.",
+                onClickApp = onToggleBlockedApp
+            )
             OutlinedButton(onClick = onCloseBlockedPicker, modifier = Modifier.fillMaxWidth()) {
-                Text(text = "Done selecting Reward Apps")
+                Text(text = "Done")
             }
         }
     }
 }
-
 @Composable
 private fun AppSelectionSummary(
     label: String,
@@ -498,26 +802,28 @@ private fun BuilderAppRow(
 ) {
     OutlinedButton(
         onClick = { onClickApp(app.packageName) },
-        modifier = Modifier.fillMaxWidth()
+        modifier = Modifier.fillMaxWidth(),
+        border = BorderStroke(
+            width = if (selected) 2.dp else 1.dp,
+            color = if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outlineVariant
+        ),
+        colors = ButtonDefaults.outlinedButtonColors(
+            containerColor = if (selected) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.surface
+        )
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                EarnItAppIcon(packageName = app.packageName, appName = app.name, size = 32.dp)
-                Text(text = app.name)
-            }
+            EarnItAppIcon(packageName = app.packageName, appName = app.name, size = 32.dp)
             Text(
-                text = when {
-                    selected && multiSelect -> "Selected"
-                    selected -> "Selected"
-                    multiSelect -> "Add"
-                    else -> "Choose"
-                },
-                style = MaterialTheme.typography.labelSmall
+                text = app.name,
+                modifier = Modifier.weight(1f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
+            Checkbox(checked = selected, onCheckedChange = null)
         }
     }
 }
@@ -588,17 +894,18 @@ private fun ExchangeOption(
     selected: Boolean,
     onSelectRatio: (Int) -> Unit
 ) {
-    OutlinedButton(onClick = { onSelectRatio(ratio) }, modifier = Modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Text(text = "${ratio * 10} min Reward Time")
-            Text(
-                text = if (selected) "Selected" else "Choose",
-                style = MaterialTheme.typography.labelSmall
-            )
-        }
+    OutlinedButton(
+        onClick = { onSelectRatio(ratio) },
+        modifier = Modifier.fillMaxWidth(),
+        border = BorderStroke(
+            width = if (selected) 2.dp else 1.dp,
+            color = if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outlineVariant
+        ),
+        colors = ButtonDefaults.outlinedButtonColors(
+            containerColor = if (selected) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.surface
+        )
+    ) {
+        Text(text = "${ratio * 10} min Reward Time")
     }
 }
 
@@ -633,7 +940,7 @@ private fun ScheduleStep(
             }
         )
         if (customDaysOpen || dayPreset(selectedActiveDays) == ScheduleDayPreset.Custom) {
-            DayButtons(selectedActiveDays = selectedActiveDays, onToggleActiveDay = onToggleActiveDay)
+            CompactDayButtons(selectedActiveDays = selectedActiveDays, onToggleActiveDay = onToggleActiveDay)
         }
         ScheduleTimePresets(
             selectedStartMinute = selectedStartMinute,
@@ -645,6 +952,45 @@ private fun ScheduleStep(
     }
 }
 
+@Composable
+private fun CompactDayButtons(selectedActiveDays: Set<Int>, onToggleActiveDay: (Int) -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        EarnItRuleStore.allDays.forEach { day ->
+            val selected = day in selectedActiveDays
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .height(40.dp)
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.surfaceVariant)
+                    .clickable { onToggleActiveDay(day) },
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = compactDayLabel(day),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = if (selected) MaterialTheme.colorScheme.surface else MaterialTheme.colorScheme.onSurface
+                )
+            }
+        }
+    }
+}
+
+private fun compactDayLabel(day: Int): String {
+    return when (day) {
+        1 -> "M"
+        2 -> "T"
+        3 -> "W"
+        4 -> "T"
+        5 -> "F"
+        6 -> "S"
+        7 -> "S"
+        else -> "?"
+    }
+}
 private enum class ScheduleDayPreset {
     EveryDay,
     Weekdays,
@@ -701,18 +1047,31 @@ private fun ScheduleTimePresets(
             onClick = { if (allDay) onEditStartTime() }
         )
         if (!allDay) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = onEditStartTime, modifier = Modifier.weight(1f)) {
-                    Text(text = "Start ${EarnItRuleStore.formatMinute(selectedStartMinute)}")
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = onEditStartTime, modifier = Modifier.fillMaxWidth()) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(text = "Start")
+                        Text(text = EarnItRuleStore.formatMinute(selectedStartMinute))
+                    }
                 }
-                OutlinedButton(onClick = onEditEndTime, modifier = Modifier.weight(1f)) {
-                    Text(text = "End ${EarnItRuleStore.formatMinute(selectedEndMinute)}")
+                OutlinedButton(onClick = onEditEndTime, modifier = Modifier.fillMaxWidth()) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(text = "End")
+                        Text(text = EarnItRuleStore.formatMinute(selectedEndMinute))
+                    }
                 }
             }
         }
         Text(
             text = "Outside these times, Reward Apps are unrestricted by this Rule.",
-            style = MaterialTheme.typography.bodySmall
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
     }
 }
@@ -723,17 +1082,22 @@ private fun SchedulePresetButton(
     selected: Boolean,
     onClick: () -> Unit
 ) {
-    OutlinedButton(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
+    OutlinedButton(
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth(),
+        border = BorderStroke(
+            width = if (selected) 2.dp else 1.dp,
+            color = if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outlineVariant
+        ),
+        colors = ButtonDefaults.outlinedButtonColors(
+            containerColor = if (selected) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.surface
+        )
+    ) {
+        Row(modifier = Modifier.fillMaxWidth()) {
             Text(text = label)
-            Text(text = if (selected) "Selected" else "Choose", style = MaterialTheme.typography.labelSmall)
         }
     }
 }
-
 private fun dayPreset(activeDays: Set<Int>): ScheduleDayPreset {
     return when (activeDays) {
         EarnItRuleStore.allDays.toSet() -> ScheduleDayPreset.EveryDay
@@ -743,13 +1107,17 @@ private fun dayPreset(activeDays: Set<Int>): ScheduleDayPreset {
 }
 
 @Composable
-private fun ReviewStep(draft: RuleDraftUiState, rule: EarnItRuleStore.Rule) {
+private fun ReviewStep(
+    draft: RuleDraftUiState,
+    rule: EarnItRuleStore.Rule,
+    requirements: List<EarnItRuleStore.RuleRequirement>
+) {
     when (rule.type) {
         EarnItRuleStore.RuleType.EarnRewardTime -> EarnRewardReviewStep(draft)
         EarnItRuleStore.RuleType.CompleteToUnlock -> TypedReviewStep(
             title = "Review Rule",
             sections = buildList {
-                add("COMPLETE ALL" to rule.requirements.joinToString("\n") { "${it.app.name} - ${it.requiredSeconds / 60L} min" })
+                add("COMPLETE ALL" to requirements.joinToString("\n") { "${it.app.name} - ${it.requiredSeconds / 60L} min" })
                 add("THEN UNLOCK" to draft.selectedRewardApps.joinToString("\n") { it.name }.ifBlank { "Choose at least one app before saving." })
                 add("ACTIVE" to reviewScheduleSummary(draft.activeDays, draft.startMinute, draft.endMinute))
             }
@@ -929,50 +1297,105 @@ private fun BuilderActions(
     canSave: Boolean,
     onBack: () -> Unit,
     onContinue: () -> Unit,
-    onSaveRule: () -> Unit,
-    onCancel: () -> Unit
+    onSaveRule: () -> Unit
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    val isFirstStep = currentStep.previous(steps) == null
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (!isFirstStep) {
             OutlinedButton(onClick = onBack, modifier = Modifier.weight(1f)) {
                 Text(text = "Back")
             }
-            if (currentStep == RuleBuilderStep.Review) {
-                Button(onClick = onSaveRule, enabled = canSave, modifier = Modifier.weight(1f)) {
-                    Text(text = "Save Rule")
-                }
-            } else {
-                Button(onClick = onContinue, enabled = canContinue, modifier = Modifier.weight(1f)) {
-                    Text(text = "Continue")
-                }
-            }
         }
-        OutlinedButton(onClick = onCancel, modifier = Modifier.fillMaxWidth()) {
-            Text(text = "Cancel")
+        if (currentStep == RuleBuilderStep.Review) {
+            Button(
+                onClick = onSaveRule,
+                enabled = canSave,
+                modifier = Modifier.weight(1f)
+            ) {
+                Text(text = "Save Rule")
+            }
+        } else {
+            Button(
+                onClick = onContinue,
+                enabled = canContinue,
+                modifier = Modifier.weight(1f)
+            ) {
+                Text(text = "Continue")
+            }
         }
     }
 }
+private fun stepIsComplete(
+    ruleType: EarnItRuleStore.RuleType,
+    step: RuleBuilderStep,
+    draft: RuleDraftUiState,
+    requirements: List<EarnItRuleStore.RuleRequirement>
+): Boolean {
+    return when (step) {
+        RuleBuilderStep.Earn -> when (ruleType) {
+            EarnItRuleStore.RuleType.EarnRewardTime -> draft.selectedEarnApp != null
+            EarnItRuleStore.RuleType.CompleteToUnlock -> requirements.isNotEmpty()
+            EarnItRuleStore.RuleType.ScheduledBlock -> true
+        }
+        RuleBuilderStep.Reward -> draft.selectedRewardApps.isNotEmpty()
+        RuleBuilderStep.Exchange -> draft.exchangeSelection in EarnItRuleStore.allowedRatios
+        RuleBuilderStep.Schedule -> reviewScheduleIsValid(draft)
+        RuleBuilderStep.Review -> false
+    }
+}
 
+private fun stepIsEnabled(
+    ruleType: EarnItRuleStore.RuleType,
+    step: RuleBuilderStep,
+    draft: RuleDraftUiState,
+    requirements: List<EarnItRuleStore.RuleRequirement>
+): Boolean {
+    return when (step) {
+        RuleBuilderStep.Earn -> true
+        RuleBuilderStep.Reward -> when (ruleType) {
+            EarnItRuleStore.RuleType.EarnRewardTime -> draft.selectedEarnApp != null
+            EarnItRuleStore.RuleType.CompleteToUnlock -> requirements.isNotEmpty()
+            EarnItRuleStore.RuleType.ScheduledBlock -> true
+        }
+        RuleBuilderStep.Exchange -> draft.selectedEarnApp != null && draft.selectedRewardApps.isNotEmpty()
+        RuleBuilderStep.Schedule -> when (ruleType) {
+            EarnItRuleStore.RuleType.EarnRewardTime -> draft.selectedEarnApp != null &&
+                draft.selectedRewardApps.isNotEmpty() &&
+                draft.exchangeSelection in EarnItRuleStore.allowedRatios
+            EarnItRuleStore.RuleType.CompleteToUnlock -> requirements.isNotEmpty() && draft.selectedRewardApps.isNotEmpty()
+            EarnItRuleStore.RuleType.ScheduledBlock -> draft.selectedRewardApps.isNotEmpty()
+        }
+        RuleBuilderStep.Review -> canSaveRule(ruleType, draft, requirements)
+    }
+}
 private fun canContinue(
     ruleType: EarnItRuleStore.RuleType,
     step: RuleBuilderStep,
     draft: RuleDraftUiState,
-    rule: EarnItRuleStore.Rule
+    requirements: List<EarnItRuleStore.RuleRequirement>
 ): Boolean {
     return when (step) {
-        RuleBuilderStep.Earn -> ruleType != EarnItRuleStore.RuleType.EarnRewardTime || draft.selectedEarnApp != null || rule.requirements.isNotEmpty()
+        RuleBuilderStep.Earn -> when (ruleType) {
+            EarnItRuleStore.RuleType.EarnRewardTime -> draft.selectedEarnApp != null
+            EarnItRuleStore.RuleType.CompleteToUnlock -> requirements.isNotEmpty()
+            EarnItRuleStore.RuleType.ScheduledBlock -> true
+        }
         RuleBuilderStep.Reward -> draft.selectedRewardApps.isNotEmpty()
         RuleBuilderStep.Exchange -> draft.exchangeSelection in EarnItRuleStore.allowedRatios
         RuleBuilderStep.Schedule -> draft.activeDays.isNotEmpty() && draft.startMinute in 0..1_439 && draft.endMinute in 1..1_440
-        RuleBuilderStep.Review -> canSaveRule(ruleType, draft, rule)
+        RuleBuilderStep.Review -> canSaveRule(ruleType, draft, requirements)
     }
 }
 
-private fun canSaveRule(ruleType: EarnItRuleStore.RuleType, draft: RuleDraftUiState, rule: EarnItRuleStore.Rule): Boolean {
+private fun canSaveRule(
+    ruleType: EarnItRuleStore.RuleType,
+    draft: RuleDraftUiState,
+    requirements: List<EarnItRuleStore.RuleRequirement>
+): Boolean {
     val validSchedule = draft.activeDays.isNotEmpty() && draft.startMinute in 0..1_439 && draft.endMinute in 1..1_440
     return when (ruleType) {
         EarnItRuleStore.RuleType.EarnRewardTime -> draft.canSave
-        EarnItRuleStore.RuleType.CompleteToUnlock -> rule.requirements.isNotEmpty() && draft.selectedRewardApps.isNotEmpty() && validSchedule
+        EarnItRuleStore.RuleType.CompleteToUnlock -> requirements.isNotEmpty() && draft.selectedRewardApps.isNotEmpty() && validSchedule
         EarnItRuleStore.RuleType.ScheduledBlock -> draft.selectedRewardApps.isNotEmpty() && validSchedule
     }
 }

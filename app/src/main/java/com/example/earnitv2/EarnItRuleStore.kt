@@ -165,22 +165,23 @@ object EarnItRuleStore {
 
     fun newRuleFromDefault(context: Context, type: RuleType = RuleType.EarnRewardTime): Rule {
         val baseRule = getRule(context)
-        val earnApps = baseRule.earnApps
-        return baseRule.copy(
+        return Rule(
             id = newRuleId(),
-            enabled = true,
-            type = type,
-            productiveApps = if (type == RuleType.EarnRewardTime) earnApps else emptyList(),
-            requirements = if (type == RuleType.CompleteToUnlock) {
-                listOf(RuleRequirement(earnApps.first(), requiredSeconds = 10 * 60L))
-            } else {
-                emptyList()
-            },
+            productivePackage = "",
+            productiveName = "",
+            blockedApps = emptyList(),
             rewardSecondsPerProductiveSecond = if (type == RuleType.EarnRewardTime) {
                 baseRule.rewardSecondsPerProductiveSecond
             } else {
                 1
-            }
+            },
+            activeDays = baseRule.activeDays,
+            startMinute = baseRule.startMinute,
+            endMinute = baseRule.endMinute,
+            enabled = true,
+            type = type,
+            productiveApps = emptyList(),
+            requirements = emptyList()
         )
     }
 

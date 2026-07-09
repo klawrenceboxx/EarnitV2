@@ -18,6 +18,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
@@ -26,6 +27,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 
 data class HomeRuleUiState(
@@ -54,50 +56,60 @@ fun EarnItHome(
     onDeleteRule: (EarnItRuleStore.Rule) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
-    ) {
+    Column(modifier = modifier.fillMaxSize()) {
         HomeTopBar(onOpenSettings = onOpenSettings)
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
-        if (permissionState.needsAttention) {
-            HomeAttentionBanner(
-                permissionState = permissionState,
-                onOpenUsageAccessSettings = onOpenUsageAccessSettings,
-                onOpenAccessibilitySettings = onOpenAccessibilitySettings
-            )
-        }
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                .verticalScroll(rememberScrollState())
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            if (permissionState.needsAttention) {
+                HomeAttentionBanner(
+                    permissionState = permissionState,
+                    onOpenUsageAccessSettings = onOpenUsageAccessSettings,
+                    onOpenAccessibilitySettings = onOpenAccessibilitySettings
+                )
+            }
 
-        if (rules.isEmpty()) {
-            HomeEmptyState(onAddRule = onAddRule)
-        } else {
-            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                rules.forEach { homeRule ->
-                    LiveRuleCard(
-                        homeRule = homeRule,
-                        onOpenRuleDetail = onOpenRuleDetail,
-                        onOpenEarnApp = onOpenEarnApp
-                    )
+            if (rules.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    contentAlignment = Alignment.Center
+                ) {
+                    HomeEmptyState(onAddRule = onAddRule)
                 }
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                    rules.forEach { homeRule ->
+                        LiveRuleCard(
+                            homeRule = homeRule,
+                            onOpenRuleDetail = onOpenRuleDetail,
+                            onOpenEarnApp = onOpenEarnApp
+                        )
+                    }
+                }
+                OutlinedButton(onClick = onAddRule, modifier = Modifier.fillMaxWidth()) {
+                    Text(text = "+ Add Rule")
+                }
+                TemporaryRuleManagement(
+                    rules = rules.map { it.rule },
+                    expanded = manageRulesOpen,
+                    onToggleExpanded = onToggleManageRules,
+                    onEditRule = onEditRule,
+                    onToggleRuleEnabled = onToggleRuleEnabled,
+                    onDeleteRule = onDeleteRule
+                )
             }
-            OutlinedButton(onClick = onAddRule, modifier = Modifier.fillMaxWidth()) {
-                Text(text = "+ Add Rule")
-            }
-            TemporaryRuleManagement(
-                rules = rules.map { it.rule },
-                expanded = manageRulesOpen,
-                onToggleExpanded = onToggleManageRules,
-                onEditRule = onEditRule,
-                onToggleRuleEnabled = onToggleRuleEnabled,
-                onDeleteRule = onDeleteRule
-            )
         }
     }
 }
-
 fun homeRuleUiState(
     state: RuleDashboardState,
     usageAccessGranted: Boolean,
@@ -147,14 +159,13 @@ fun homeRuleUiState(
 @Composable
 private fun HomeTopBar(onOpenSettings: () -> Unit) {
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 14.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Column {
-            Text(text = "EarnIt", style = MaterialTheme.typography.headlineMedium)
-            Text(text = "Home", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
+        Text(text = "EarnIt", style = MaterialTheme.typography.headlineSmall)
         TextButton(onClick = onOpenSettings) {
             Text(text = "Settings")
         }
@@ -200,15 +211,13 @@ private fun HomeAttentionBanner(
 @Composable
 private fun HomeEmptyState(onAddRule: () -> Unit) {
     Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 96.dp),
+        modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         Text(text = "No Rules yet", style = MaterialTheme.typography.headlineSmall)
         Text(
-            text = "Create a Rule to start earning access to your Reward Apps.",
+            text = "Create a Rule to start earning access to your\nReward Apps.",
             style = MaterialTheme.typography.bodyMedium
         )
         Button(onClick = onAddRule) {
