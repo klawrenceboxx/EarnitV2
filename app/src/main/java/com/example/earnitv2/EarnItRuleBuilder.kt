@@ -17,6 +17,10 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 
@@ -64,6 +68,8 @@ fun EarnItRuleBuilder(
     onToggleBlockedApp: (String) -> Unit,
     onSelectRatio: (Int) -> Unit,
     onToggleActiveDay: (Int) -> Unit,
+    onSelectActiveDays: (Set<Int>) -> Unit,
+    onSelectAllDay: () -> Unit,
     onEditStartTime: () -> Unit,
     onEditEndTime: () -> Unit,
     onSaveRule: () -> Unit,
@@ -112,6 +118,8 @@ fun EarnItRuleBuilder(
             )
             RuleBuilderStep.Exchange -> ExchangeStep(
                 selectedRatio = selectedRatio,
+                selectedEarnAppName = draft.selectedEarnApp?.name,
+                selectedRewardAppCount = draft.selectedRewardApps.size,
                 onSelectRatio = onSelectRatio
             )
             RuleBuilderStep.Schedule -> ScheduleStep(
@@ -119,6 +127,8 @@ fun EarnItRuleBuilder(
                 selectedStartMinute = selectedStartMinute,
                 selectedEndMinute = selectedEndMinute,
                 onToggleActiveDay = onToggleActiveDay,
+                onSelectActiveDays = onSelectActiveDays,
+                onSelectAllDay = onSelectAllDay,
                 onEditStartTime = onEditStartTime,
                 onEditEndTime = onEditEndTime
             )
@@ -418,17 +428,76 @@ private fun List<EarnItRuleStore.LaunchableApp>.builderFilteredBy(query: String)
 }
 
 @Composable
-private fun ExchangeStep(selectedRatio: Int, onSelectRatio: (Int) -> Unit) {
+private fun ExchangeStep(
+    selectedRatio: Int,
+    selectedEarnAppName: String?,
+    selectedRewardAppCount: Int,
+    onSelectRatio: (Int) -> Unit
+) {
+    val earnAppName = selectedEarnAppName ?: "your Earn App"
     EditorSection(
         title = "How much Reward Time should you earn?",
         helperText = "Choose the exchange for productive time."
     ) {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        ExchangeStatement(
+            earnAppName = earnAppName,
+            ratio = selectedRatio
+        )
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             EarnItRuleStore.allowedRatios.forEach { ratio ->
-                Button(onClick = { onSelectRatio(ratio) }) {
-                    Text(text = if (selectedRatio == ratio) "Selected ${EarnItUiFormatters.exchangeSummary(ratio)}" else EarnItUiFormatters.exchangeSummary(ratio))
-                }
+                ExchangeOption(
+                    ratio = ratio,
+                    selected = selectedRatio == ratio,
+                    onSelectRatio = onSelectRatio
+                )
             }
+        }
+        Text(
+            text = if (selectedRewardAppCount == 1) {
+                "This Reward Time applies to 1 selected Reward App."
+            } else {
+                "This Reward Time applies to $selectedRewardAppCount selected Reward Apps."
+            },
+            style = MaterialTheme.typography.bodySmall
+        )
+    }
+}
+
+@Composable
+private fun ExchangeStatement(earnAppName: String, ratio: Int) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Text(text = "Every", style = MaterialTheme.typography.labelSmall)
+            Text(text = "10 min", style = MaterialTheme.typography.titleMedium)
+            Text(text = "in $earnAppName earns", style = MaterialTheme.typography.bodyMedium)
+            Text(text = "${ratio * 10} min Reward Time", style = MaterialTheme.typography.titleMedium)
+        }
+    }
+}
+
+@Composable
+private fun ExchangeOption(
+    ratio: Int,
+    selected: Boolean,
+    onSelectRatio: (Int) -> Unit
+) {
+    OutlinedButton(onClick = { onSelectRatio(ratio) }, modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(text = "${ratio * 10} min Reward Time")
+            Text(
+                text = if (selected) "Selected" else "Choose",
+                style = MaterialTheme.typography.labelSmall
+            )
         }
     }
 }
@@ -439,39 +508,244 @@ private fun ScheduleStep(
     selectedStartMinute: Int,
     selectedEndMinute: Int,
     onToggleActiveDay: (Int) -> Unit,
+    onSelectActiveDays: (Set<Int>) -> Unit,
+    onSelectAllDay: () -> Unit,
     onEditStartTime: () -> Unit,
     onEditEndTime: () -> Unit
 ) {
+    var customDaysOpen by remember(selectedActiveDays) {
+        mutableStateOf(dayPreset(selectedActiveDays) == ScheduleDayPreset.Custom)
+    }
+
     EditorSection(
         title = "When should this Rule apply?",
         helperText = "Outside these times, Reward Apps are unrestricted by this Rule."
     ) {
-        DayButtons(selectedActiveDays = selectedActiveDays, onToggleActiveDay = onToggleActiveDay)
-        Button(onClick = onEditStartTime, modifier = Modifier.fillMaxWidth()) {
-            Text(text = "Start: ${EarnItRuleStore.formatMinute(selectedStartMinute)}")
+        ScheduleDayPresets(
+            selectedActiveDays = selectedActiveDays,
+            customDaysOpen = customDaysOpen,
+            onSelectActiveDays = { days ->
+                customDaysOpen = false
+                onSelectActiveDays(days)
+            },
+            onShowCustomDays = {
+                customDaysOpen = true
+            }
+        )
+        if (customDaysOpen || dayPreset(selectedActiveDays) == ScheduleDayPreset.Custom) {
+            DayButtons(selectedActiveDays = selectedActiveDays, onToggleActiveDay = onToggleActiveDay)
         }
-        Button(onClick = onEditEndTime, modifier = Modifier.fillMaxWidth()) {
-            Text(text = "End: ${EarnItRuleStore.formatMinute(selectedEndMinute)}")
+        ScheduleTimePresets(
+            selectedStartMinute = selectedStartMinute,
+            selectedEndMinute = selectedEndMinute,
+            onSelectAllDay = onSelectAllDay,
+            onEditStartTime = onEditStartTime,
+            onEditEndTime = onEditEndTime
+        )
+    }
+}
+
+private enum class ScheduleDayPreset {
+    EveryDay,
+    Weekdays,
+    Custom
+}
+
+@Composable
+private fun ScheduleDayPresets(
+    selectedActiveDays: Set<Int>,
+    customDaysOpen: Boolean,
+    onSelectActiveDays: (Set<Int>) -> Unit,
+    onShowCustomDays: () -> Unit
+) {
+    val selectedPreset = dayPreset(selectedActiveDays)
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(text = "Active days", style = MaterialTheme.typography.titleSmall)
+        SchedulePresetButton(
+            label = "Every day",
+            selected = selectedPreset == ScheduleDayPreset.EveryDay && !customDaysOpen,
+            onClick = { onSelectActiveDays(EarnItRuleStore.allDays.toSet()) }
+        )
+        SchedulePresetButton(
+            label = "Weekdays",
+            selected = selectedPreset == ScheduleDayPreset.Weekdays && !customDaysOpen,
+            onClick = { onSelectActiveDays(setOf(1, 2, 3, 4, 5)) }
+        )
+        SchedulePresetButton(
+            label = "Custom",
+            selected = customDaysOpen || selectedPreset == ScheduleDayPreset.Custom,
+            onClick = onShowCustomDays
+        )
+    }
+}
+
+@Composable
+private fun ScheduleTimePresets(
+    selectedStartMinute: Int,
+    selectedEndMinute: Int,
+    onSelectAllDay: () -> Unit,
+    onEditStartTime: () -> Unit,
+    onEditEndTime: () -> Unit
+) {
+    val allDay = selectedStartMinute == 0 && selectedEndMinute == 1_440
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(text = "During", style = MaterialTheme.typography.titleSmall)
+        SchedulePresetButton(
+            label = "All day",
+            selected = allDay,
+            onClick = onSelectAllDay
+        )
+        SchedulePresetButton(
+            label = "Set hours",
+            selected = !allDay,
+            onClick = { if (allDay) onEditStartTime() }
+        )
+        if (!allDay) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = onEditStartTime, modifier = Modifier.weight(1f)) {
+                    Text(text = "Start ${EarnItRuleStore.formatMinute(selectedStartMinute)}")
+                }
+                OutlinedButton(onClick = onEditEndTime, modifier = Modifier.weight(1f)) {
+                    Text(text = "End ${EarnItRuleStore.formatMinute(selectedEndMinute)}")
+                }
+            }
         }
+        Text(
+            text = "Outside these times, Reward Apps are unrestricted by this Rule.",
+            style = MaterialTheme.typography.bodySmall
+        )
+    }
+}
+
+@Composable
+private fun SchedulePresetButton(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    OutlinedButton(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(text = label)
+            Text(text = if (selected) "Selected" else "Choose", style = MaterialTheme.typography.labelSmall)
+        }
+    }
+}
+
+private fun dayPreset(activeDays: Set<Int>): ScheduleDayPreset {
+    return when (activeDays) {
+        EarnItRuleStore.allDays.toSet() -> ScheduleDayPreset.EveryDay
+        setOf(1, 2, 3, 4, 5) -> ScheduleDayPreset.Weekdays
+        else -> ScheduleDayPreset.Custom
     }
 }
 
 @Composable
 private fun ReviewStep(draft: RuleDraftUiState) {
+    val missingItems = reviewMissingItems(draft)
     EditorSection(
         title = "Review Rule",
-        helperText = "Save this Rule when the agreement looks right."
+        helperText = "Read this as the agreement EarnIt will enforce."
     ) {
-        if (draft.reviewSummary.isBlank()) {
-            Text(text = "Finish the previous steps to review this Rule.")
-        } else {
-            draft.reviewSummary.lines().forEach { line ->
-                Text(text = line, style = MaterialTheme.typography.bodyMedium)
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+        ) {
+            Column(
+                modifier = Modifier.padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                ReviewAgreementSection(
+                    label = "WHEN I USE",
+                    value = draft.selectedEarnApp?.name ?: "Choose an Earn App before saving."
+                )
+                ReviewAgreementSection(
+                    label = "I EARN",
+                    value = if (draft.exchangeSelection in EarnItRuleStore.allowedRatios) {
+                        EarnItUiFormatters.exchangeSummary(draft.exchangeSelection)
+                    } else {
+                        "Choose a Reward Time exchange before saving."
+                    }
+                )
+                ReviewAgreementSection(
+                    label = "FOR",
+                    value = if (draft.selectedRewardApps.isEmpty()) {
+                        "Choose at least one Reward App before saving."
+                    } else {
+                        draft.selectedRewardApps.joinToString(", ") { it.name }
+                    }
+                )
+                ReviewAgreementSection(
+                    label = "ACTIVE",
+                    value = if (reviewScheduleIsValid(draft)) {
+                        reviewScheduleSummary(draft.activeDays, draft.startMinute, draft.endMinute)
+                    } else {
+                        "Choose when this Rule should be active before saving."
+                    }
+                )
+            }
+        }
+
+        if (missingItems.isNotEmpty()) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+            ) {
+                Column(
+                    modifier = Modifier.padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text(text = "Before saving, finish:", style = MaterialTheme.typography.titleSmall)
+                    missingItems.forEach { item ->
+                        Text(text = item, style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
             }
         }
     }
 }
 
+@Composable
+private fun ReviewAgreementSection(label: String, value: String) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(text = label, style = MaterialTheme.typography.labelSmall)
+        Text(text = value, style = MaterialTheme.typography.bodyLarge)
+    }
+}
+
+private fun reviewMissingItems(draft: RuleDraftUiState): List<String> {
+    return buildList {
+        if (draft.selectedEarnApp == null) add("Earn App")
+        if (draft.selectedRewardApps.isEmpty()) add("Reward App")
+        if (draft.exchangeSelection !in EarnItRuleStore.allowedRatios) add("Reward Time exchange")
+        if (!reviewScheduleIsValid(draft)) add("Active schedule")
+    }
+}
+
+private fun reviewScheduleIsValid(draft: RuleDraftUiState): Boolean {
+    return draft.activeDays.any { it in EarnItRuleStore.allDays } &&
+        draft.startMinute in 0..1_439 &&
+        draft.endMinute in 1..1_440
+}
+
+private fun reviewScheduleSummary(activeDays: Set<Int>, startMinute: Int, endMinute: Int): String {
+    val validDays = activeDays.filter { it in EarnItRuleStore.allDays }.toSet()
+    val dayLabel = when (validDays) {
+        EarnItRuleStore.allDays.toSet() -> "Every day"
+        setOf(1, 2, 3, 4, 5) -> "Weekdays"
+        else -> validDays.sorted().joinToString(" ") { EarnItRuleStore.dayShortName(it) }
+    }
+    val timeLabel = if (startMinute == 0 && endMinute == 1_440) {
+        "all day"
+    } else {
+        "${EarnItRuleStore.formatMinute(startMinute)}-${EarnItRuleStore.formatMinute(endMinute)}"
+    }
+    return "$dayLabel, $timeLabel"
+}
 @Composable
 private fun BuilderActions(
     currentStep: RuleBuilderStep,
