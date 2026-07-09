@@ -66,6 +66,8 @@ class MainActivity : ComponentActivity() {
     private var manageRulesOpen by mutableStateOf(false)
     private var selectedRuleDetailId by mutableStateOf<String?>(null)
     private var settingsOpen by mutableStateOf(false)
+    private var ruleTypeSelectionOpen by mutableStateOf(false)
+    private var unavailableRuleType by mutableStateOf<RuleTypeOption?>(null)
     private var firstLaunchComplete by mutableStateOf(false)
     private var firstLaunchStep by mutableStateOf(FirstLaunchStep.ValueIntroduction)
     private var builderStep by mutableStateOf(RuleBuilderStep.Earn)
@@ -113,12 +115,18 @@ class MainActivity : ComponentActivity() {
                             manageRulesOpen = manageRulesOpen,
                             selectedRuleDetailId = selectedRuleDetailId,
                             settingsOpen = settingsOpen,
+                            ruleTypeSelectionOpen = ruleTypeSelectionOpen,
+                            unavailableRuleType = unavailableRuleType,
                             onOpenUsageAccessSettings = ::openUsageAccessSettings,
                             onOpenAccessibilitySettings = ::openAccessibilitySettings,
                             onOpenSettings = { settingsOpen = true },
                             onCloseSettings = { settingsOpen = false },
                             onOpenEarnApp = ::openEarnApp,
                             onAddRule = ::startAddingRule,
+                            onBackFromRuleTypeSelection = ::closeRuleTypeSelection,
+                            onBackFromUnavailableRuleType = { unavailableRuleType = null },
+                            onSelectEarnRewardTimeRule = ::startEarnRewardTimeRule,
+                            onSelectUnavailableRuleType = { unavailableRuleType = it },
                             onEditRule = ::startEditingRule,
                             onToggleRuleEnabled = ::toggleRuleEnabled,
                             onDeleteRule = ::deleteRule,
@@ -210,12 +218,26 @@ class MainActivity : ComponentActivity() {
         selectedRuleDetailId = null
         builderStep = RuleBuilderStep.Earn
         manageRulesOpen = false
+        unavailableRuleType = null
+        ruleTypeSelectionOpen = true
+    }
+
+    private fun closeRuleTypeSelection() {
+        unavailableRuleType = null
+        ruleTypeSelectionOpen = false
+    }
+
+    private fun startEarnRewardTimeRule() {
+        ruleTypeSelectionOpen = false
+        unavailableRuleType = null
         startEditingRule(EarnItRuleStore.newRuleFromDefault(this))
     }
 
     private fun startEditingRule(rule: EarnItRuleStore.Rule) {
         settingsOpen = false
         selectedRuleDetailId = null
+        ruleTypeSelectionOpen = false
+        unavailableRuleType = null
         builderStep = RuleBuilderStep.Earn
         manageRulesOpen = false
         editingRuleTemplate = rule
@@ -234,6 +256,7 @@ class MainActivity : ComponentActivity() {
     private fun cancelEditingRule() {
         builderStep = RuleBuilderStep.Earn
         editingRuleTemplate = null
+        unavailableRuleType = null
         productivePickerOpen = false
         blockedPickerOpen = false
     }
@@ -422,12 +445,18 @@ fun Dashboard(
     manageRulesOpen: Boolean,
     selectedRuleDetailId: String?,
     settingsOpen: Boolean,
+    ruleTypeSelectionOpen: Boolean,
+    unavailableRuleType: RuleTypeOption?,
     onOpenUsageAccessSettings: () -> Unit,
     onOpenAccessibilitySettings: () -> Unit,
     onOpenSettings: () -> Unit,
     onCloseSettings: () -> Unit,
     onOpenEarnApp: (String) -> Unit,
     onAddRule: () -> Unit,
+    onBackFromRuleTypeSelection: () -> Unit,
+    onBackFromUnavailableRuleType: () -> Unit,
+    onSelectEarnRewardTimeRule: () -> Unit,
+    onSelectUnavailableRuleType: (RuleTypeOption) -> Unit,
     onEditRule: (EarnItRuleStore.Rule) -> Unit,
     onToggleRuleEnabled: (EarnItRuleStore.Rule) -> Unit,
     onDeleteRule: (EarnItRuleStore.Rule) -> Unit,
@@ -470,7 +499,20 @@ fun Dashboard(
             homeRules.firstOrNull { it.rule.id == selectedRuleId }
         }
 
-        if (settingsOpen) {
+        if (unavailableRuleType != null) {
+            EarnItUnavailableRuleType(
+                option = unavailableRuleType,
+                onBack = onBackFromUnavailableRuleType,
+                modifier = modifier
+            )
+        } else if (ruleTypeSelectionOpen) {
+            EarnItRuleTypeSelection(
+                onBack = onBackFromRuleTypeSelection,
+                onSelectEarnRewardTime = onSelectEarnRewardTimeRule,
+                onSelectUnavailableRuleType = onSelectUnavailableRuleType,
+                modifier = modifier
+            )
+        } else if (settingsOpen) {
             EarnItSettings(
                 permissionState = permissionState,
                 hasRules = homeRules.isNotEmpty(),
@@ -863,12 +905,18 @@ fun DashboardPreview() {
             manageRulesOpen = false,
             selectedRuleDetailId = null,
             settingsOpen = false,
+            ruleTypeSelectionOpen = false,
+            unavailableRuleType = null,
             onOpenUsageAccessSettings = {},
             onOpenAccessibilitySettings = {},
             onOpenSettings = {},
             onCloseSettings = {},
             onOpenEarnApp = {},
             onAddRule = {},
+            onBackFromRuleTypeSelection = {},
+            onBackFromUnavailableRuleType = {},
+            onSelectEarnRewardTimeRule = {},
+            onSelectUnavailableRuleType = {},
             onEditRule = {},
             onToggleRuleEnabled = {},
             onDeleteRule = {},
