@@ -16,6 +16,7 @@ object RewardLedger {
     private const val KEY_PRODUCTIVE_CREDITED_SECONDS = "productive_credited_seconds"
     private const val KEY_REWARD_ISSUED_SECONDS = "reward_issued_seconds"
     private const val KEY_REWARD_CONSUMED_SECONDS = "reward_consumed_seconds"
+    private const val KEY_REQUIREMENT_PROGRESS_SECONDS = "requirement_progress_seconds"
 
     data class Snapshot(
         val productiveCreditedSeconds: Long,
@@ -91,6 +92,16 @@ object RewardLedger {
         usageStatsManager: UsageStatsManager,
         rule: EarnItRuleStore.Rule
     ): Long {
+        return rule.earnAppPackages.sumOf { packageName ->
+            activeAppUsageSecondsToday(usageStatsManager, rule, packageName)
+        }
+    }
+
+    fun activeAppUsageSecondsToday(
+        usageStatsManager: UsageStatsManager,
+        rule: EarnItRuleStore.Rule,
+        packageName: String
+    ): Long {
         val now = System.currentTimeMillis()
         val startOfDay = Calendar.getInstance().apply {
             set(Calendar.HOUR_OF_DAY, 0)
@@ -105,7 +116,7 @@ object RewardLedger {
 
         while (events.hasNextEvent()) {
             events.getNextEvent(event)
-            if (event.packageName != rule.productivePackage) continue
+            if (event.packageName != packageName) continue
 
             when (event.eventType) {
                 UsageEvents.Event.ACTIVITY_RESUMED, UsageEvents.Event.MOVE_TO_FOREGROUND -> {
@@ -127,6 +138,44 @@ object RewardLedger {
         }
 
         return totalMillis / 1_000L
+    }
+
+    @Synchronized
+    fun creditCompletionProgress(
+        context: Context,
+        rule: EarnItRuleStore.Rule,
+        usageStatsManager: UsageStatsManager
+    ): Map<String, Long> {
+        val prefs = currentPrefs(context, rule)
+        val updates = rule.requirements.associate { requirement ->
+            val progress = activeAppUsageSecondsToday(usageStatsManager, rule, requirement.app.packageName)
+                .coerceAtLeast(0L)
+            requirement.app.packageName to progress
+        }
+        val editor = prefs.edit()
+        updates.forEach { (packageName, progress) ->
+            editor.putLong(requirementKey(rule, packageName), progress)
+        }
+        editor.commit()
+        return updates
+    }
+
+    @Synchronized
+    fun completionProgress(context: Context, rule: EarnItRuleStore.Rule): Map<String, Long> {
+        val prefs = currentPrefs(context, rule)
+        return rule.requirements.associate { requirement ->
+            requirement.app.packageName to prefs.getLong(requirementKey(rule, requirement.app.packageName), 0L)
+        }
+    }
+
+    @Synchronized
+    fun deleteRuleState(context: Context, ruleId: String) {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val prefix = "${ruleId}_"
+        val keys = prefs.all.keys.filter { it.startsWith(prefix) }
+        val editor = prefs.edit()
+        keys.forEach { editor.remove(it) }
+        editor.commit()
     }
 
     private fun activeOverlapMillis(startMillis: Long, endMillis: Long, rule: EarnItRuleStore.Rule): Long {
@@ -205,10 +254,16 @@ object RewardLedger {
         return "${rule.id}_$key"
     }
 
+    private fun requirementKey(rule: EarnItRuleStore.Rule, packageName: String): String {
+        return "${rule.id}_${KEY_REQUIREMENT_PROGRESS_SECONDS}_$packageName"
+    }
+
     private fun EarnItRuleStore.Rule.signature(): String {
         val blockedRuleId = blockedApps.map { it.packageName }.sorted().joinToString(",")
         val activeDaysId = activeDays.sorted().joinToString(",")
-        return "$productivePackage|$blockedRuleId|$rewardSecondsPerProductiveSecond|$activeDaysId|$startMinute|$endMinute"
+        val earnRuleId = earnApps.map { it.packageName }.sorted().joinToString(",")
+        val requirementsId = requirements.joinToString(",") { "${it.app.packageName}:${it.requiredSeconds}" }
+        return "$type|$earnRuleId|$blockedRuleId|$rewardSecondsPerProductiveSecond|$activeDaysId|$startMinute|$endMinute|$requirementsId"
     }
 
     private fun todayKey(): String {

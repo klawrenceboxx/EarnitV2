@@ -50,6 +50,7 @@ class MainActivity : ComponentActivity() {
     private var editingRuleTemplate by mutableStateOf<EarnItRuleStore.Rule?>(null)
     private var launchableApps by mutableStateOf(emptyList<EarnItRuleStore.LaunchableApp>())
     private var selectedProductivePackage by mutableStateOf("")
+    private var selectedProductivePackages by mutableStateOf(emptySet<String>())
     private var selectedBlockedPackages by mutableStateOf(emptySet<String>())
     private var selectedRatio by mutableStateOf(1)
     private var selectedActiveDays by mutableStateOf(EarnItRuleStore.allDays.toSet())
@@ -99,6 +100,7 @@ class MainActivity : ComponentActivity() {
                             editingRule = editingRuleTemplate,
                             apps = launchableApps,
                             selectedProductivePackage = selectedProductivePackage,
+                            selectedProductivePackages = selectedProductivePackages,
                             selectedBlockedPackages = selectedBlockedPackages,
                             selectedRatio = selectedRatio,
                             selectedActiveDays = selectedActiveDays,
@@ -125,8 +127,7 @@ class MainActivity : ComponentActivity() {
                             onAddRule = ::startAddingRule,
                             onBackFromRuleTypeSelection = ::closeRuleTypeSelection,
                             onBackFromUnavailableRuleType = { unavailableRuleType = null },
-                            onSelectEarnRewardTimeRule = ::startEarnRewardTimeRule,
-                            onSelectUnavailableRuleType = { unavailableRuleType = it },
+                            onSelectRuleType = ::startRuleType,
                             onEditRule = ::startEditingRule,
                             onToggleRuleEnabled = ::toggleRuleEnabled,
                             onDeleteRule = ::deleteRule,
@@ -227,10 +228,10 @@ class MainActivity : ComponentActivity() {
         ruleTypeSelectionOpen = false
     }
 
-    private fun startEarnRewardTimeRule() {
+    private fun startRuleType(ruleType: EarnItRuleStore.RuleType) {
         ruleTypeSelectionOpen = false
         unavailableRuleType = null
-        startEditingRule(EarnItRuleStore.newRuleFromDefault(this))
+        startEditingRule(EarnItRuleStore.newRuleFromDefault(this, ruleType))
     }
 
     private fun startEditingRule(rule: EarnItRuleStore.Rule) {
@@ -238,10 +239,11 @@ class MainActivity : ComponentActivity() {
         selectedRuleDetailId = null
         ruleTypeSelectionOpen = false
         unavailableRuleType = null
-        builderStep = RuleBuilderStep.Earn
+        builderStep = if (rule.type == EarnItRuleStore.RuleType.ScheduledBlock) RuleBuilderStep.Reward else RuleBuilderStep.Earn
         manageRulesOpen = false
         editingRuleTemplate = rule
-        selectedProductivePackage = rule.productivePackage
+        selectedProductivePackage = rule.earnApps.firstOrNull()?.packageName ?: rule.productivePackage
+        selectedProductivePackages = rule.earnApps.map { it.packageName }.toSet()
         selectedBlockedPackages = rule.blockedApps.map { it.packageName }.toSet()
         selectedRatio = rule.rewardSecondsPerProductiveSecond
         selectedActiveDays = rule.activeDays
@@ -262,8 +264,12 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun selectProductiveApp(packageName: String) {
-        selectedProductivePackage = packageName
-        productivePickerOpen = false
+        selectedProductivePackages = if (packageName in selectedProductivePackages) {
+            (selectedProductivePackages - packageName).ifEmpty { setOf(packageName) }
+        } else {
+            selectedProductivePackages + packageName
+        }
+        selectedProductivePackage = selectedProductivePackages.firstOrNull() ?: packageName
         productiveSearch = ""
     }
 
@@ -323,8 +329,16 @@ class MainActivity : ComponentActivity() {
 
     private fun saveRule() {
         val editingRule = editingRuleTemplate ?: return
-        val productiveApp = launchableApps.firstOrNull { it.packageName == selectedProductivePackage }
-            ?: EarnItRuleStore.LaunchableApp(editingRule.productivePackage, editingRule.productiveName)
+        val savedEarnApps = editingRule.earnApps.associateBy { it.packageName }
+        val launchableEarnApps = launchableApps.associateBy { it.packageName }
+        val productiveApps = selectedProductivePackages.mapNotNull { packageName ->
+            launchableEarnApps[packageName]?.let {
+                EarnItRuleStore.RuleApp(packageName = it.packageName, name = it.name)
+            } ?: savedEarnApps[packageName]
+        }
+        val primaryProductiveApp = productiveApps.firstOrNull()
+            ?: EarnItRuleStore.RuleApp(editingRule.productivePackage, editingRule.productiveName)
+        if (editingRule.type == EarnItRuleStore.RuleType.EarnRewardTime && productiveApps.isEmpty()) return
         val savedBlockedApps = editingRule.blockedApps.associateBy { it.packageName }
         val launchableBlockedApps = launchableApps.associateBy { it.packageName }
         val blockedApps = selectedBlockedPackages.mapNotNull { packageName ->
@@ -336,8 +350,8 @@ class MainActivity : ComponentActivity() {
 
         val rule = EarnItRuleStore.Rule(
             id = editingRule.id,
-            productivePackage = productiveApp.packageName,
-            productiveName = productiveApp.name,
+            productivePackage = primaryProductiveApp.packageName,
+            productiveName = primaryProductiveApp.name,
             blockedApps = blockedApps,
             rewardSecondsPerProductiveSecond = selectedRatio,
             activeDays = selectedActiveDays,
@@ -429,6 +443,7 @@ fun Dashboard(
     editingRule: EarnItRuleStore.Rule?,
     apps: List<EarnItRuleStore.LaunchableApp>,
     selectedProductivePackage: String,
+    selectedProductivePackages: Set<String>,
     selectedBlockedPackages: Set<String>,
     selectedRatio: Int,
     selectedActiveDays: Set<Int>,
@@ -455,8 +470,7 @@ fun Dashboard(
     onAddRule: () -> Unit,
     onBackFromRuleTypeSelection: () -> Unit,
     onBackFromUnavailableRuleType: () -> Unit,
-    onSelectEarnRewardTimeRule: () -> Unit,
-    onSelectUnavailableRuleType: (RuleTypeOption) -> Unit,
+    onSelectRuleType: (EarnItRuleStore.RuleType) -> Unit,
     onEditRule: (EarnItRuleStore.Rule) -> Unit,
     onToggleRuleEnabled: (EarnItRuleStore.Rule) -> Unit,
     onDeleteRule: (EarnItRuleStore.Rule) -> Unit,
@@ -499,17 +513,10 @@ fun Dashboard(
             homeRules.firstOrNull { it.rule.id == selectedRuleId }
         }
 
-        if (unavailableRuleType != null) {
-            EarnItUnavailableRuleType(
-                option = unavailableRuleType,
-                onBack = onBackFromUnavailableRuleType,
-                modifier = modifier
-            )
-        } else if (ruleTypeSelectionOpen) {
+        if (ruleTypeSelectionOpen) {
             EarnItRuleTypeSelection(
                 onBack = onBackFromRuleTypeSelection,
-                onSelectEarnRewardTime = onSelectEarnRewardTimeRule,
-                onSelectUnavailableRuleType = onSelectUnavailableRuleType,
+                onSelectRuleType = onSelectRuleType,
                 modifier = modifier
             )
         } else if (settingsOpen) {
@@ -572,6 +579,7 @@ fun Dashboard(
                 rule = editingRule,
                 apps = apps,
                 selectedProductivePackage = selectedProductivePackage,
+                selectedProductivePackages = selectedProductivePackages,
                 selectedBlockedPackages = selectedBlockedPackages,
                 selectedRatio = selectedRatio,
                 selectedActiveDays = selectedActiveDays,
@@ -650,6 +658,7 @@ private fun RuleEditor(
     rule: EarnItRuleStore.Rule,
     apps: List<EarnItRuleStore.LaunchableApp>,
     selectedProductivePackage: String,
+    selectedProductivePackages: Set<String>,
     selectedBlockedPackages: Set<String>,
     selectedRatio: Int,
     selectedActiveDays: Set<Int>,
@@ -682,6 +691,7 @@ private fun RuleEditor(
         rule = rule,
         apps = apps,
         selectedProductivePackage = selectedProductivePackage,
+        selectedProductivePackages = selectedProductivePackages,
         selectedBlockedPackages = selectedBlockedPackages,
         selectedRatio = selectedRatio,
         selectedActiveDays = selectedActiveDays,
@@ -889,6 +899,7 @@ fun DashboardPreview() {
             editingRule = null,
             apps = emptyList(),
             selectedProductivePackage = "com.duolingo",
+            selectedProductivePackages = setOf("com.duolingo"),
             selectedBlockedPackages = setOf("com.instagram.android"),
             selectedRatio = 1,
             selectedActiveDays = EarnItRuleStore.allDays.toSet(),
@@ -915,8 +926,7 @@ fun DashboardPreview() {
             onAddRule = {},
             onBackFromRuleTypeSelection = {},
             onBackFromUnavailableRuleType = {},
-            onSelectEarnRewardTimeRule = {},
-            onSelectUnavailableRuleType = {},
+            onSelectRuleType = {},
             onEditRule = {},
             onToggleRuleEnabled = {},
             onDeleteRule = {},

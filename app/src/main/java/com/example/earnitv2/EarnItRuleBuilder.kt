@@ -32,14 +32,14 @@ enum class RuleBuilderStep(val label: String) {
     Schedule("Schedule"),
     Review("Review");
 
-    fun previous(): RuleBuilderStep? {
-        val index = entries.indexOf(this)
-        return entries.getOrNull(index - 1)
+    fun previous(steps: List<RuleBuilderStep>): RuleBuilderStep? {
+        val index = steps.indexOf(this)
+        return steps.getOrNull(index - 1)
     }
 
-    fun next(): RuleBuilderStep? {
-        val index = entries.indexOf(this)
-        return entries.getOrNull(index + 1)
+    fun next(steps: List<RuleBuilderStep>): RuleBuilderStep? {
+        val index = steps.indexOf(this)
+        return steps.getOrNull(index + 1)
     }
 }
 
@@ -48,6 +48,7 @@ fun EarnItRuleBuilder(
     rule: EarnItRuleStore.Rule,
     apps: List<EarnItRuleStore.LaunchableApp>,
     selectedProductivePackage: String,
+    selectedProductivePackages: Set<String>,
     selectedBlockedPackages: Set<String>,
     selectedRatio: Int,
     selectedActiveDays: Set<Int>,
@@ -76,10 +77,13 @@ fun EarnItRuleBuilder(
     onSaveRule: () -> Unit,
     onCancel: () -> Unit
 ) {
+    val steps = builderStepsFor(rule.type)
+    val currentStep = if (builderStep in steps) builderStep else steps.first()
     val draft = ruleDraftUiState(
         rule = rule,
         apps = apps,
         selectedProductivePackage = selectedProductivePackage,
+        selectedProductivePackages = selectedProductivePackages,
         selectedBlockedPackages = selectedBlockedPackages,
         selectedRatio = selectedRatio,
         selectedActiveDays = selectedActiveDays,
@@ -90,22 +94,28 @@ fun EarnItRuleBuilder(
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         BuilderHeader(
             title = if (rule.id == "default" || rule.id.startsWith("rule_")) "Create Rule" else "Edit Rule",
-            currentStep = builderStep
+            currentStep = currentStep,
+            steps = steps
         )
         RuleSoFar(draft = draft)
 
-        when (builderStep) {
-            RuleBuilderStep.Earn -> EarnStep(
+        when (currentStep) {
+            RuleBuilderStep.Earn -> if (rule.type == EarnItRuleStore.RuleType.CompleteToUnlock) {
+                RequirementsStep(rule = rule)
+            } else {
+                EarnStep(
                 rule = rule,
                 apps = apps,
                 selectedProductivePackage = selectedProductivePackage,
+                selectedProductivePackages = selectedProductivePackages,
                 productivePickerOpen = productivePickerOpen,
                 productiveSearch = productiveSearch,
                 onOpenProductivePicker = onOpenProductivePicker,
                 onCloseProductivePicker = onCloseProductivePicker,
                 onProductiveSearchChange = onProductiveSearchChange,
                 onSelectProductiveApp = onSelectProductiveApp
-            )
+                )
+            }
             RuleBuilderStep.Reward -> RewardStep(
                 rule = rule,
                 apps = apps,
@@ -115,7 +125,8 @@ fun EarnItRuleBuilder(
                 onOpenBlockedPicker = onOpenBlockedPicker,
                 onCloseBlockedPicker = onCloseBlockedPicker,
                 onBlockedSearchChange = onBlockedSearchChange,
-                onToggleBlockedApp = onToggleBlockedApp
+                onToggleBlockedApp = onToggleBlockedApp,
+                ruleType = rule.type
             )
             RuleBuilderStep.Exchange -> ExchangeStep(
                 selectedRatio = selectedRatio,
@@ -133,19 +144,20 @@ fun EarnItRuleBuilder(
                 onEditStartTime = onEditStartTime,
                 onEditEndTime = onEditEndTime
             )
-            RuleBuilderStep.Review -> ReviewStep(draft = draft)
+            RuleBuilderStep.Review -> ReviewStep(draft = draft, rule = rule)
         }
 
         BuilderActions(
-            currentStep = builderStep,
-            canContinue = canContinue(builderStep, draft),
-            canSave = draft.canSave,
+            currentStep = currentStep,
+            steps = steps,
+            canContinue = canContinue(rule.type, currentStep, draft, rule),
+            canSave = canSaveRule(rule.type, draft, rule),
             onBack = {
-                val previous = builderStep.previous()
+                val previous = currentStep.previous(steps)
                 if (previous == null) onCancel() else onBuilderStepChange(previous)
             },
             onContinue = {
-                builderStep.next()?.let(onBuilderStepChange)
+                currentStep.next(steps)?.let(onBuilderStepChange)
             },
             onSaveRule = onSaveRule,
             onCancel = onCancel
@@ -157,15 +169,19 @@ fun ruleDraftUiState(
     rule: EarnItRuleStore.Rule,
     apps: List<EarnItRuleStore.LaunchableApp>,
     selectedProductivePackage: String,
+    selectedProductivePackages: Set<String>,
     selectedBlockedPackages: Set<String>,
     selectedRatio: Int,
     selectedActiveDays: Set<Int>,
     selectedStartMinute: Int,
     selectedEndMinute: Int
 ): RuleDraftUiState {
-    val selectedEarnApp = apps.firstOrNull { it.packageName == selectedProductivePackage }
-        ?: EarnItRuleStore.LaunchableApp(rule.productivePackage, rule.productiveName)
-            .takeIf { it.packageName == selectedProductivePackage }
+    val selectedEarnApp = selectedProductivePackages.firstOrNull()?.let { selectedPackage ->
+        apps.firstOrNull { it.packageName == selectedPackage }
+            ?: rule.earnApps.firstOrNull { it.packageName == selectedPackage }?.let {
+                EarnItRuleStore.LaunchableApp(it.packageName, it.name)
+            }
+    }
     val savedBlockedApps = rule.blockedApps.associateBy { it.packageName }
     val launchableApps = apps.associateBy { it.packageName }
     val selectedRewardApps = selectedBlockedPackages.mapNotNull { packageName ->
@@ -184,11 +200,11 @@ fun ruleDraftUiState(
 }
 
 @Composable
-private fun BuilderHeader(title: String, currentStep: RuleBuilderStep) {
+private fun BuilderHeader(title: String, currentStep: RuleBuilderStep, steps: List<RuleBuilderStep>) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text(text = title, style = MaterialTheme.typography.titleMedium)
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            RuleBuilderStep.entries.forEach { step ->
+            steps.forEach { step ->
                 val selected = step == currentStep
                 Card(
                     colors = CardDefaults.cardColors(
@@ -238,11 +254,54 @@ private fun RuleSoFar(draft: RuleDraftUiState) {
     }
 }
 
+
+@Composable
+private fun RequirementsStep(rule: EarnItRuleStore.Rule) {
+    EditorSection(
+        title = "Complete all requirements",
+        helperText = "Temporary setup for Complete to Unlock. This minimal surface will be replaced by the finalized requirements editor."
+    ) {
+        if (rule.requirements.isEmpty()) {
+            Text(text = "No requirements configured yet.", style = MaterialTheme.typography.bodyMedium)
+        } else {
+            rule.requirements.forEach { requirement ->
+                Text(
+                    text = "${requirement.app.name} - ${requirement.requiredSeconds / 60L} min",
+                    style = MaterialTheme.typography.bodyLarge
+                )
+            }
+        }
+    }
+}
+
+private fun builderStepsFor(ruleType: EarnItRuleStore.RuleType): List<RuleBuilderStep> {
+    return when (ruleType) {
+        EarnItRuleStore.RuleType.EarnRewardTime -> listOf(
+            RuleBuilderStep.Earn,
+            RuleBuilderStep.Reward,
+            RuleBuilderStep.Exchange,
+            RuleBuilderStep.Schedule,
+            RuleBuilderStep.Review
+        )
+        EarnItRuleStore.RuleType.CompleteToUnlock -> listOf(
+            RuleBuilderStep.Earn,
+            RuleBuilderStep.Reward,
+            RuleBuilderStep.Schedule,
+            RuleBuilderStep.Review
+        )
+        EarnItRuleStore.RuleType.ScheduledBlock -> listOf(
+            RuleBuilderStep.Reward,
+            RuleBuilderStep.Schedule,
+            RuleBuilderStep.Review
+        )
+    }
+}
 @Composable
 private fun EarnStep(
     rule: EarnItRuleStore.Rule,
     apps: List<EarnItRuleStore.LaunchableApp>,
     selectedProductivePackage: String,
+    selectedProductivePackages: Set<String>,
     productivePickerOpen: Boolean,
     productiveSearch: String,
     onOpenProductivePicker: () -> Unit,
@@ -275,8 +334,8 @@ private fun EarnStep(
         )
         BuilderAppList(
             apps = visibleApps,
-            selectedPackages = setOf(selectedProductivePackage),
-            multiSelect = false,
+            selectedPackages = selectedProductivePackages,
+            multiSelect = true,
             emptyText = "No Earn Apps match your search.",
             onClickApp = { packageName ->
                 onSelectProductiveApp(packageName)
@@ -296,7 +355,8 @@ private fun RewardStep(
     onOpenBlockedPicker: () -> Unit,
     onCloseBlockedPicker: () -> Unit,
     onBlockedSearchChange: (String) -> Unit,
-    onToggleBlockedApp: (String) -> Unit
+    onToggleBlockedApp: (String) -> Unit,
+    ruleType: EarnItRuleStore.RuleType
 ) {
     val namesByPackage = rule.blockedApps.associate { it.packageName to it.name } +
         apps.associate { it.packageName to it.name }
@@ -306,8 +366,16 @@ private fun RewardStep(
     val selectedNames = selectedApps.map { it.name }
     val visibleApps = apps.builderFilteredBy(blockedSearch)
     EditorSection(
-        title = "Where can Reward Time be spent?",
-        helperText = "Choose one or more Reward Apps that share this Rule balance."
+        title = when (ruleType) {
+            EarnItRuleStore.RuleType.ScheduledBlock -> "Choose apps to block"
+            EarnItRuleStore.RuleType.CompleteToUnlock -> "Which apps unlock after completion?"
+            EarnItRuleStore.RuleType.EarnRewardTime -> "Where can Reward Time be spent?"
+        },
+        helperText = when (ruleType) {
+            EarnItRuleStore.RuleType.ScheduledBlock -> "Choose one or more apps this Rule blocks during its active schedule."
+            EarnItRuleStore.RuleType.CompleteToUnlock -> "Choose one or more apps that unlock after all requirements complete."
+            EarnItRuleStore.RuleType.EarnRewardTime -> "Choose one or more Reward Apps that share this Rule balance."
+        }
     ) {
         AppSelectionSummary(
             label = "Selected Reward Apps",
@@ -444,7 +512,7 @@ private fun BuilderAppRow(
             Text(
                 text = when {
                     selected && multiSelect -> "Selected"
-                    selected -> "Selected Earn App"
+                    selected -> "Selected"
                     multiSelect -> "Add"
                     else -> "Choose"
                 },
@@ -675,7 +743,51 @@ private fun dayPreset(activeDays: Set<Int>): ScheduleDayPreset {
 }
 
 @Composable
-private fun ReviewStep(draft: RuleDraftUiState) {
+private fun ReviewStep(draft: RuleDraftUiState, rule: EarnItRuleStore.Rule) {
+    when (rule.type) {
+        EarnItRuleStore.RuleType.EarnRewardTime -> EarnRewardReviewStep(draft)
+        EarnItRuleStore.RuleType.CompleteToUnlock -> TypedReviewStep(
+            title = "Review Rule",
+            sections = buildList {
+                add("COMPLETE ALL" to rule.requirements.joinToString("\n") { "${it.app.name} - ${it.requiredSeconds / 60L} min" })
+                add("THEN UNLOCK" to draft.selectedRewardApps.joinToString("\n") { it.name }.ifBlank { "Choose at least one app before saving." })
+                add("ACTIVE" to reviewScheduleSummary(draft.activeDays, draft.startMinute, draft.endMinute))
+            }
+        )
+        EarnItRuleStore.RuleType.ScheduledBlock -> TypedReviewStep(
+            title = "Review Rule",
+            sections = buildList {
+                add("BLOCK" to draft.selectedRewardApps.joinToString("\n") { it.name }.ifBlank { "Choose at least one app before saving." })
+                add("ACTIVE" to reviewScheduleSummary(draft.activeDays, draft.startMinute, draft.endMinute))
+            }
+        )
+    }
+}
+
+@Composable
+private fun TypedReviewStep(title: String, sections: List<Pair<String, String>>) {
+    EditorSection(
+        title = title,
+        helperText = "Read this as the agreement EarnIt will enforce."
+    ) {
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+        ) {
+            Column(
+                modifier = Modifier.padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                sections.forEach { (label, value) ->
+                    ReviewAgreementSection(label = label, value = value)
+                }
+            }
+        }
+    }
+}
+@Composable
+private fun EarnRewardReviewStep(draft: RuleDraftUiState) {
     val missingItems = reviewMissingItems(draft)
     EditorSection(
         title = "Review Rule",
@@ -812,6 +924,7 @@ private fun reviewScheduleSummary(activeDays: Set<Int>, startMinute: Int, endMin
 @Composable
 private fun BuilderActions(
     currentStep: RuleBuilderStep,
+    steps: List<RuleBuilderStep>,
     canContinue: Boolean,
     canSave: Boolean,
     onBack: () -> Unit,
@@ -840,12 +953,26 @@ private fun BuilderActions(
     }
 }
 
-private fun canContinue(step: RuleBuilderStep, draft: RuleDraftUiState): Boolean {
+private fun canContinue(
+    ruleType: EarnItRuleStore.RuleType,
+    step: RuleBuilderStep,
+    draft: RuleDraftUiState,
+    rule: EarnItRuleStore.Rule
+): Boolean {
     return when (step) {
-        RuleBuilderStep.Earn -> draft.selectedEarnApp != null
+        RuleBuilderStep.Earn -> ruleType != EarnItRuleStore.RuleType.EarnRewardTime || draft.selectedEarnApp != null || rule.requirements.isNotEmpty()
         RuleBuilderStep.Reward -> draft.selectedRewardApps.isNotEmpty()
         RuleBuilderStep.Exchange -> draft.exchangeSelection in EarnItRuleStore.allowedRatios
         RuleBuilderStep.Schedule -> draft.activeDays.isNotEmpty() && draft.startMinute in 0..1_439 && draft.endMinute in 1..1_440
-        RuleBuilderStep.Review -> draft.canSave
+        RuleBuilderStep.Review -> canSaveRule(ruleType, draft, rule)
+    }
+}
+
+private fun canSaveRule(ruleType: EarnItRuleStore.RuleType, draft: RuleDraftUiState, rule: EarnItRuleStore.Rule): Boolean {
+    val validSchedule = draft.activeDays.isNotEmpty() && draft.startMinute in 0..1_439 && draft.endMinute in 1..1_440
+    return when (ruleType) {
+        EarnItRuleStore.RuleType.EarnRewardTime -> draft.canSave
+        EarnItRuleStore.RuleType.CompleteToUnlock -> rule.requirements.isNotEmpty() && draft.selectedRewardApps.isNotEmpty() && validSchedule
+        EarnItRuleStore.RuleType.ScheduledBlock -> draft.selectedRewardApps.isNotEmpty() && validSchedule
     }
 }

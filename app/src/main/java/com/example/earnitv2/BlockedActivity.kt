@@ -38,6 +38,7 @@ class BlockedActivity : ComponentActivity() {
     private var productiveAppName by mutableStateOf("Duolingo")
     private var productivePackage by mutableStateOf(AppPackages.DEFAULT_PRODUCTIVE_APP)
     private var exchangeLabel by mutableStateOf("Every 10 min earns 10 min Reward Time")
+    private var blockedReason by mutableStateOf(RuleAccessEvaluator.DenialReason.OutOfRewardTime)
     private var fallbackMessage by mutableStateOf<String?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -52,6 +53,7 @@ class BlockedActivity : ComponentActivity() {
                     productiveAppName = productiveAppName,
                     productivePackage = productivePackage,
                     exchangeLabel = exchangeLabel,
+                    blockedReason = blockedReason,
                     fallbackMessage = fallbackMessage,
                     onOpenProductiveApp = ::openProductiveApp,
                     onNotNow = ::returnHome
@@ -79,8 +81,12 @@ class BlockedActivity : ComponentActivity() {
             ?: "Reward App"
         blockedPackage = intent?.getStringExtra(EXTRA_BLOCKED_PACKAGE)
             ?: rule.blockedApps.firstOrNull { it.name == blockedAppName }?.packageName
-        productiveAppName = intent?.getStringExtra(EXTRA_PRODUCTIVE_APP_NAME) ?: rule.productiveName
-        productivePackage = intent?.getStringExtra(EXTRA_PRODUCTIVE_PACKAGE) ?: rule.productivePackage
+        val primaryEarnApp = rule.earnApps.firstOrNull()
+        productiveAppName = intent?.getStringExtra(EXTRA_PRODUCTIVE_APP_NAME) ?: primaryEarnApp?.name ?: rule.productiveName
+        productivePackage = intent?.getStringExtra(EXTRA_PRODUCTIVE_PACKAGE) ?: primaryEarnApp?.packageName ?: rule.productivePackage
+        blockedReason = intent?.getStringExtra(EXTRA_BLOCKED_REASON)?.let { rawReason ->
+            RuleAccessEvaluator.DenialReason.entries.firstOrNull { it.name == rawReason }
+        } ?: RuleAccessEvaluator.DenialReason.OutOfRewardTime
         exchangeLabel = EarnItUiFormatters.exchangeSummary(rule.rewardSecondsPerProductiveSecond)
     }
 
@@ -111,6 +117,7 @@ class BlockedActivity : ComponentActivity() {
         const val EXTRA_BLOCKED_PACKAGE = "com.example.earnitv2.extra.BLOCKED_PACKAGE"
         const val EXTRA_PRODUCTIVE_APP_NAME = "com.example.earnitv2.extra.PRODUCTIVE_APP_NAME"
         const val EXTRA_PRODUCTIVE_PACKAGE = "com.example.earnitv2.extra.PRODUCTIVE_PACKAGE"
+        const val EXTRA_BLOCKED_REASON = "com.example.earnitv2.extra.BLOCKED_REASON"
     }
 }
 
@@ -121,6 +128,7 @@ fun BlockedScreen(
     productiveAppName: String,
     productivePackage: String,
     exchangeLabel: String,
+    blockedReason: RuleAccessEvaluator.DenialReason,
     fallbackMessage: String?,
     onOpenProductiveApp: () -> Unit,
     onNotNow: () -> Unit,
@@ -140,7 +148,7 @@ fun BlockedScreen(
             verticalArrangement = Arrangement.spacedBy(24.dp)
         ) {
             Text(
-                text = "You're out of Reward Time",
+                text = blockedTitle(blockedReason),
                 style = MaterialTheme.typography.headlineMedium,
                 textAlign = TextAlign.Center
             )
@@ -152,7 +160,7 @@ fun BlockedScreen(
                 EarnItAppIcon(packageName = blockedPackage, appName = blockedAppName, size = 64.dp)
                 Text(text = blockedAppName, style = MaterialTheme.typography.titleLarge)
                 Text(
-                    text = "$blockedAppName uses Reward Time from this Rule.",
+                    text = blockedDescription(blockedReason, blockedAppName),
                     style = MaterialTheme.typography.bodyMedium,
                     textAlign = TextAlign.Center
                 )
@@ -162,17 +170,19 @@ fun BlockedScreen(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Text(text = "Earn more with", style = MaterialTheme.typography.bodyMedium)
-                EarnAppCard(
-                    productiveAppName = productiveAppName,
-                    productivePackage = productivePackage,
-                    exchangeLabel = exchangeLabel
-                )
-                Button(
-                    onClick = onOpenProductiveApp,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(text = "Open $productiveAppName")
+                if (blockedReason == RuleAccessEvaluator.DenialReason.OutOfRewardTime) {
+                    Text(text = "Earn more with", style = MaterialTheme.typography.bodyMedium)
+                    EarnAppCard(
+                        productiveAppName = productiveAppName,
+                        productivePackage = productivePackage,
+                        exchangeLabel = exchangeLabel
+                    )
+                    Button(
+                        onClick = onOpenProductiveApp,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(text = "Open $productiveAppName")
+                    }
                 }
                 TextButton(
                     onClick = onNotNow,
@@ -190,6 +200,22 @@ fun BlockedScreen(
                 }
             }
         }
+    }
+}
+
+private fun blockedTitle(reason: RuleAccessEvaluator.DenialReason): String {
+    return when (reason) {
+        RuleAccessEvaluator.DenialReason.ScheduledBlockActive -> "Blocked by schedule"
+        RuleAccessEvaluator.DenialReason.CompleteToUnlockIncomplete -> "Complete requirements to unlock"
+        RuleAccessEvaluator.DenialReason.OutOfRewardTime -> "You're out of Reward Time"
+    }
+}
+
+private fun blockedDescription(reason: RuleAccessEvaluator.DenialReason, blockedAppName: String): String {
+    return when (reason) {
+        RuleAccessEvaluator.DenialReason.ScheduledBlockActive -> "$blockedAppName is blocked by a Scheduled Block Rule right now."
+        RuleAccessEvaluator.DenialReason.CompleteToUnlockIncomplete -> "$blockedAppName unlocks after this Rule's requirements are complete."
+        RuleAccessEvaluator.DenialReason.OutOfRewardTime -> "$blockedAppName uses Reward Time from this Rule."
     }
 }
 
@@ -229,6 +255,7 @@ fun BlockedScreenPreview() {
             productiveAppName = "Duolingo",
             productivePackage = "com.duolingo",
             exchangeLabel = "Every 10 min earns 20 min Reward Time",
+            blockedReason = RuleAccessEvaluator.DenialReason.OutOfRewardTime,
             fallbackMessage = null,
             onOpenProductiveApp = {},
             onNotNow = {}

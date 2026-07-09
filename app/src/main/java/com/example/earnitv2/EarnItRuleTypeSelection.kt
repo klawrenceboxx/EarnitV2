@@ -18,7 +18,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -33,36 +32,35 @@ enum class RuleTypeOption(
     val description: String,
     val example: String,
     val iconLabel: String,
-    val available: Boolean
+    val ruleType: EarnItRuleStore.RuleType
 ) {
     EarnRewardTime(
         title = "Earn Reward Time",
         description = "Use productive apps to earn time for distracting apps.",
         example = "10 min productive -> 2 min Reward Time",
         iconLabel = "ER",
-        available = true
+        ruleType = EarnItRuleStore.RuleType.EarnRewardTime
     ),
     CompleteToUnlock(
         title = "Complete to Unlock",
         description = "Finish required productive activity before selected apps unlock.",
         example = "Complete all requirements to unlock",
         iconLabel = "CU",
-        available = false
+        ruleType = EarnItRuleStore.RuleType.CompleteToUnlock
     ),
     ScheduledBlock(
         title = "Scheduled Block",
         description = "Block selected apps during chosen days and times.",
         example = "Weekdays - 9:00 AM-5:00 PM",
         iconLabel = "SB",
-        available = false
+        ruleType = EarnItRuleStore.RuleType.ScheduledBlock
     )
 }
 
 @Composable
 fun EarnItRuleTypeSelection(
     onBack: () -> Unit,
-    onSelectEarnRewardTime: () -> Unit,
-    onSelectUnavailableRuleType: (RuleTypeOption) -> Unit,
+    onSelectRuleType: (EarnItRuleStore.RuleType) -> Unit,
     modifier: Modifier = Modifier
 ) {
     BackHandler(onBack = onBack)
@@ -90,56 +88,8 @@ fun EarnItRuleTypeSelection(
                 RuleTypeCard(
                     option = option,
                     primary = option == RuleTypeOption.EarnRewardTime,
-                    onClick = {
-                        if (option.available) {
-                            onSelectEarnRewardTime()
-                        } else {
-                            onSelectUnavailableRuleType(option)
-                        }
-                    }
+                    onClick = { onSelectRuleType(option.ruleType) }
                 )
-            }
-        }
-    }
-}
-
-@Composable
-fun EarnItUnavailableRuleType(
-    option: RuleTypeOption,
-    onBack: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    BackHandler(onBack = onBack)
-
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
-    ) {
-        RuleTypeTopBar(onBack = onBack)
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
-        ) {
-            Column(
-                modifier = Modifier.padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                Text(text = option.title, style = MaterialTheme.typography.titleLarge)
-                Text(
-                    text = "This Rule type is not implemented yet.",
-                    style = MaterialTheme.typography.bodyLarge
-                )
-                Text(
-                    text = "For now, Earn Reward Time is the available Rule type.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                OutlinedButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) {
-                    Text(text = "Back to Rule types")
-                }
             }
         }
     }
@@ -203,16 +153,7 @@ private fun RuleTypeCard(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(5.dp)
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(text = option.title, style = MaterialTheme.typography.titleMedium)
-                    if (primary) {
-                        Text(
-                            text = "  Available",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
+                Text(text = option.title, style = MaterialTheme.typography.titleMedium)
                 Text(text = option.description, style = MaterialTheme.typography.bodyMedium)
                 Text(
                     text = option.example,

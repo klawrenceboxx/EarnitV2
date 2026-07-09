@@ -31,6 +31,17 @@ object EarnItRuleStore {
     val allowedRatios = listOf(1, 2, 4, 5)
     val allDays = listOf(1, 2, 3, 4, 5, 6, 7)
 
+    enum class RuleType {
+        EarnRewardTime,
+        CompleteToUnlock,
+        ScheduledBlock
+    }
+
+    data class RuleRequirement(
+        val app: RuleApp,
+        val requiredSeconds: Long
+    )
+
     data class Rule(
         val id: String = newRuleId(),
         val productivePackage: String,
@@ -40,8 +51,15 @@ object EarnItRuleStore {
         val activeDays: Set<Int>,
         val startMinute: Int,
         val endMinute: Int,
-        val enabled: Boolean = true
+        val enabled: Boolean = true,
+        val type: RuleType = RuleType.EarnRewardTime,
+        val productiveApps: List<RuleApp> = emptyList(),
+        val requirements: List<RuleRequirement> = emptyList()
     ) {
+        val earnApps: List<RuleApp> = productiveApps
+            .ifEmpty { listOf(RuleApp(productivePackage, productiveName)) }
+            .distinctBy { it.packageName }
+        val earnAppPackages: Set<String> = earnApps.map { it.packageName }.toSet()
         val ratioLabel: String = "1:$rewardSecondsPerProductiveSecond"
         val blockedAppCount: Int = blockedApps.size
         val blockedSummary: String = if (blockedApps.size == 1) {
@@ -59,6 +77,10 @@ object EarnItRuleStore {
             return blockedApps.firstOrNull { it.packageName == packageName }
         }
 
+        fun earnAppForPackage(packageName: String): RuleApp? {
+            return earnApps.firstOrNull { it.packageName == packageName }
+        }
+
         fun isActiveNow(): Boolean {
             val calendar = Calendar.getInstance()
             return isActiveAt(
@@ -68,13 +90,14 @@ object EarnItRuleStore {
         }
 
         fun isActiveAt(day: Int, minuteOfDay: Int): Boolean {
-            if (day !in activeDays) return false
+            val safeMinute = minuteOfDay.coerceIn(0, 1_439)
             return if (startMinute == endMinute) {
-                true
+                day in activeDays
             } else if (startMinute < endMinute) {
-                minuteOfDay in startMinute until endMinute
+                day in activeDays && safeMinute in startMinute until endMinute
             } else {
-                minuteOfDay >= startMinute || minuteOfDay < endMinute
+                (day in activeDays && safeMinute >= startMinute) ||
+                    (previousDay(day) in activeDays && safeMinute < endMinute)
             }
         }
     }
@@ -111,6 +134,7 @@ object EarnItRuleStore {
         val cleanRules = rules
             .filter { it.blockedApps.isNotEmpty() }
             .distinctBy { it.id }
+            .withoutEnabledEarnRewardConflicts()
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit()
             .putString(KEY_RULES, encodeRules(cleanRules))
@@ -130,6 +154,7 @@ object EarnItRuleStore {
 
     fun deleteRule(context: Context, ruleId: String) {
         saveRules(context, getRules(context).filterNot { it.id == ruleId })
+        RewardLedger.deleteRuleState(context, ruleId)
     }
 
     fun setRuleEnabled(context: Context, ruleId: String, enabled: Boolean) {
@@ -138,9 +163,25 @@ object EarnItRuleStore {
         })
     }
 
-    fun newRuleFromDefault(context: Context): Rule {
+    fun newRuleFromDefault(context: Context, type: RuleType = RuleType.EarnRewardTime): Rule {
         val baseRule = getRule(context)
-        return baseRule.copy(id = newRuleId(), enabled = true)
+        val earnApps = baseRule.earnApps
+        return baseRule.copy(
+            id = newRuleId(),
+            enabled = true,
+            type = type,
+            productiveApps = if (type == RuleType.EarnRewardTime) earnApps else emptyList(),
+            requirements = if (type == RuleType.CompleteToUnlock) {
+                listOf(RuleRequirement(earnApps.first(), requiredSeconds = 10 * 60L))
+            } else {
+                emptyList()
+            },
+            rewardSecondsPerProductiveSecond = if (type == RuleType.EarnRewardTime) {
+                baseRule.rewardSecondsPerProductiveSecond
+            } else {
+                1
+            }
+        )
     }
 
     fun launchableApps(context: Context): List<LaunchableApp> {
@@ -191,6 +232,8 @@ object EarnItRuleStore {
 
     private fun migratedSingleRule(context: Context): Rule {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val productivePackage = prefs.getString(KEY_PRODUCTIVE_PACKAGE, null) ?: AppPackages.DEFAULT_PRODUCTIVE_APP
+        val productiveName = prefs.getString(KEY_PRODUCTIVE_NAME, null) ?: "Duolingo"
         val blockedApps = decodeBlockedApps(prefs.getString(KEY_BLOCKED_APPS, null))
             .ifEmpty {
                 listOf(
@@ -203,15 +246,17 @@ object EarnItRuleStore {
 
         return Rule(
             id = MIGRATED_RULE_ID,
-            productivePackage = prefs.getString(KEY_PRODUCTIVE_PACKAGE, null) ?: AppPackages.DEFAULT_PRODUCTIVE_APP,
-            productiveName = prefs.getString(KEY_PRODUCTIVE_NAME, null) ?: "Duolingo",
+            productivePackage = productivePackage,
+            productiveName = productiveName,
             blockedApps = blockedApps,
             rewardSecondsPerProductiveSecond = prefs.getInt(KEY_REWARD_SECONDS_PER_PRODUCTIVE_SECOND, 1)
                 .takeIf { it in allowedRatios } ?: 1,
             activeDays = decodeActiveDays(prefs.getString(KEY_ACTIVE_DAYS, null)),
             startMinute = prefs.getInt(KEY_START_MINUTE, 0).coerceIn(0, 1_439),
             endMinute = prefs.getInt(KEY_END_MINUTE, 1_440).coerceIn(1, 1_440),
-            enabled = true
+            enabled = true,
+            type = RuleType.EarnRewardTime,
+            productiveApps = listOf(RuleApp(productivePackage, productiveName))
         )
     }
 
@@ -231,6 +276,27 @@ object EarnItRuleStore {
                 RuleApp(packageName = packageName, name = name)
             }
             .distinctBy { it.packageName }
+    }
+
+    private fun encodeRequirements(requirements: List<RuleRequirement>): String {
+        return requirements.joinToString(APP_RECORD_SEPARATOR) { requirement ->
+            requirement.app.packageName + APP_FIELD_SEPARATOR +
+                requirement.app.name.replace(APP_RECORD_SEPARATOR, " ") + APP_FIELD_SEPARATOR +
+                requirement.requiredSeconds.coerceAtLeast(0L).toString()
+        }
+    }
+
+    private fun decodeRequirements(rawValue: String?): List<RuleRequirement> {
+        if (rawValue.isNullOrBlank()) return emptyList()
+        return rawValue.lines()
+            .mapNotNull { line ->
+                val parts = line.split(APP_FIELD_SEPARATOR, limit = 3)
+                val packageName = parts.getOrNull(0)?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                val name = parts.getOrNull(1)?.takeIf { it.isNotBlank() } ?: packageName
+                val requiredSeconds = parts.getOrNull(2)?.toLongOrNull()?.takeIf { it > 0L } ?: return@mapNotNull null
+                RuleRequirement(RuleApp(packageName = packageName, name = name), requiredSeconds = requiredSeconds)
+            }
+            .distinctBy { it.app.packageName }
     }
 
     private fun encodeActiveDays(activeDays: Set<Int>): String {
@@ -257,7 +323,10 @@ object EarnItRuleStore {
                 encodeActiveDays(rule.activeDays),
                 rule.startMinute.toString(),
                 rule.endMinute.toString(),
-                rule.enabled.toString()
+                rule.enabled.toString(),
+                rule.type.name,
+                encodeBlockedApps(rule.earnApps),
+                encodeRequirements(rule.requirements)
             ).joinToString(RULE_FIELD_SEPARATOR) { encodeField(it) }
         }
     }
@@ -276,6 +345,13 @@ object EarnItRuleStore {
                 val startMinute = fields.getOrNull(6)?.toIntOrNull()?.coerceIn(0, 1_439) ?: 0
                 val endMinute = fields.getOrNull(7)?.toIntOrNull()?.coerceIn(1, 1_440) ?: 1_440
                 val enabled = fields.getOrNull(8)?.toBooleanStrictOrNull() ?: true
+                val type = fields.getOrNull(9)?.let { rawType ->
+                    RuleType.entries.firstOrNull { it.name == rawType }
+                } ?: RuleType.EarnRewardTime
+                val productiveApps = decodeBlockedApps(fields.getOrNull(10)).ifEmpty {
+                    listOf(RuleApp(productivePackage, productiveName))
+                }
+                val requirements = decodeRequirements(fields.getOrNull(11))
                 Rule(
                     id = id,
                     productivePackage = productivePackage,
@@ -285,10 +361,23 @@ object EarnItRuleStore {
                     activeDays = activeDays,
                     startMinute = startMinute,
                     endMinute = endMinute,
-                    enabled = enabled
+                    enabled = enabled,
+                    type = type,
+                    productiveApps = productiveApps,
+                    requirements = requirements
                 )
             }
             .distinctBy { it.id }
+    }
+
+    private fun List<Rule>.withoutEnabledEarnRewardConflicts(): List<Rule> {
+        val claimedRewardPackages = mutableSetOf<String>()
+        return map { rule ->
+            if (!rule.enabled || rule.type != RuleType.EarnRewardTime) return@map rule
+            val conflicts = rule.blockedApps.any { it.packageName in claimedRewardPackages }
+            rule.blockedApps.forEach { claimedRewardPackages += it.packageName }
+            if (conflicts) rule.copy(enabled = false) else rule
+        }
     }
 
     private fun encodeField(value: String): String {
@@ -309,6 +398,10 @@ object EarnItRuleStore {
             Calendar.SATURDAY -> 6
             else -> 7
         }
+    }
+
+    private fun previousDay(day: Int): Int {
+        return if (day == 1) 7 else (day - 1).coerceIn(1, 7)
     }
 
     private fun newRuleId(): String {
