@@ -5,20 +5,29 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.example.earnitv2.ui.theme.EarnitV2Theme
@@ -28,22 +37,22 @@ class BlockedActivity : ComponentActivity() {
     private var blockedAppName by mutableStateOf("Instagram")
     private var productiveAppName by mutableStateOf("Duolingo")
     private var productivePackage by mutableStateOf(AppPackages.DEFAULT_PRODUCTIVE_APP)
-    private var availableRewardSeconds by mutableStateOf(0L)
+    private var exchangeLabel by mutableStateOf("Every 10 min earns 10 min Reward Time")
     private var fallbackMessage by mutableStateOf<String?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         updateRuleFromIntent(intent)
-        refreshRewardBalance()
         setContent {
             EarnitV2Theme {
                 BlockedScreen(
                     blockedAppName = blockedAppName,
                     productiveAppName = productiveAppName,
-                    availableRewardSeconds = availableRewardSeconds,
+                    exchangeLabel = exchangeLabel,
                     fallbackMessage = fallbackMessage,
-                    onOpenProductiveApp = ::openProductiveApp
+                    onOpenProductiveApp = ::openProductiveApp,
+                    onNotNow = ::returnHome
                 )
             }
         }
@@ -53,25 +62,22 @@ class BlockedActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         updateRuleFromIntent(intent)
-        refreshRewardBalance()
     }
 
     override fun onResume() {
         super.onResume()
-        refreshRewardBalance()
+        updateRuleFromIntent(intent)
     }
 
     private fun updateRuleFromIntent(intent: Intent?) {
         ruleId = intent?.getStringExtra(EXTRA_RULE_ID)
         val rule = ruleId?.let { EarnItRuleStore.findRule(this, it) } ?: EarnItRuleStore.getRule(this)
-        blockedAppName = intent?.getStringExtra(EXTRA_BLOCKED_APP_NAME) ?: rule.blockedApps.firstOrNull()?.name ?: "Blocked app"
+        blockedAppName = intent?.getStringExtra(EXTRA_BLOCKED_APP_NAME)
+            ?: rule.blockedApps.firstOrNull()?.name
+            ?: "Reward App"
         productiveAppName = intent?.getStringExtra(EXTRA_PRODUCTIVE_APP_NAME) ?: rule.productiveName
         productivePackage = intent?.getStringExtra(EXTRA_PRODUCTIVE_PACKAGE) ?: rule.productivePackage
-    }
-
-    private fun refreshRewardBalance() {
-        val rule = ruleId?.let { EarnItRuleStore.findRule(this, it) } ?: EarnItRuleStore.getRule(this)
-        availableRewardSeconds = RewardLedger.snapshot(this, rule).remainingRewardSeconds
+        exchangeLabel = EarnItUiFormatters.exchangeSummary(rule.rewardSecondsPerProductiveSecond)
     }
 
     private fun openProductiveApp() {
@@ -86,6 +92,15 @@ class BlockedActivity : ComponentActivity() {
         startActivity(launchIntent)
     }
 
+    private fun returnHome() {
+        val homeIntent = Intent(Intent.ACTION_MAIN).apply {
+            addCategory(Intent.CATEGORY_HOME)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        startActivity(homeIntent)
+        finish()
+    }
+
     companion object {
         const val EXTRA_RULE_ID = "com.example.earnitv2.extra.RULE_ID"
         const val EXTRA_BLOCKED_APP_NAME = "com.example.earnitv2.extra.BLOCKED_APP_NAME"
@@ -98,58 +113,118 @@ class BlockedActivity : ComponentActivity() {
 fun BlockedScreen(
     blockedAppName: String,
     productiveAppName: String,
-    availableRewardSeconds: Long,
+    exchangeLabel: String,
     fallbackMessage: String?,
     onOpenProductiveApp: () -> Unit,
+    onNotNow: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    Column(
+    Box(
         modifier = modifier
             .fillMaxSize()
-            .padding(24.dp),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally
+            .padding(horizontal = 24.dp, vertical = 32.dp),
+        contentAlignment = Alignment.Center
     ) {
-        Text(
-            text = "$blockedAppName is locked.",
-            style = MaterialTheme.typography.headlineMedium
-        )
-        Text(
-            text = "Available reward time: ${formatBlockedDuration(availableRewardSeconds)}",
-            style = MaterialTheme.typography.bodyLarge,
-            modifier = Modifier.padding(top = 12.dp)
-        )
-        Text(
-            text = "Use $productiveAppName to earn access to $blockedAppName.",
-            style = MaterialTheme.typography.bodyLarge,
-            modifier = Modifier.padding(top = 12.dp)
-        )
-        Button(
-            onClick = onOpenProductiveApp,
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(top = 24.dp)
+                .widthIn(max = 360.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(24.dp)
         ) {
-            Text(text = "Open $productiveAppName")
-        }
-        if (fallbackMessage != null) {
             Text(
-                text = fallbackMessage,
-                style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.padding(top = 16.dp)
+                text = "You're out of Reward Time",
+                style = MaterialTheme.typography.headlineMedium,
+                textAlign = TextAlign.Center
             )
+
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                AppInitialTile(appName = blockedAppName, large = true)
+                Text(text = blockedAppName, style = MaterialTheme.typography.titleLarge)
+                Text(
+                    text = "$blockedAppName uses Reward Time from this Rule.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    textAlign = TextAlign.Center
+                )
+            }
+
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(text = "Earn more with", style = MaterialTheme.typography.bodyMedium)
+                EarnAppCard(
+                    productiveAppName = productiveAppName,
+                    exchangeLabel = exchangeLabel
+                )
+                Button(
+                    onClick = onOpenProductiveApp,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(text = "Open $productiveAppName")
+                }
+                TextButton(
+                    onClick = onNotNow,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(text = "Not now")
+                }
+                if (fallbackMessage != null) {
+                    Text(
+                        text = fallbackMessage,
+                        style = MaterialTheme.typography.bodyMedium,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
         }
     }
 }
 
-private fun formatBlockedDuration(totalSeconds: Long): String {
-    val safeSeconds = totalSeconds.coerceAtLeast(0L)
-    val minutes = safeSeconds / 60L
-    val seconds = safeSeconds % 60L
-    return if (minutes > 0L) {
-        "${minutes}m ${seconds}s"
-    } else {
-        "${seconds}s"
+@Composable
+private fun EarnAppCard(
+    productiveAppName: String,
+    exchangeLabel: String,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+    ) {
+        Row(
+            modifier = Modifier.padding(14.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            AppInitialTile(appName = productiveAppName, large = false)
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(text = productiveAppName, style = MaterialTheme.typography.titleMedium)
+                Text(text = exchangeLabel, style = MaterialTheme.typography.bodySmall)
+            }
+        }
+    }
+}
+
+@Composable
+private fun AppInitialTile(appName: String, large: Boolean) {
+    val tileSize = if (large) 64.dp else 48.dp
+    val initial = appName.trim().firstOrNull()?.uppercaseChar()?.toString() ?: "?"
+    Card(
+        modifier = Modifier.size(tileSize),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+    ) {
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Text(
+                text = initial,
+                style = if (large) MaterialTheme.typography.headlineSmall else MaterialTheme.typography.titleMedium
+            )
+        }
     }
 }
 
@@ -160,9 +235,10 @@ fun BlockedScreenPreview() {
         BlockedScreen(
             blockedAppName = "Instagram",
             productiveAppName = "Duolingo",
-            availableRewardSeconds = 0,
+            exchangeLabel = "Every 10 min earns 20 min Reward Time",
             fallbackMessage = null,
-            onOpenProductiveApp = {}
+            onOpenProductiveApp = {},
+            onNotNow = {}
         )
     }
 }
