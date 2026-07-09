@@ -63,6 +63,8 @@ class MainActivity : ComponentActivity() {
     private var usageStatusMessage by mutableStateOf("")
     private var ruleStatusMessage by mutableStateOf("")
     private var accessibilityServiceEnabled by mutableStateOf(false)
+    private var manageRulesOpen by mutableStateOf(false)
+    private var selectedRuleDetailId by mutableStateOf<String?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -89,12 +91,18 @@ class MainActivity : ComponentActivity() {
                         usageStatusMessage = usageStatusMessage,
                         ruleStatusMessage = ruleStatusMessage,
                         accessibilityServiceEnabled = accessibilityServiceEnabled,
+                        manageRulesOpen = manageRulesOpen,
+                        selectedRuleDetailId = selectedRuleDetailId,
                         onOpenUsageAccessSettings = ::openUsageAccessSettings,
                         onOpenAccessibilitySettings = ::openAccessibilitySettings,
+                        onOpenEarnApp = ::openEarnApp,
                         onAddRule = ::startAddingRule,
                         onEditRule = ::startEditingRule,
                         onToggleRuleEnabled = ::toggleRuleEnabled,
                         onDeleteRule = ::deleteRule,
+                        onToggleManageRules = { manageRulesOpen = !manageRulesOpen },
+                        onOpenRuleDetail = { selectedRuleDetailId = it },
+                        onBackFromRuleDetail = { selectedRuleDetailId = null },
                         onCancelEditingRule = ::cancelEditingRule,
                         onOpenProductivePicker = { productivePickerOpen = true },
                         onCloseProductivePicker = { productivePickerOpen = false },
@@ -171,10 +179,14 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun startAddingRule() {
+        selectedRuleDetailId = null
+        manageRulesOpen = false
         startEditingRule(EarnItRuleStore.newRuleFromDefault(this))
     }
 
     private fun startEditingRule(rule: EarnItRuleStore.Rule) {
+        selectedRuleDetailId = null
+        manageRulesOpen = false
         editingRuleTemplate = rule
         selectedProductivePackage = rule.productivePackage
         selectedBlockedPackages = rule.blockedApps.map { it.packageName }.toSet()
@@ -222,6 +234,9 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun deleteRule(rule: EarnItRuleStore.Rule) {
+        if (selectedRuleDetailId == rule.id) {
+            selectedRuleDetailId = null
+        }
         EarnItRuleStore.deleteRule(this, rule.id)
         if (editingRuleTemplate?.id == rule.id) {
             cancelEditingRule()
@@ -322,6 +337,11 @@ class MainActivity : ComponentActivity() {
     private fun openAccessibilitySettings() {
         startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
     }
+
+    private fun openEarnApp(packageName: String) {
+        val launchIntent = packageManager.getLaunchIntentForPackage(packageName) ?: return
+        startActivity(launchIntent)
+    }
 }
 
 @Composable
@@ -343,12 +363,18 @@ fun Dashboard(
     usageStatusMessage: String,
     ruleStatusMessage: String,
     accessibilityServiceEnabled: Boolean,
+    manageRulesOpen: Boolean,
+    selectedRuleDetailId: String?,
     onOpenUsageAccessSettings: () -> Unit,
     onOpenAccessibilitySettings: () -> Unit,
+    onOpenEarnApp: (String) -> Unit,
     onAddRule: () -> Unit,
     onEditRule: (EarnItRuleStore.Rule) -> Unit,
     onToggleRuleEnabled: (EarnItRuleStore.Rule) -> Unit,
     onDeleteRule: (EarnItRuleStore.Rule) -> Unit,
+    onToggleManageRules: () -> Unit,
+    onOpenRuleDetail: (String) -> Unit,
+    onBackFromRuleDetail: () -> Unit,
     onCancelEditingRule: () -> Unit,
     onOpenProductivePicker: () -> Unit,
     onCloseProductivePicker: () -> Unit,
@@ -365,42 +391,67 @@ fun Dashboard(
     onSaveRule: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .padding(24.dp)
-            .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        Text(text = "EarnIt", style = MaterialTheme.typography.headlineMedium)
-        Text(text = ruleStatusMessage, style = MaterialTheme.typography.bodyMedium)
-        Text(text = if (usageAccessGranted) "Usage Access: On" else "Usage Access: Off")
-        Text(text = usageStatusMessage, style = MaterialTheme.typography.bodyMedium)
-        Button(onClick = onOpenUsageAccessSettings, modifier = Modifier.fillMaxWidth()) {
-            Text(text = "Open Usage Access Settings")
+    if (editingRule == null) {
+        val homeRules = ruleStates.map { state ->
+            homeRuleUiState(
+                state = state,
+                usageAccessGranted = usageAccessGranted,
+                appBlockingEnabled = accessibilityServiceEnabled
+            )
         }
-        Text(text = if (accessibilityServiceEnabled) "Accessibility Service: On" else "Accessibility Service: Off")
-        Button(onClick = onOpenAccessibilitySettings, modifier = Modifier.fillMaxWidth()) {
-            Text(text = "Open Accessibility Settings")
+        val permissionState = EarnItUiStateAdapters.permissionSetup(
+            usageAccessGranted = usageAccessGranted,
+            appBlockingEnabled = accessibilityServiceEnabled
+        )
+        val selectedHomeRule = selectedRuleDetailId?.let { selectedRuleId ->
+            homeRules.firstOrNull { it.rule.id == selectedRuleId }
         }
 
-        if (editingRule == null) {
-            Text(text = "Rules", style = MaterialTheme.typography.titleMedium)
-            if (ruleStates.isEmpty()) {
-                Text(text = "No rules yet.")
-            }
-            ruleStates.forEach { state ->
-                RuleRow(
-                    state = state,
-                    onEditRule = onEditRule,
-                    onToggleRuleEnabled = onToggleRuleEnabled,
-                    onDeleteRule = onDeleteRule
-                )
-            }
-            Button(onClick = onAddRule, modifier = Modifier.fillMaxWidth()) {
-                Text(text = "Add Rule")
-            }
+        if (selectedHomeRule != null) {
+            EarnItRuleDetail(
+                homeRule = selectedHomeRule,
+                detail = EarnItUiStateAdapters.ruleDetail(
+                    card = selectedHomeRule.card,
+                    rule = selectedHomeRule.rule
+                ),
+                permissionState = permissionState,
+                onBack = onBackFromRuleDetail,
+                onOpenEarnApp = onOpenEarnApp,
+                onOpenUsageAccessSettings = onOpenUsageAccessSettings,
+                onOpenAccessibilitySettings = onOpenAccessibilitySettings,
+                onEditRule = onEditRule,
+                onToggleRuleEnabled = onToggleRuleEnabled,
+                onDeleteRule = { rule ->
+                    onBackFromRuleDetail()
+                    onDeleteRule(rule)
+                },
+                modifier = modifier
+            )
         } else {
+            EarnItHome(
+                rules = homeRules,
+                permissionState = permissionState,
+                manageRulesOpen = manageRulesOpen,
+                onAddRule = onAddRule,
+                onOpenEarnApp = onOpenEarnApp,
+                onOpenUsageAccessSettings = onOpenUsageAccessSettings,
+                onOpenAccessibilitySettings = onOpenAccessibilitySettings,
+                onToggleManageRules = onToggleManageRules,
+                onOpenRuleDetail = onOpenRuleDetail,
+                onEditRule = onEditRule,
+                onToggleRuleEnabled = onToggleRuleEnabled,
+                onDeleteRule = onDeleteRule,
+                modifier = modifier
+            )
+        }
+    } else {
+        Column(
+            modifier = modifier
+                .fillMaxSize()
+                .padding(24.dp)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
             RuleEditor(
                 rule = editingRule,
                 apps = apps,
@@ -767,12 +818,18 @@ fun DashboardPreview() {
             usageStatusMessage = "Tracking enabled rules today.",
             ruleStatusMessage = "1 rule saved. Enabled.",
             accessibilityServiceEnabled = true,
+            manageRulesOpen = false,
+            selectedRuleDetailId = null,
             onOpenUsageAccessSettings = {},
             onOpenAccessibilitySettings = {},
+            onOpenEarnApp = {},
             onAddRule = {},
             onEditRule = {},
             onToggleRuleEnabled = {},
             onDeleteRule = {},
+            onToggleManageRules = {},
+            onOpenRuleDetail = {},
+            onBackFromRuleDetail = {},
             onCancelEditingRule = {},
             onOpenProductivePicker = {},
             onCloseProductivePicker = {},

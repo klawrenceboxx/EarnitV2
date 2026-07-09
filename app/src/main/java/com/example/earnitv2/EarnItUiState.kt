@@ -187,18 +187,36 @@ object EarnItUiFormatters {
     }
 
     fun exchangeAgreement(rule: EarnItRuleStore.Rule): String {
-        return "Every 1 min in ${rule.productiveName} earns " +
-            "${rule.rewardSecondsPerProductiveSecond} min of Reward Time."
+        return "Every 10 min in ${rule.productiveName} earns " +
+            "${rule.rewardSecondsPerProductiveSecond * 10} min of Reward Time."
     }
 
     fun exchangeSummary(exchangeSelection: Int): String {
-        return "Every 1 min earns $exchangeSelection min Reward Time"
+        return "Every 10 min earns ${exchangeSelection * 10} min Reward Time"
+    }
+
+    fun savedRewardTime(totalSeconds: Long): String {
+        val safeSeconds = totalSeconds.coerceAtLeast(0L)
+        return if (safeSeconds == 0L) {
+            "No Reward Time saved today"
+        } else {
+            "${formatWholeMinutes(safeSeconds)} Reward Time saved"
+        }
+    }
+
+    fun remainingRewardTime(totalSeconds: Long): String {
+        val safeSeconds = totalSeconds.coerceAtLeast(0L)
+        return if (safeSeconds == 0L) {
+            "No Reward Time remains today"
+        } else {
+            "${formatWholeMinutes(safeSeconds)} Reward Time remains today"
+        }
     }
 
     fun scheduleStatus(rule: EarnItRuleStore.Rule, isActiveNow: Boolean): String {
         return when {
             !rule.enabled -> "Rule paused"
-            isActiveNow -> "Active now"
+            isActiveNow -> "Active now - until ${EarnItRuleStore.formatMinute(rule.endMinute)}"
             else -> "Unrestricted right now"
         }
     }

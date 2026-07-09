@@ -62,7 +62,7 @@ class EarnItUiStateTest {
         assertEquals(2, state.rewardAppCount)
         assertEquals("2 min available", state.availableRewardTimeLabel)
         assertEquals("10 min productive today", state.productiveUsageLabel)
-        assertEquals("Active now", state.scheduleStatusLabel)
+        assertEquals("Active now - until 17:00", state.scheduleStatusLabel)
         assertEquals("Earning progress needs attention", state.attentionLabel)
     }
 
@@ -96,7 +96,7 @@ class EarnItUiStateTest {
         assertTrue(state.canReview)
         assertTrue(state.canSave)
         assertTrue(state.reviewSummary.contains("When I use Duolingo"))
-        assertTrue(state.reviewSummary.contains("Every 1 min earns 2 min Reward Time"))
+        assertTrue(state.reviewSummary.contains("Every 10 min earns 20 min Reward Time"))
         assertTrue(state.reviewSummary.contains("For Instagram"))
     }
 
