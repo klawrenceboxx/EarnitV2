@@ -5,6 +5,9 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -12,6 +15,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextField
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -235,20 +239,35 @@ private fun EarnStep(
     onProductiveSearchChange: (String) -> Unit,
     onSelectProductiveApp: (String) -> Unit
 ) {
+    val selectedAppName = apps.firstOrNull { it.packageName == selectedProductivePackage }?.name
+        ?: if (rule.productivePackage == selectedProductivePackage) rule.productiveName else null
+    val visibleApps = apps.builderFilteredBy(productiveSearch)
     EditorSection(
         title = "How will you earn Reward Time?",
-        helperText = "Choose an Earn App where productive time should count."
+        helperText = "Choose one Earn App where productive time should count."
     ) {
-        ProductiveAppSection(
-            rule = rule,
-            apps = apps,
-            selectedProductivePackage = selectedProductivePackage,
-            pickerOpen = productivePickerOpen,
-            search = productiveSearch,
-            onOpenPicker = onOpenProductivePicker,
-            onClosePicker = onCloseProductivePicker,
-            onSearchChange = onProductiveSearchChange,
-            onSelectApp = onSelectProductiveApp
+        if (selectedAppName == null) {
+            Text(text = "No Earn App selected yet.", style = MaterialTheme.typography.bodyMedium)
+        } else {
+            AppSelectionSummary(
+                label = "Selected Earn App",
+                text = selectedAppName
+            )
+        }
+        BuilderAppSearchField(
+            value = productiveSearch,
+            onValueChange = onProductiveSearchChange,
+            label = "Search Earn Apps"
+        )
+        BuilderAppList(
+            apps = visibleApps,
+            selectedPackages = setOf(selectedProductivePackage),
+            multiSelect = false,
+            emptyText = "No Earn Apps match your search.",
+            onClickApp = { packageName ->
+                onSelectProductiveApp(packageName)
+                onCloseProductivePicker()
+            }
         )
     }
 }
@@ -265,22 +284,137 @@ private fun RewardStep(
     onBlockedSearchChange: (String) -> Unit,
     onToggleBlockedApp: (String) -> Unit
 ) {
+    val namesByPackage = rule.blockedApps.associate { it.packageName to it.name } +
+        apps.associate { it.packageName to it.name }
+    val selectedNames = selectedBlockedPackages.mapNotNull { namesByPackage[it] }
+    val visibleApps = apps.builderFilteredBy(blockedSearch)
     EditorSection(
         title = "Where can Reward Time be spent?",
         helperText = "Choose one or more Reward Apps that share this Rule balance."
     ) {
-        BlockedAppsSection(
-            rule = rule,
-            apps = apps,
-            selectedBlockedPackages = selectedBlockedPackages,
-            pickerOpen = blockedPickerOpen,
-            search = blockedSearch,
-            onOpenPicker = onOpenBlockedPicker,
-            onClosePicker = onCloseBlockedPicker,
-            onSearchChange = onBlockedSearchChange,
-            onToggleApp = onToggleBlockedApp
+        AppSelectionSummary(
+            label = "Selected Reward Apps",
+            text = if (selectedNames.isEmpty()) {
+                "0 selected"
+            } else {
+                "${selectedNames.size} selected: ${selectedNames.take(3).joinToString(", ")}" +
+                    if (selectedNames.size > 3) " +${selectedNames.size - 3} more" else ""
+            }
         )
+        BuilderAppSearchField(
+            value = blockedSearch,
+            onValueChange = onBlockedSearchChange,
+            label = "Search Reward Apps"
+        )
+        BuilderAppList(
+            apps = visibleApps,
+            selectedPackages = selectedBlockedPackages,
+            multiSelect = true,
+            emptyText = "No Reward Apps match your search.",
+            onClickApp = onToggleBlockedApp
+        )
+        if (blockedPickerOpen) {
+            OutlinedButton(onClick = onCloseBlockedPicker, modifier = Modifier.fillMaxWidth()) {
+                Text(text = "Done selecting Reward Apps")
+            }
+        }
     }
+}
+
+@Composable
+private fun AppSelectionSummary(label: String, text: String) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Text(text = label, style = MaterialTheme.typography.labelSmall)
+            Text(text = text, style = MaterialTheme.typography.bodyMedium)
+        }
+    }
+}
+
+@Composable
+private fun BuilderAppSearchField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    label: String
+) {
+    TextField(
+        value = value,
+        onValueChange = onValueChange,
+        label = { Text(text = label) },
+        modifier = Modifier.fillMaxWidth(),
+        singleLine = true
+    )
+}
+
+@Composable
+private fun BuilderAppList(
+    apps: List<EarnItRuleStore.LaunchableApp>,
+    selectedPackages: Set<String>,
+    multiSelect: Boolean,
+    emptyText: String,
+    onClickApp: (String) -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(max = 360.dp)
+            .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        if (apps.isEmpty()) {
+            Text(text = emptyText, style = MaterialTheme.typography.bodyMedium)
+        }
+        apps.forEach { app ->
+            BuilderAppRow(
+                app = app,
+                selected = app.packageName in selectedPackages,
+                multiSelect = multiSelect,
+                onClickApp = onClickApp
+            )
+        }
+    }
+}
+
+@Composable
+private fun BuilderAppRow(
+    app: EarnItRuleStore.LaunchableApp,
+    selected: Boolean,
+    multiSelect: Boolean,
+    onClickApp: (String) -> Unit
+) {
+    OutlinedButton(
+        onClick = { onClickApp(app.packageName) },
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(text = app.name)
+            Text(
+                text = when {
+                    selected && multiSelect -> "Selected"
+                    selected -> "Selected Earn App"
+                    multiSelect -> "Add"
+                    else -> "Choose"
+                },
+                style = MaterialTheme.typography.labelSmall
+            )
+        }
+    }
+}
+
+private fun List<EarnItRuleStore.LaunchableApp>.builderFilteredBy(query: String): List<EarnItRuleStore.LaunchableApp> {
+    val trimmedQuery = query.trim()
+    if (trimmedQuery.isEmpty()) return this
+    return filter { it.name.contains(trimmedQuery, ignoreCase = true) }
 }
 
 @Composable
