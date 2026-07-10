@@ -130,6 +130,7 @@ fun homeRuleUiState(
     val statusText = when {
         card.attentionLabel != null -> "Protection needs attention"
         !rule.enabled -> "Available if resumed today"
+        rule.type == EarnItRuleStore.RuleType.CompleteToUnlock -> homeCompleteStatusText(rule)
         else -> card.scheduleStatusLabel
     }
     return HomeRuleUiState(
@@ -137,7 +138,7 @@ fun homeRuleUiState(
         card = card,
         primaryText = primaryText,
         secondaryText = secondaryText,
-        earnContextText = if (rule.type == EarnItRuleStore.RuleType.EarnRewardTime && rule.enabled && isActiveNow) {
+        earnContextText = if (rule.type == EarnItRuleStore.RuleType.EarnRewardTime) {
             EarnItUiFormatters.exchangeSummary(rule.rewardSecondsPerProductiveSecond)
         } else {
             null
@@ -160,10 +161,10 @@ private fun homePrimaryText(
             else -> card.availableRewardTimeLabel
         }
         EarnItRuleStore.RuleType.CompleteToUnlock -> {
-            if (isActiveNow) "Complete requirements to unlock" else "Unlock rule scheduled"
+            if (isActiveNow) "Locked" else "Scheduled"
         }
         EarnItRuleStore.RuleType.ScheduledBlock -> {
-            if (isActiveNow) "Blocked now" else "Scheduled block"
+            if (isActiveNow) "Blocking now" else "Not blocking now"
         }
     }
 }
@@ -181,10 +182,25 @@ private fun homeSecondaryText(
             else -> null
         }
         EarnItRuleStore.RuleType.CompleteToUnlock -> {
-            val count = rule.requirements.size
-            "$count ${if (count == 1) "requirement" else "requirements"}"
+            requirementSummaryLabel(rule.requirements.size)
         }
         EarnItRuleStore.RuleType.ScheduledBlock -> rule.scheduleLabel
+    }
+}
+
+private fun homeCompleteStatusText(rule: EarnItRuleStore.Rule): String {
+    return if (rule.requirements.isEmpty()) {
+        "No requirements saved"
+    } else {
+        "Requirements incomplete"
+    }
+}
+
+internal fun requirementSummaryLabel(count: Int): String {
+    return when (count) {
+        0 -> "No requirements"
+        1 -> "1 requirement remaining"
+        else -> "$count requirements remaining"
     }
 }
 
@@ -273,9 +289,10 @@ private fun LiveRuleCard(
         border = BorderStroke(2.dp, MaterialTheme.colorScheme.outlineVariant)
     ) {
         Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
+            Text(text = ruleTypeTitle(homeRule.rule.type), style = MaterialTheme.typography.labelSmall)
             Text(text = homeRule.primaryText, style = MaterialTheme.typography.headlineSmall)
             if (homeRule.secondaryText != null) {
                 Text(text = homeRule.secondaryText, style = MaterialTheme.typography.bodyMedium)
@@ -284,14 +301,16 @@ private fun LiveRuleCard(
                 EarnItRuleStore.RuleType.EarnRewardTime -> {
                     RewardAppsRow(label = "For", apps = card.rewardApps)
                     EarnAppRow(
-                        appName = card.earnAppName,
-                        packageName = card.earnAppPackage,
+                        apps = card.earnApps,
                         contextText = homeRule.earnContextText,
                         onOpenEarnApp = onOpenEarnApp
                     )
                 }
                 EarnItRuleStore.RuleType.CompleteToUnlock -> {
-                    RequirementCountRow(requirements = homeRule.rule.requirements)
+                    RequirementsRows(
+                        requirements = homeRule.rule.requirements,
+                        onOpenEarnApp = onOpenEarnApp
+                    )
                     RewardAppsRow(label = "Unlocks", apps = card.rewardApps)
                 }
                 EarnItRuleStore.RuleType.ScheduledBlock -> {
@@ -307,15 +326,48 @@ private fun LiveRuleCard(
     }
 }
 
+private fun ruleTypeTitle(ruleType: EarnItRuleStore.RuleType): String {
+    return when (ruleType) {
+        EarnItRuleStore.RuleType.EarnRewardTime -> "Earn Reward Time"
+        EarnItRuleStore.RuleType.CompleteToUnlock -> "Complete to Unlock"
+        EarnItRuleStore.RuleType.ScheduledBlock -> "Scheduled Block"
+    }
+}
+
 @Composable
-private fun RequirementCountRow(requirements: List<EarnItRuleStore.RuleRequirement>) {
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+private fun RequirementsRows(
+    requirements: List<EarnItRuleStore.RuleRequirement>,
+    onOpenEarnApp: (String) -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(text = "Requirements", style = MaterialTheme.typography.labelSmall)
-        Text(
-            text = "${requirements.size} ${if (requirements.size == 1) "requirement" else "requirements"} must be complete",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
+        requirements.take(2).forEach { requirement ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                EarnItAppIcon(packageName = requirement.app.packageName, appName = requirement.app.name, size = 28.dp)
+                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(text = requirement.app.name, style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        text = "${requirement.requiredSeconds / 60L} min required",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                TextButton(onClick = { onOpenEarnApp(requirement.app.packageName) }) {
+                    Text(text = "Open")
+                }
+            }
+        }
+        if (requirements.size > 2) {
+            Text(
+                text = "+${requirements.size - 2} more",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
     }
 }
 
@@ -349,8 +401,7 @@ private fun RewardAppsRow(label: String, apps: List<EarnItAppUiState>) {
 
 @Composable
 private fun EarnAppRow(
-    appName: String,
-    packageName: String,
+    apps: List<EarnItAppUiState>,
     contextText: String?,
     onOpenEarnApp: (String) -> Unit
 ) {
@@ -359,24 +410,43 @@ private fun EarnAppRow(
         Row(
             modifier = Modifier
                 .clip(RoundedCornerShape(4.dp))
-                .clickable { onOpenEarnApp(packageName) }
                 .background(MaterialTheme.colorScheme.surfaceVariant)
                 .padding(horizontal = 10.dp, vertical = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            EarnItAppIcon(packageName = packageName, appName = appName, size = 24.dp)
-            Text(text = appName, style = MaterialTheme.typography.bodyMedium)
-            if (contextText != null) {
-                Text(
-                    text = contextText,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+            apps.take(3).forEach { app ->
+                EarnItAppIcon(packageName = app.packageName, appName = app.name, size = 24.dp)
             }
+            if (apps.size > 3) CountBubble(count = apps.size - 3)
+            Text(text = apps.take(2).joinToString(", ") { it.name } + if (apps.size > 2) " +${apps.size - 2}" else "", style = MaterialTheme.typography.bodyMedium)
             Spacer(modifier = Modifier.weight(1f, fill = false))
-            Text(text = ">", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (apps.size == 1) {
+                TextButton(onClick = { onOpenEarnApp(apps.first().packageName) }) {
+                    Text(text = "Open")
+                }
+            }
         }
+        if (contextText != null) {
+            Text(
+                text = contextText,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+@Composable
+private fun CountBubble(count: Int) {
+    Box(
+        modifier = Modifier
+            .size(24.dp)
+            .clip(RoundedCornerShape(4.dp))
+            .background(MaterialTheme.colorScheme.surface),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(text = "+$count", style = MaterialTheme.typography.labelSmall)
     }
 }
 

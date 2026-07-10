@@ -125,8 +125,9 @@ class EarnItUiStateTest {
             appBlockingEnabled = true
         )
 
-        assertEquals("Complete requirements to unlock", state.primaryText)
-        assertEquals("2 requirements", state.secondaryText)
+        assertEquals("Locked", state.primaryText)
+        assertEquals("2 requirements remaining", state.secondaryText)
+        assertEquals("Requirements incomplete", state.statusText)
         assertNull(state.earnContextText)
     }
 
@@ -142,8 +143,54 @@ class EarnItUiStateTest {
             appBlockingEnabled = true
         )
 
-        assertEquals("Blocked now", state.primaryText)
+        assertEquals("Blocking now", state.primaryText)
         assertEquals("Every day · All day", state.secondaryText)
+        assertNull(state.earnContextText)
+    }
+
+    @Test
+    fun requirementSummaryLabel_usesConciseGrammar() {
+        assertEquals("No requirements", requirementSummaryLabel(0))
+        assertEquals("1 requirement remaining", requirementSummaryLabel(1))
+        assertEquals("2 requirements remaining", requirementSummaryLabel(2))
+    }
+
+    @Test
+    fun homeRuleUiState_earnRewardTimePreservesBalanceAndExchangeContext() {
+        val state = homeRuleUiState(
+            state = RuleDashboardState(
+                rule = sampleRule(),
+                productiveUsageSeconds = 0,
+                remainingRewardSeconds = 0
+            ),
+            usageAccessGranted = true,
+            appBlockingEnabled = true
+        )
+
+        assertEquals("No Reward Time", state.primaryText)
+        assertEquals("Every 10 min earns 2 min Reward Time", state.secondaryText)
+        assertEquals("Every 10 min earns 2 min Reward Time", state.earnContextText)
+    }
+
+    @Test
+    fun homeRuleUiState_scheduledBlockInactiveUsesClearState() {
+        val state = homeRuleUiState(
+            state = RuleDashboardState(
+                rule = scheduledBlockRule().copy(
+                    activeDays = setOf(1),
+                    startMinute = 9 * 60,
+                    endMinute = 10 * 60,
+                    timeWindows = listOf(EarnItRuleStore.TimeWindow(9 * 60, 10 * 60))
+                ),
+                productiveUsageSeconds = 0,
+                remainingRewardSeconds = 0
+            ),
+            usageAccessGranted = true,
+            appBlockingEnabled = true
+        )
+
+        assertEquals("Not blocking now", state.primaryText)
+        assertEquals("Mon · 9:00 AM-10:00 AM", state.secondaryText)
         assertNull(state.earnContextText)
     }
 

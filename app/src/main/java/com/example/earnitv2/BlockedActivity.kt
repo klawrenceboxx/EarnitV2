@@ -1,5 +1,6 @@
 package com.example.earnitv2
 
+import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -10,9 +11,11 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -27,6 +30,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.example.earnitv2.ui.theme.EarnitV2Theme
@@ -40,6 +44,7 @@ class BlockedActivity : ComponentActivity() {
     private var exchangeLabel by mutableStateOf("Every 10 min earns 10 min Reward Time")
     private var blockedReason by mutableStateOf(RuleAccessEvaluator.DenialReason.OutOfRewardTime)
     private var fallbackMessage by mutableStateOf<String?>(null)
+    private var incompleteRequirements by mutableStateOf(emptyList<BlockedRequirementUiState>())
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -54,8 +59,10 @@ class BlockedActivity : ComponentActivity() {
                     productivePackage = productivePackage,
                     exchangeLabel = exchangeLabel,
                     blockedReason = blockedReason,
+                    incompleteRequirements = incompleteRequirements,
                     fallbackMessage = fallbackMessage,
                     onOpenProductiveApp = ::openProductiveApp,
+                    onOpenRequirementApp = ::openRequirementApp,
                     onNotNow = ::returnHome
                 )
             }
@@ -88,18 +95,34 @@ class BlockedActivity : ComponentActivity() {
             RuleAccessEvaluator.DenialReason.entries.firstOrNull { it.name == rawReason }
         } ?: RuleAccessEvaluator.DenialReason.OutOfRewardTime
         exchangeLabel = EarnItUiFormatters.exchangeSummary(rule.rewardSecondsPerProductiveSecond)
+        incompleteRequirements = blockedRequirementUiStates(
+            rule = rule,
+            progressSeconds = RewardLedger.completionProgress(this, rule)
+        )
     }
 
     private fun openProductiveApp() {
-        val launchIntent = packageManager.getLaunchIntentForPackage(productivePackage)
+        openApp(productivePackage, productiveAppName)
+    }
+
+    private fun openRequirementApp(requirement: BlockedRequirementUiState) {
+        openApp(requirement.packageName, requirement.name)
+    }
+
+    private fun openApp(packageName: String, appName: String) {
+        val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
         if (launchIntent == null) {
-            fallbackMessage = "$productiveAppName is not installed on this device."
+            fallbackMessage = "$appName is not installed on this device."
             return
         }
 
         fallbackMessage = null
         launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        startActivity(launchIntent)
+        try {
+            startActivity(launchIntent)
+        } catch (_: ActivityNotFoundException) {
+            fallbackMessage = "$appName could not be opened on this device."
+        }
     }
 
     private fun returnHome() {
@@ -129,8 +152,10 @@ fun BlockedScreen(
     productivePackage: String,
     exchangeLabel: String,
     blockedReason: RuleAccessEvaluator.DenialReason,
+    incompleteRequirements: List<BlockedRequirementUiState>,
     fallbackMessage: String?,
     onOpenProductiveApp: () -> Unit,
+    onOpenRequirementApp: (BlockedRequirementUiState) -> Unit,
     onNotNow: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -170,19 +195,28 @@ fun BlockedScreen(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                if (blockedReason == RuleAccessEvaluator.DenialReason.OutOfRewardTime) {
-                    Text(text = "Earn more with", style = MaterialTheme.typography.bodyMedium)
-                    EarnAppCard(
-                        productiveAppName = productiveAppName,
-                        productivePackage = productivePackage,
-                        exchangeLabel = exchangeLabel
-                    )
-                    Button(
-                        onClick = onOpenProductiveApp,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text(text = "Open $productiveAppName")
+                when (blockedReason) {
+                    RuleAccessEvaluator.DenialReason.OutOfRewardTime -> {
+                        Text(text = "Earn more with", style = MaterialTheme.typography.bodyMedium)
+                        EarnAppCard(
+                            productiveAppName = productiveAppName,
+                            productivePackage = productivePackage,
+                            exchangeLabel = exchangeLabel
+                        )
+                        Button(
+                            onClick = onOpenProductiveApp,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(text = "Open $productiveAppName", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
                     }
+                    RuleAccessEvaluator.DenialReason.CompleteToUnlockIncomplete -> {
+                        RequirementsRemaining(
+                            requirements = incompleteRequirements,
+                            onOpenRequirementApp = onOpenRequirementApp
+                        )
+                    }
+                    RuleAccessEvaluator.DenialReason.ScheduledBlockActive -> Unit
                 }
                 TextButton(
                     onClick = onNotNow,
@@ -203,7 +237,7 @@ fun BlockedScreen(
     }
 }
 
-private fun blockedTitle(reason: RuleAccessEvaluator.DenialReason): String {
+fun blockedTitle(reason: RuleAccessEvaluator.DenialReason): String {
     return when (reason) {
         RuleAccessEvaluator.DenialReason.ScheduledBlockActive -> "Blocked by schedule"
         RuleAccessEvaluator.DenialReason.CompleteToUnlockIncomplete -> "Complete requirements to unlock"
@@ -211,11 +245,166 @@ private fun blockedTitle(reason: RuleAccessEvaluator.DenialReason): String {
     }
 }
 
-private fun blockedDescription(reason: RuleAccessEvaluator.DenialReason, blockedAppName: String): String {
+fun blockedDescription(reason: RuleAccessEvaluator.DenialReason, blockedAppName: String): String {
     return when (reason) {
         RuleAccessEvaluator.DenialReason.ScheduledBlockActive -> "$blockedAppName is blocked by a Scheduled Block Rule right now."
         RuleAccessEvaluator.DenialReason.CompleteToUnlockIncomplete -> "$blockedAppName unlocks after this Rule's requirements are complete."
         RuleAccessEvaluator.DenialReason.OutOfRewardTime -> "$blockedAppName uses Reward Time from this Rule."
+    }
+}
+
+data class BlockedRequirementUiState(
+    val packageName: String,
+    val name: String,
+    val progressSeconds: Long?,
+    val requiredSeconds: Long
+) {
+    val complete: Boolean = progressSeconds?.let { it >= requiredSeconds } ?: false
+    val progressLabel: String = progressSeconds?.let { progress ->
+        "${formatProgressMinutes(progress)} / ${formatWholeMinutes(requiredSeconds)}"
+    } ?: "${formatWholeMinutes(requiredSeconds)} required"
+}
+
+fun blockedRequirementUiStates(
+    rule: EarnItRuleStore.Rule,
+    progressSeconds: Map<String, Long>
+): List<BlockedRequirementUiState> {
+    if (rule.type != EarnItRuleStore.RuleType.CompleteToUnlock) return emptyList()
+    return rule.requirements.map { requirement ->
+        val packageName = requirement.app.packageName
+        BlockedRequirementUiState(
+            packageName = packageName,
+            name = requirement.app.name,
+            progressSeconds = progressSeconds[packageName]?.coerceAtLeast(0L),
+            requiredSeconds = requirement.requiredSeconds.coerceAtLeast(0L)
+        )
+    }.filterNot { it.complete }
+}
+
+private fun formatWholeMinutes(totalSeconds: Long): String {
+    val minutes = totalSeconds.coerceAtLeast(0L) / 60L
+    return when {
+        totalSeconds <= 0L -> "0 min"
+        minutes > 0L -> "${minutes} min"
+        else -> "<1 min"
+    }
+}
+
+private fun formatProgressMinutes(totalSeconds: Long): String {
+    val minutes = totalSeconds.coerceAtLeast(0L) / 60L
+    return if (minutes == 0L) "0" else "${minutes} min"
+}
+
+@Composable
+private fun RequirementsRemaining(
+    requirements: List<BlockedRequirementUiState>,
+    onOpenRequirementApp: (BlockedRequirementUiState) -> Unit
+) {
+    if (requirements.isEmpty()) {
+        Text(
+            text = "Requirements remaining",
+            style = MaterialTheme.typography.bodyMedium,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth()
+        )
+        return
+    }
+
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Text(text = "Complete all requirements:", style = MaterialTheme.typography.bodyMedium)
+        if (requirements.size == 1) {
+            val requirement = requirements.single()
+            RequirementCard(requirement = requirement)
+            Button(
+                onClick = { onOpenRequirementApp(requirement) },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    text = "Open ${requirement.name}",
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        } else {
+            requirements.forEach { requirement ->
+                RequirementRow(
+                    requirement = requirement,
+                    onOpen = { onOpenRequirementApp(requirement) }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun RequirementCard(
+    requirement: BlockedRequirementUiState,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+    ) {
+        RequirementContent(requirement = requirement, modifier = Modifier.padding(14.dp))
+    }
+}
+
+@Composable
+private fun RequirementRow(
+    requirement: BlockedRequirementUiState,
+    onOpen: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            RequirementContent(requirement = requirement, modifier = Modifier.weight(1f))
+            Spacer(modifier = Modifier.width(8.dp))
+            TextButton(
+                onClick = onOpen,
+                modifier = Modifier.widthIn(max = 128.dp)
+            ) {
+                Text(
+                    text = "Open ${requirement.name}",
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun RequirementContent(
+    requirement: BlockedRequirementUiState,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        EarnItAppIcon(packageName = requirement.packageName, appName = requirement.name, size = 40.dp)
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.weight(1f)) {
+            Text(
+                text = requirement.name,
+                style = MaterialTheme.typography.titleMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(text = requirement.progressLabel, style = MaterialTheme.typography.bodySmall)
+        }
     }
 }
 
@@ -237,8 +426,13 @@ private fun EarnAppCard(
             verticalAlignment = Alignment.CenterVertically
         ) {
             EarnItAppIcon(packageName = productivePackage, appName = productiveAppName, size = 48.dp)
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(text = productiveAppName, style = MaterialTheme.typography.titleMedium)
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.weight(1f)) {
+                Text(
+                    text = productiveAppName,
+                    style = MaterialTheme.typography.titleMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
                 Text(text = exchangeLabel, style = MaterialTheme.typography.bodySmall)
             }
         }
@@ -256,8 +450,10 @@ fun BlockedScreenPreview() {
             productivePackage = "com.duolingo",
             exchangeLabel = "Every 10 min earns 20 min Reward Time",
             blockedReason = RuleAccessEvaluator.DenialReason.OutOfRewardTime,
+            incompleteRequirements = emptyList(),
             fallbackMessage = null,
             onOpenProductiveApp = {},
+            onOpenRequirementApp = {},
             onNotNow = {}
         )
     }
