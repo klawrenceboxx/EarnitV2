@@ -23,9 +23,11 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -36,6 +38,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import java.util.Calendar
+import kotlinx.coroutines.delay
 
 internal enum class RuleDetailTone {
     Active,
@@ -44,9 +48,27 @@ internal enum class RuleDetailTone {
 
 internal enum class RuleDetailOverflowAction {
     Edit,
-    Pause,
     Delete
 }
+
+private enum class EditGateState {
+    Hidden,
+    Confirm,
+    Counting,
+    Complete
+}
+
+private enum class PauseSheetState {
+    Hidden,
+    Options,
+    Reason,
+    Counting
+}
+
+internal data class PauseOption(
+    val label: String,
+    val durationMillis: Long
+)
 
 internal data class RuleDetailStatusCardState(
     val title: String,
@@ -61,21 +83,60 @@ internal data class RuleDetailStatusCardState(
 fun EarnItRuleDetail(
     homeRule: HomeRuleUiState,
     detail: RuleDetailUiState,
+    pausedUntilMillis: Long?,
     permissionState: PermissionSetupUiState,
     onBack: () -> Unit,
     onOpenEarnApp: (String) -> Unit,
     onOpenUsageAccessSettings: () -> Unit,
     onOpenAccessibilitySettings: () -> Unit,
     onEditRule: (EarnItRuleStore.Rule) -> Unit,
-    onToggleRuleEnabled: (EarnItRuleStore.Rule) -> Unit,
+    onPauseRuleFor: (EarnItRuleStore.Rule, Long) -> Unit,
+    onResumeRule: (EarnItRuleStore.Rule) -> Unit,
     onDeleteRule: (EarnItRuleStore.Rule) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val rule = homeRule.rule
+    var nowMillis by remember(rule.id) { mutableStateOf(System.currentTimeMillis()) }
+    var editGateState by remember(rule.id) { mutableStateOf(EditGateState.Hidden) }
+    var editCountdownSeconds by remember(rule.id) { mutableStateOf(10) }
+    var pauseSheetState by remember(rule.id) { mutableStateOf(PauseSheetState.Hidden) }
+    var selectedPauseOption by remember(rule.id) { mutableStateOf<PauseOption?>(null) }
+    var pauseReason by remember(rule.id) { mutableStateOf<String?>(null) }
+    var pauseCountdownSeconds by remember(rule.id) { mutableStateOf(10) }
+    var customPauseMinutes by remember(rule.id) { mutableStateOf("45") }
+
+    LaunchedEffect(pausedUntilMillis) {
+        while (pausedUntilMillis != null && pausedUntilMillis > System.currentTimeMillis()) {
+            nowMillis = System.currentTimeMillis()
+            delay(1_000)
+        }
+        nowMillis = System.currentTimeMillis()
+    }
+    LaunchedEffect(editGateState) {
+        if (editGateState == EditGateState.Counting) {
+            editCountdownSeconds = 10
+            while (editCountdownSeconds > 0 && editGateState == EditGateState.Counting) {
+                delay(1_000)
+                editCountdownSeconds -= 1
+            }
+            if (editGateState == EditGateState.Counting) editGateState = EditGateState.Complete
+        }
+    }
+    LaunchedEffect(pauseSheetState, selectedPauseOption) {
+        if (pauseSheetState == PauseSheetState.Counting && selectedPauseOption != null) {
+            pauseCountdownSeconds = 10
+            while (pauseCountdownSeconds > 0 && pauseSheetState == PauseSheetState.Counting) {
+                delay(1_000)
+                pauseCountdownSeconds -= 1
+            }
+        }
+    }
+
     val statusState = ruleDetailStatusCardState(
         rule = rule,
         availableRewardTimeLabel = detail.card.availableRewardTimeLabel,
-        isActiveNow = rule.enabled && rule.isActiveNow()
+        isActiveNow = rule.enabled && rule.isActiveNow(),
+        pauseCountdownLabel = pausedUntilMillis?.let { pauseCountdownLabel(it, nowMillis) }
     )
     Column(
         modifier = modifier
@@ -87,10 +148,51 @@ fun EarnItRuleDetail(
         RuleDetailTopBar(
             rule = rule,
             onBack = onBack,
-            onEditRule = onEditRule,
-            onToggleRuleEnabled = onToggleRuleEnabled,
+            onEditRule = { editGateState = EditGateState.Confirm },
             onDeleteRule = onDeleteRule
         )
+
+        if (editGateState != EditGateState.Hidden) {
+            EditRuleGateCard(
+                state = editGateState,
+                countdownSeconds = editCountdownSeconds,
+                onStartCountdown = { editGateState = EditGateState.Counting },
+                onContinue = { onEditRule(rule) },
+                onCancel = { editGateState = EditGateState.Hidden }
+            )
+        }
+
+        if (pauseSheetState != PauseSheetState.Hidden) {
+            PauseOptionsCard(
+                rule = rule,
+                state = pauseSheetState,
+                selectedOption = selectedPauseOption,
+                reason = pauseReason,
+                countdownSeconds = pauseCountdownSeconds,
+                customPauseMinutes = customPauseMinutes,
+                onCustomPauseMinutesChange = { customPauseMinutes = it.filter(Char::isDigit).take(4) },
+                onSelectOption = { option ->
+                    selectedPauseOption = option
+                    pauseReason = null
+                    pauseSheetState = PauseSheetState.Reason
+                },
+                onUseCustomOption = {
+                    val minutes = customPauseMinutes.toLongOrNull()?.coerceAtLeast(1L) ?: 45L
+                    selectedPauseOption = PauseOption("Custom duration", minutes * 60_000L)
+                    pauseReason = null
+                    pauseSheetState = PauseSheetState.Reason
+                },
+                onSelectReason = {
+                    pauseReason = it
+                    pauseSheetState = PauseSheetState.Counting
+                },
+                onConfirmPause = {
+                    selectedPauseOption?.let { onPauseRuleFor(rule, it.durationMillis) }
+                    pauseSheetState = PauseSheetState.Hidden
+                },
+                onCancel = { pauseSheetState = PauseSheetState.Hidden }
+            )
+        }
 
         if (permissionState.needsAttention) {
             RuleDetailAttention(
@@ -103,7 +205,9 @@ fun EarnItRuleDetail(
         RuleStatusCard(
             ruleType = rule.type,
             state = statusState,
-            onResume = { onToggleRuleEnabled(rule) }
+            onResume = { onResumeRule(rule) },
+            onQuickPause = { onPauseRuleFor(rule, FIVE_MINUTES_MILLIS) },
+            onMorePauseOptions = { pauseSheetState = PauseSheetState.Options }
         )
 
         when (rule.type) {
@@ -140,7 +244,6 @@ private fun RuleDetailTopBar(
     rule: EarnItRuleStore.Rule,
     onBack: () -> Unit,
     onEditRule: (EarnItRuleStore.Rule) -> Unit,
-    onToggleRuleEnabled: (EarnItRuleStore.Rule) -> Unit,
     onDeleteRule: (EarnItRuleStore.Rule) -> Unit
 ) {
     Row(
@@ -155,7 +258,6 @@ private fun RuleDetailTopBar(
         RuleDetailOverflowMenu(
             actions = ruleDetailOverflowActions(rule),
             onEdit = { onEditRule(rule) },
-            onPause = { onToggleRuleEnabled(rule) },
             onDelete = { onDeleteRule(rule) }
         )
     }
@@ -165,7 +267,6 @@ private fun RuleDetailTopBar(
 private fun RuleDetailOverflowMenu(
     actions: List<RuleDetailOverflowAction>,
     onEdit: () -> Unit,
-    onPause: () -> Unit,
     onDelete: () -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
@@ -187,7 +288,6 @@ private fun RuleDetailOverflowMenu(
                         expanded = false
                         when (action) {
                             RuleDetailOverflowAction.Edit -> onEdit()
-                            RuleDetailOverflowAction.Pause -> onPause()
                             RuleDetailOverflowAction.Delete -> onDelete()
                         }
                     }
@@ -228,7 +328,9 @@ private fun RuleDetailAttention(
 private fun RuleStatusCard(
     ruleType: EarnItRuleStore.RuleType,
     state: RuleDetailStatusCardState,
-    onResume: () -> Unit
+    onResume: () -> Unit,
+    onQuickPause: () -> Unit,
+    onMorePauseOptions: () -> Unit
 ) {
     val accent = ruleDetailAccentColor(state.tone)
     SectionContainer(borderColor = accent) {
@@ -250,9 +352,142 @@ private fun RuleStatusCard(
         }
         if (state.showResume) {
             Button(onClick = onResume, modifier = Modifier.fillMaxWidth()) {
-                Text(text = "Resume Rule")
+                Text(text = "Resume now")
+            }
+        } else {
+            Button(onClick = onQuickPause, modifier = Modifier.fillMaxWidth()) {
+                Text(text = "Pause for 5 minutes")
+            }
+            TextButton(onClick = onMorePauseOptions, modifier = Modifier.fillMaxWidth()) {
+                Text(text = "More pause options")
             }
         }
+    }
+}
+
+@Composable
+private fun EditRuleGateCard(
+    state: EditGateState,
+    countdownSeconds: Int,
+    onStartCountdown: () -> Unit,
+    onContinue: () -> Unit,
+    onCancel: () -> Unit
+) {
+    SectionContainer {
+        Text(text = "Edit this Rule?", style = MaterialTheme.typography.titleLarge)
+        when (state) {
+            EditGateState.Confirm -> {
+                Text(
+                    text = "Editing is available after a short wait to help prevent accidental or impulsive changes.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Button(onClick = onStartCountdown, modifier = Modifier.fillMaxWidth()) {
+                    Text(text = "Continue to edit")
+                }
+            }
+            EditGateState.Counting -> {
+                CountdownBlock(title = "Edit available in", seconds = countdownSeconds)
+                Text(
+                    text = "You can still cancel if you change your mind.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Button(onClick = {}, enabled = false, modifier = Modifier.fillMaxWidth()) {
+                    Text(text = "Continue to edit")
+                }
+            }
+            EditGateState.Complete -> {
+                Text(text = "OK", style = MaterialTheme.typography.headlineMedium, color = ruleDetailAccentColor(RuleDetailTone.Active))
+                Text(text = "You can now edit this Rule.", style = MaterialTheme.typography.bodyMedium)
+                Button(onClick = onContinue, modifier = Modifier.fillMaxWidth()) {
+                    Text(text = "Continue to edit")
+                }
+            }
+            EditGateState.Hidden -> Unit
+        }
+        OutlinedButton(onClick = onCancel, modifier = Modifier.fillMaxWidth()) {
+            Text(text = "Cancel")
+        }
+    }
+}
+
+@Composable
+private fun PauseOptionsCard(
+    rule: EarnItRuleStore.Rule,
+    state: PauseSheetState,
+    selectedOption: PauseOption?,
+    reason: String?,
+    countdownSeconds: Int,
+    customPauseMinutes: String,
+    onCustomPauseMinutesChange: (String) -> Unit,
+    onSelectOption: (PauseOption) -> Unit,
+    onUseCustomOption: () -> Unit,
+    onSelectReason: (String) -> Unit,
+    onConfirmPause: () -> Unit,
+    onCancel: () -> Unit
+) {
+    SectionContainer {
+        when (state) {
+            PauseSheetState.Options -> {
+                Text(text = "More pause options", style = MaterialTheme.typography.titleLarge)
+                pauseOptionsForRule(rule).forEach { option ->
+                    OutlinedButton(onClick = { onSelectOption(option) }, modifier = Modifier.fillMaxWidth()) {
+                        Text(text = option.label)
+                    }
+                }
+                Text(text = "Custom duration", style = MaterialTheme.typography.titleSmall)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedTextField(
+                        value = customPauseMinutes,
+                        onValueChange = onCustomPauseMinutesChange,
+                        label = { Text(text = "Minutes") },
+                        modifier = Modifier.weight(1f)
+                    )
+                    OutlinedButton(onClick = onUseCustomOption) {
+                        Text(text = "Use")
+                    }
+                }
+            }
+            PauseSheetState.Reason -> {
+                Text(text = "Why are you pausing this Rule?", style = MaterialTheme.typography.titleLarge)
+                pauseReasonOptions().forEach { option ->
+                    OutlinedButton(onClick = { onSelectReason(option) }, modifier = Modifier.fillMaxWidth()) {
+                        Text(text = option)
+                    }
+                }
+            }
+            PauseSheetState.Counting -> {
+                Text(text = "Pause Rule?", style = MaterialTheme.typography.titleLarge)
+                Text(text = selectedOption?.label.orEmpty(), style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    text = "Reason: ${reason.orEmpty()}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                CountdownBlock(title = "Pause available in", seconds = countdownSeconds)
+                Button(
+                    onClick = onConfirmPause,
+                    enabled = countdownSeconds <= 0,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(text = "Pause Rule")
+                }
+            }
+            PauseSheetState.Hidden -> Unit
+        }
+        OutlinedButton(onClick = onCancel, modifier = Modifier.fillMaxWidth()) {
+            Text(text = "Cancel")
+        }
+    }
+}
+
+@Composable
+private fun CountdownBlock(title: String, seconds: Int) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
+        Text(text = title, style = MaterialTheme.typography.bodyMedium)
+        Text(text = seconds.coerceAtLeast(0).toString(), style = MaterialTheme.typography.headlineLarge)
+        Text(text = "seconds", style = MaterialTheme.typography.bodySmall)
     }
 }
 
@@ -522,7 +757,6 @@ private fun ruleDetailAccentColor(tone: RuleDetailTone): Color {
 internal fun ruleDetailOverflowActions(rule: EarnItRuleStore.Rule): List<RuleDetailOverflowAction> {
     return buildList {
         add(RuleDetailOverflowAction.Edit)
-        if (rule.enabled) add(RuleDetailOverflowAction.Pause)
         add(RuleDetailOverflowAction.Delete)
     }
 }
@@ -530,7 +764,6 @@ internal fun ruleDetailOverflowActions(rule: EarnItRuleStore.Rule): List<RuleDet
 internal fun ruleDetailOverflowActionLabel(action: RuleDetailOverflowAction): String {
     return when (action) {
         RuleDetailOverflowAction.Edit -> "Edit Rule"
-        RuleDetailOverflowAction.Pause -> "Pause Rule"
         RuleDetailOverflowAction.Delete -> "Delete Rule"
     }
 }
@@ -538,14 +771,15 @@ internal fun ruleDetailOverflowActionLabel(action: RuleDetailOverflowAction): St
 internal fun ruleDetailStatusCardState(
     rule: EarnItRuleStore.Rule,
     availableRewardTimeLabel: String,
-    isActiveNow: Boolean
+    isActiveNow: Boolean,
+    pauseCountdownLabel: String? = null
 ): RuleDetailStatusCardState {
     if (!rule.enabled) {
         return RuleDetailStatusCardState(
             title = "Rule paused",
-            metric = pausedStatusMetric(rule, availableRewardTimeLabel),
-            stateLabel = null,
-            body = pausedStatusBody(rule),
+            metric = pauseCountdownLabel ?: pausedStatusMetric(rule, availableRewardTimeLabel),
+            stateLabel = if (pauseCountdownLabel != null) "Resumes in" else null,
+            body = if (pauseCountdownLabel != null) "This Rule will resume automatically." else pausedStatusBody(rule),
             tone = RuleDetailTone.Paused,
             showResume = true
         )
@@ -613,6 +847,33 @@ internal fun requirementDurationLabel(requirement: EarnItRuleStore.RuleRequireme
     return "${(requirement.requiredSeconds / 60L).coerceAtLeast(1L)} min required"
 }
 
+internal fun pauseCountdownLabel(expiresAtMillis: Long, nowMillis: Long): String {
+    val remainingSeconds = ((expiresAtMillis - nowMillis).coerceAtLeast(0L) + 999L) / 1_000L
+    val minutes = remainingSeconds / 60L
+    val seconds = remainingSeconds % 60L
+    return "$minutes:${seconds.toString().padStart(2, '0')}"
+}
+
+internal fun pauseOptionsForRule(rule: EarnItRuleStore.Rule, nowMillis: Long = System.currentTimeMillis()): List<PauseOption> {
+    return listOf(
+        PauseOption("15 minutes", 15 * 60_000L),
+        PauseOption("30 minutes", 30 * 60_000L),
+        PauseOption("1 hour", 60 * 60_000L),
+        PauseOption("Until next scheduled period", nextScheduledPeriodDelayMillis(rule, nowMillis)),
+        PauseOption("Until tomorrow", untilTomorrowDelayMillis(nowMillis))
+    )
+}
+
+private fun pauseReasonOptions(): List<String> {
+    return listOf(
+        "I need a short break",
+        "I have important work to do",
+        "Family / personal time",
+        "Unexpected situation",
+        "Other"
+    )
+}
+
 internal fun earnAppProgressLabel(productiveUsageSeconds: Long?, earnAppCount: Int): String {
     if (productiveUsageSeconds == null || earnAppCount != 1) return "Selected Earn App"
     val progressMinutes = (productiveUsageSeconds.coerceAtLeast(0L) % TEN_MINUTES_SECONDS) / 60L
@@ -648,6 +909,55 @@ private fun completeToUnlockStatusBody(requirementCount: Int): String {
     }
 }
 
+private fun nextScheduledPeriodDelayMillis(rule: EarnItRuleStore.Rule, nowMillis: Long): Long {
+    val calendar = Calendar.getInstance().apply { timeInMillis = nowMillis }
+    val today = calendar.toEarnItDay()
+    val currentMinute = calendar.get(Calendar.HOUR_OF_DAY) * 60 + calendar.get(Calendar.MINUTE)
+    val currentSecond = calendar.get(Calendar.SECOND)
+    val currentMillis = calendar.get(Calendar.MILLISECOND)
+    var bestDelayMinutes: Long? = null
+
+    for (dayOffset in 0..8) {
+        val day = ((today - 1 + dayOffset) % 7) + 1
+        if (day !in rule.activeDays) continue
+        rule.effectiveTimeWindows.forEach { window ->
+            val startMinute = window.startMinute
+            val delayMinutes = dayOffset * 1_440L + startMinute - currentMinute
+            if (delayMinutes > 0L) {
+                bestDelayMinutes = minOf(bestDelayMinutes ?: delayMinutes, delayMinutes)
+            }
+        }
+    }
+
+    val delayMillis = (bestDelayMinutes ?: (24L * 60L)) * 60_000L -
+        currentSecond * 1_000L -
+        currentMillis
+    return delayMillis.coerceAtLeast(60_000L)
+}
+
+private fun untilTomorrowDelayMillis(nowMillis: Long): Long {
+    val calendar = Calendar.getInstance().apply { timeInMillis = nowMillis }
+    val tomorrow = calendar.clone() as Calendar
+    tomorrow.add(Calendar.DAY_OF_YEAR, 1)
+    tomorrow.set(Calendar.HOUR_OF_DAY, 0)
+    tomorrow.set(Calendar.MINUTE, 0)
+    tomorrow.set(Calendar.SECOND, 0)
+    tomorrow.set(Calendar.MILLISECOND, 0)
+    return (tomorrow.timeInMillis - nowMillis).coerceAtLeast(60_000L)
+}
+
+private fun Calendar.toEarnItDay(): Int {
+    return when (get(Calendar.DAY_OF_WEEK)) {
+        Calendar.MONDAY -> 1
+        Calendar.TUESDAY -> 2
+        Calendar.WEDNESDAY -> 3
+        Calendar.THURSDAY -> 4
+        Calendar.FRIDAY -> 5
+        Calendar.SATURDAY -> 6
+        else -> 7
+    }
+}
+
 private fun ruleDetailScheduleLines(rule: EarnItRuleStore.Rule): List<String> {
     return if (rule.type == EarnItRuleStore.RuleType.ScheduledBlock) {
         EarnItRuleStore.scheduleDetailLines(rule.activeDays, rule.effectiveTimeWindows)
@@ -665,3 +975,4 @@ private fun EarnItRuleStore.RuleApp.toUiState(): EarnItAppUiState {
 }
 
 private const val TEN_MINUTES_SECONDS = 10 * 60L
+private const val FIVE_MINUTES_MILLIS = 5 * 60_000L

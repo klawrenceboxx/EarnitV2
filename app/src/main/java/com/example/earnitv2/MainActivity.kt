@@ -30,6 +30,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -38,6 +39,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.example.earnitv2.ui.theme.EarnitV2Theme
 import kotlin.concurrent.thread
+import kotlinx.coroutines.delay
 
 data class RuleDashboardState(
     val rule: EarnItRuleStore.Rule,
@@ -77,6 +79,7 @@ internal fun firstStageBuilderExitDestination(
 class MainActivity : ComponentActivity() {
     private var rules by mutableStateOf(emptyList<EarnItRuleStore.Rule>())
     private var ruleStates by mutableStateOf(emptyList<RuleDashboardState>())
+    private var pauseExpirations by mutableStateOf(emptyMap<String, Long>())
     private var editingRuleTemplate by mutableStateOf<EarnItRuleStore.Rule?>(null)
     private var builderEntryContext by mutableStateOf<RuleBuilderEntryContext?>(null)
     private var builderReturnRuleDetailId by mutableStateOf<String?>(null)
@@ -173,6 +176,7 @@ class MainActivity : ComponentActivity() {
                             ruleStatusMessage = ruleStatusMessage,
                             accessibilityServiceEnabled = accessibilityServiceEnabled,
                             manageRulesOpen = manageRulesOpen,
+                            pauseExpirations = pauseExpirations,
                             selectedRuleDetailId = selectedRuleDetailId,
                             settingsOpen = settingsOpen,
                             ruleTypeSelectionOpen = ruleTypeSelectionOpen,
@@ -188,6 +192,9 @@ class MainActivity : ComponentActivity() {
                             onSelectRuleType = ::startRuleType,
                             onEditRule = ::startEditingRule,
                             onToggleRuleEnabled = ::toggleRuleEnabled,
+                            onPauseRuleFor = ::pauseRuleFor,
+                            onResumeRule = ::resumeRule,
+                            onPauseTimerTick = ::refreshDashboardState,
                             onDeleteRule = ::deleteRule,
                             onToggleManageRules = { manageRulesOpen = !manageRulesOpen },
                             onOpenRuleDetail = { selectedRuleDetailId = it },
@@ -244,7 +251,9 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun refreshDashboardState() {
+        resumeExpiredPauses()
         val savedRules = EarnItRuleStore.getRules(this)
+        pauseExpirations = EarnItPauseStore.pauseExpirations(this)
         rules = savedRules
         refreshLaunchableApps()
         refreshUsageStats(savedRules)
@@ -512,8 +521,35 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun toggleRuleEnabled(rule: EarnItRuleStore.Rule) {
+        if (!rule.enabled) {
+            EarnItPauseStore.clearPause(this, rule.id)
+        }
         EarnItRuleStore.setRuleEnabled(this, rule.id, !rule.enabled)
         refreshDashboardState()
+    }
+
+    private fun pauseRuleFor(rule: EarnItRuleStore.Rule, durationMillis: Long) {
+        val expiresAt = System.currentTimeMillis() + durationMillis.coerceAtLeast(1L)
+        EarnItPauseStore.pauseUntil(this, rule.id, expiresAt)
+        EarnItRuleStore.setRuleEnabled(this, rule.id, false)
+        refreshDashboardState()
+    }
+
+    private fun resumeRule(rule: EarnItRuleStore.Rule) {
+        EarnItPauseStore.clearPause(this, rule.id)
+        EarnItRuleStore.setRuleEnabled(this, rule.id, true)
+        refreshDashboardState()
+    }
+
+    private fun resumeExpiredPauses() {
+        val now = System.currentTimeMillis()
+        EarnItPauseStore.pauseExpirations(this)
+            .filterValues { it <= now }
+            .keys
+            .forEach { ruleId ->
+                EarnItPauseStore.clearPause(this, ruleId)
+                EarnItRuleStore.setRuleEnabled(this, ruleId, true)
+            }
     }
 
     private fun deleteRule(rule: EarnItRuleStore.Rule) {
@@ -521,6 +557,7 @@ class MainActivity : ComponentActivity() {
             selectedRuleDetailId = null
         }
         EarnItRuleStore.deleteRule(this, rule.id)
+        EarnItPauseStore.clearPause(this, rule.id)
         if (editingRuleTemplate?.id == rule.id) {
             cancelEditingRule()
         }
@@ -757,6 +794,7 @@ fun Dashboard(
     ruleStatusMessage: String,
     accessibilityServiceEnabled: Boolean,
     manageRulesOpen: Boolean,
+    pauseExpirations: Map<String, Long>,
     selectedRuleDetailId: String?,
     settingsOpen: Boolean,
     ruleTypeSelectionOpen: Boolean,
@@ -772,6 +810,9 @@ fun Dashboard(
     onSelectRuleType: (EarnItRuleStore.RuleType) -> Unit,
     onEditRule: (EarnItRuleStore.Rule) -> Unit,
     onToggleRuleEnabled: (EarnItRuleStore.Rule) -> Unit,
+    onPauseRuleFor: (EarnItRuleStore.Rule, Long) -> Unit,
+    onResumeRule: (EarnItRuleStore.Rule) -> Unit,
+    onPauseTimerTick: () -> Unit,
     onDeleteRule: (EarnItRuleStore.Rule) -> Unit,
     onToggleManageRules: () -> Unit,
     onOpenRuleDetail: (String) -> Unit,
@@ -810,6 +851,13 @@ fun Dashboard(
     onSaveRule: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    LaunchedEffect(pauseExpirations) {
+        while (pauseExpirations.isNotEmpty()) {
+            delay(1_000)
+            onPauseTimerTick()
+        }
+    }
+
     if (editingRule == null) {
         val homeRules = ruleStates.map { state ->
             homeRuleUiState(
@@ -849,13 +897,15 @@ fun Dashboard(
                     card = selectedHomeRule.card,
                     rule = selectedHomeRule.rule
                 ),
+                pausedUntilMillis = pauseExpirations[selectedHomeRule.rule.id],
                 permissionState = permissionState,
                 onBack = onBackFromRuleDetail,
                 onOpenEarnApp = onOpenEarnApp,
                 onOpenUsageAccessSettings = onOpenUsageAccessSettings,
                 onOpenAccessibilitySettings = onOpenAccessibilitySettings,
                 onEditRule = onEditRule,
-                onToggleRuleEnabled = onToggleRuleEnabled,
+                onPauseRuleFor = onPauseRuleFor,
+                onResumeRule = onResumeRule,
                 onDeleteRule = { rule ->
                     onBackFromRuleDetail()
                     onDeleteRule(rule)
@@ -1314,6 +1364,7 @@ fun DashboardPreview() {
             ruleStatusMessage = "1 rule saved. Enabled.",
             accessibilityServiceEnabled = true,
             manageRulesOpen = false,
+            pauseExpirations = emptyMap(),
             selectedRuleDetailId = null,
             settingsOpen = false,
             ruleTypeSelectionOpen = false,
@@ -1329,6 +1380,9 @@ fun DashboardPreview() {
             onSelectRuleType = {},
             onEditRule = {},
             onToggleRuleEnabled = {},
+            onPauseRuleFor = { _, _ -> },
+            onResumeRule = {},
+            onPauseTimerTick = {},
             onDeleteRule = {},
             onToggleManageRules = {},
             onOpenRuleDetail = {},

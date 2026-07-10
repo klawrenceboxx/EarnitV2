@@ -8,11 +8,10 @@ import org.junit.Test
 
 class EarnItRuleDetailUiStateTest {
     @Test
-    fun activeOverflowMenu_containsEditPauseDelete() {
+    fun activeOverflowMenu_keepsEditAndDeleteOnly() {
         assertEquals(
             listOf(
                 RuleDetailOverflowAction.Edit,
-                RuleDetailOverflowAction.Pause,
                 RuleDetailOverflowAction.Delete
             ),
             ruleDetailOverflowActions(earnRule(enabled = true))
@@ -25,6 +24,38 @@ class EarnItRuleDetailUiStateTest {
             listOf(RuleDetailOverflowAction.Edit, RuleDetailOverflowAction.Delete),
             ruleDetailOverflowActions(earnRule(enabled = false))
         )
+    }
+
+    @Test
+    fun timedPauseStatusShowsResumeCountdown() {
+        val state = ruleDetailStatusCardState(
+            rule = earnRule(enabled = false),
+            availableRewardTimeLabel = "<1 min available",
+            isActiveNow = false,
+            pauseCountdownLabel = "4:32"
+        )
+
+        assertEquals("Rule paused", state.title)
+        assertEquals("Resumes in", state.stateLabel)
+        assertEquals("4:32", state.metric)
+        assertTrue(state.showResume)
+    }
+
+    @Test
+    fun pauseCountdownLabelFormatsMinutesAndSeconds() {
+        assertEquals("4:32", pauseCountdownLabel(expiresAtMillis = 272_000L, nowMillis = 0L))
+        assertEquals("0:00", pauseCountdownLabel(expiresAtMillis = 0L, nowMillis = 1_000L))
+    }
+
+    @Test
+    fun longerPauseOptionsExcludeManualResumePause() {
+        val labels = pauseOptionsForRule(earnRule(), nowMillis = 0L).map { it.label }
+
+        assertEquals(
+            listOf("15 minutes", "30 minutes", "1 hour", "Until next scheduled period", "Until tomorrow"),
+            labels
+        )
+        assertFalse(labels.contains("Pause until manually resumed"))
     }
 
     @Test
