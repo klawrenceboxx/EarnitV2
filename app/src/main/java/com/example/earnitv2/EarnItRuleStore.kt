@@ -28,7 +28,7 @@ object EarnItRuleStore {
     private const val RULE_RECORD_SEPARATOR = "\u001E"
     private const val MIGRATED_RULE_ID = "default"
 
-    val allowedRatios = listOf(1, 2, 4, 5)
+    val allowedRatios = listOf(1, 2, 5)
     val allDays = listOf(1, 2, 3, 4, 5, 6, 7)
 
     enum class RuleType {
@@ -40,6 +40,11 @@ object EarnItRuleStore {
     data class RuleRequirement(
         val app: RuleApp,
         val requiredSeconds: Long
+    )
+
+    data class TimeWindow(
+        val startMinute: Int,
+        val endMinute: Int
     )
 
     data class Rule(
@@ -54,24 +59,25 @@ object EarnItRuleStore {
         val enabled: Boolean = true,
         val type: RuleType = RuleType.EarnRewardTime,
         val productiveApps: List<RuleApp> = emptyList(),
-        val requirements: List<RuleRequirement> = emptyList()
+        val requirements: List<RuleRequirement> = emptyList(),
+        val timeWindows: List<TimeWindow> = emptyList()
     ) {
         val earnApps: List<RuleApp> = productiveApps
             .ifEmpty { listOf(RuleApp(productivePackage, productiveName)) }
+            .filter { it.packageName.isNotBlank() }
             .distinctBy { it.packageName }
         val earnAppPackages: Set<String> = earnApps.map { it.packageName }.toSet()
-        val ratioLabel: String = "1:$rewardSecondsPerProductiveSecond"
+        val effectiveTimeWindows: List<TimeWindow> = normalizeTimeWindows(
+            timeWindows.ifEmpty { listOf(TimeWindow(startMinute, endMinute)) }
+        )
+        val ratioLabel: String = "10:$rewardSecondsPerProductiveSecond min"
         val blockedAppCount: Int = blockedApps.size
         val blockedSummary: String = if (blockedApps.size == 1) {
             blockedApps.first().name
         } else {
             "${blockedApps.size} blocked apps"
         }
-        val scheduleLabel: String = if (activeDays == allDays.toSet() && startMinute == 0 && endMinute == 1_440) {
-            "Every day, all day"
-        } else {
-            "${activeDays.sorted().joinToString(" ") { dayShortName(it) }} ${formatMinute(startMinute)}-${formatMinute(endMinute)}"
-        }
+        val scheduleLabel: String = scheduleSummary(activeDays, effectiveTimeWindows)
 
         fun blockedAppForPackage(packageName: String): RuleApp? {
             return blockedApps.firstOrNull { it.packageName == packageName }
@@ -91,13 +97,15 @@ object EarnItRuleStore {
 
         fun isActiveAt(day: Int, minuteOfDay: Int): Boolean {
             val safeMinute = minuteOfDay.coerceIn(0, 1_439)
-            return if (startMinute == endMinute) {
-                day in activeDays
-            } else if (startMinute < endMinute) {
-                day in activeDays && safeMinute in startMinute until endMinute
-            } else {
-                (day in activeDays && safeMinute >= startMinute) ||
-                    (previousDay(day) in activeDays && safeMinute < endMinute)
+            return effectiveTimeWindows.any { window ->
+                if (window.startMinute == 0 && window.endMinute == 1_440) {
+                    day in activeDays
+                } else if (window.startMinute < window.endMinute) {
+                    day in activeDays && safeMinute in window.startMinute until window.endMinute
+                } else {
+                    (day in activeDays && safeMinute >= window.startMinute) ||
+                        (previousDay(day) in activeDays && safeMinute < window.endMinute)
+                }
             }
         }
     }
@@ -171,13 +179,13 @@ object EarnItRuleStore {
             productiveName = "",
             blockedApps = emptyList(),
             rewardSecondsPerProductiveSecond = if (type == RuleType.EarnRewardTime) {
-                baseRule.rewardSecondsPerProductiveSecond
+                2
             } else {
                 1
             },
-            activeDays = baseRule.activeDays,
-            startMinute = baseRule.startMinute,
-            endMinute = baseRule.endMinute,
+            activeDays = allDays.toSet(),
+            startMinute = 0,
+            endMinute = 1_440,
             enabled = true,
             type = type,
             productiveApps = emptyList(),
@@ -225,10 +233,15 @@ object EarnItRuleStore {
     }
 
     fun formatMinute(minute: Int): String {
-        val safeMinute = minute.coerceIn(0, 1_440)
-        val hour = if (safeMinute == 1_440) 24 else safeMinute / 60
-        val minutes = if (safeMinute == 1_440) 0 else safeMinute % 60
-        return hour.toString().padStart(2, '0') + ":" + minutes.toString().padStart(2, '0')
+        val safeMinute = if (minute == 1_440) 0 else minute.coerceIn(0, 1_439)
+        val hour24 = safeMinute / 60
+        val minutes = safeMinute % 60
+        val suffix = if (hour24 < 12) "AM" else "PM"
+        val hour12 = when (val raw = hour24 % 12) {
+            0 -> 12
+            else -> raw
+        }
+        return "$hour12:${minutes.toString().padStart(2, '0')} $suffix"
     }
 
     private fun migratedSingleRule(context: Context): Rule {
@@ -250,8 +263,8 @@ object EarnItRuleStore {
             productivePackage = productivePackage,
             productiveName = productiveName,
             blockedApps = blockedApps,
-            rewardSecondsPerProductiveSecond = prefs.getInt(KEY_REWARD_SECONDS_PER_PRODUCTIVE_SECOND, 1)
-                .takeIf { it in allowedRatios } ?: 1,
+            rewardSecondsPerProductiveSecond = prefs.getInt(KEY_REWARD_SECONDS_PER_PRODUCTIVE_SECOND, 2)
+                .takeIf { it > 0 } ?: 2,
             activeDays = decodeActiveDays(prefs.getString(KEY_ACTIVE_DAYS, null)),
             startMinute = prefs.getInt(KEY_START_MINUTE, 0).coerceIn(0, 1_439),
             endMinute = prefs.getInt(KEY_END_MINUTE, 1_440).coerceIn(1, 1_440),
@@ -300,6 +313,60 @@ object EarnItRuleStore {
             .distinctBy { it.app.packageName }
     }
 
+
+    private fun encodeTimeWindows(windows: List<TimeWindow>): String {
+        return normalizeTimeWindows(windows).joinToString(APP_RECORD_SEPARATOR) { window ->
+            "${window.startMinute}-${window.endMinute}"
+        }
+    }
+
+    private fun decodeTimeWindows(rawValue: String?): List<TimeWindow> {
+        if (rawValue.isNullOrBlank()) return emptyList()
+        return normalizeTimeWindows(rawValue.lines().mapNotNull { line ->
+            val parts = line.split("-", limit = 2)
+            val start = parts.getOrNull(0)?.toIntOrNull() ?: return@mapNotNull null
+            val end = parts.getOrNull(1)?.toIntOrNull() ?: return@mapNotNull null
+            TimeWindow(start, end)
+        })
+    }
+
+    fun normalizeTimeWindows(windows: List<TimeWindow>): List<TimeWindow> {
+        return windows
+            .mapNotNull { window ->
+                val start = window.startMinute.coerceIn(0, 1_439)
+                val end = window.endMinute.coerceIn(1, 1_440)
+                if (start == end) null else TimeWindow(start, end)
+            }
+            .distinct()
+            .sortedWith(compareBy<TimeWindow> { it.startMinute }.thenBy { it.endMinute })
+            .ifEmpty { listOf(TimeWindow(0, 1_440)) }
+    }
+
+    fun normalizeActiveDays(activeDays: Set<Int>): Set<Int> {
+        val validDays = activeDays.filter { it in allDays }.toSet()
+        return when (validDays) {
+            allDays.toSet() -> allDays.toSet()
+            setOf(1, 2, 3, 4, 5) -> setOf(1, 2, 3, 4, 5)
+            else -> validDays.ifEmpty { allDays.toSet() }
+        }
+    }
+
+    fun scheduleSummary(activeDays: Set<Int>, windows: List<TimeWindow>): String {
+        val days = normalizeActiveDays(activeDays)
+        val dayLabel = when (days) {
+            allDays.toSet() -> "Every day"
+            setOf(1, 2, 3, 4, 5) -> "Weekdays"
+            else -> days.sorted().joinToString(" ") { dayShortName(it) }
+        }
+        val normalizedWindows = normalizeTimeWindows(windows)
+        val timeLabel = if (normalizedWindows.size == 1 && normalizedWindows.first() == TimeWindow(0, 1_440)) {
+            "all day"
+        } else {
+            normalizedWindows.joinToString(", ") { "${formatMinute(it.startMinute)}-${formatMinute(it.endMinute)}" }
+        }
+        return "$dayLabel, $timeLabel"
+    }
+
     private fun encodeActiveDays(activeDays: Set<Int>): String {
         return activeDays.sorted().joinToString(DAY_SEPARATOR)
     }
@@ -327,7 +394,8 @@ object EarnItRuleStore {
                 rule.enabled.toString(),
                 rule.type.name,
                 encodeBlockedApps(rule.earnApps),
-                encodeRequirements(rule.requirements)
+                encodeRequirements(rule.requirements),
+                encodeTimeWindows(rule.effectiveTimeWindows)
             ).joinToString(RULE_FIELD_SEPARATOR) { encodeField(it) }
         }
     }
@@ -341,7 +409,7 @@ object EarnItRuleStore {
                 val productivePackage = fields.getOrNull(1)?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
                 val productiveName = fields.getOrNull(2)?.takeIf { it.isNotBlank() } ?: productivePackage
                 val blockedApps = decodeBlockedApps(fields.getOrNull(3)).ifEmpty { return@mapNotNull null }
-                val ratio = fields.getOrNull(4)?.toIntOrNull()?.takeIf { it in allowedRatios } ?: 1
+                val ratio = fields.getOrNull(4)?.toIntOrNull()?.takeIf { it > 0 } ?: 2
                 val activeDays = decodeActiveDays(fields.getOrNull(5))
                 val startMinute = fields.getOrNull(6)?.toIntOrNull()?.coerceIn(0, 1_439) ?: 0
                 val endMinute = fields.getOrNull(7)?.toIntOrNull()?.coerceIn(1, 1_440) ?: 1_440
@@ -353,6 +421,9 @@ object EarnItRuleStore {
                     listOf(RuleApp(productivePackage, productiveName))
                 }
                 val requirements = decodeRequirements(fields.getOrNull(11))
+                val timeWindows = decodeTimeWindows(fields.getOrNull(12)).ifEmpty {
+                    listOf(TimeWindow(startMinute, endMinute))
+                }
                 Rule(
                     id = id,
                     productivePackage = productivePackage,
@@ -365,7 +436,8 @@ object EarnItRuleStore {
                     enabled = enabled,
                     type = type,
                     productiveApps = productiveApps,
-                    requirements = requirements
+                    requirements = requirements,
+                    timeWindows = timeWindows
                 )
             }
             .distinctBy { it.id }

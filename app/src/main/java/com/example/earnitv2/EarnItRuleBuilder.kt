@@ -238,12 +238,11 @@ fun ruleDraftUiState(
         } ?: savedBlockedApps[packageName]
     }
     return EarnItUiStateAdapters.ruleDraft(
-        selectedEarnApp = selectedEarnApp,
+        selectedEarnApps = listOfNotNull(selectedEarnApp),
         selectedRewardApps = selectedRewardApps,
         exchangeSelection = selectedRatio,
         activeDays = selectedActiveDays,
-        startMinute = selectedStartMinute,
-        endMinute = selectedEndMinute
+        timeWindows = listOf(EarnItRuleStore.TimeWindow(selectedStartMinute, selectedEndMinute))
     )
 }
 
@@ -601,11 +600,11 @@ private fun EarnStep(
     val visibleApps = apps.builderFilteredBy(productiveSearch)
     EditorSection(
         title = "How will you earn Reward Time?",
-        helperText = "Choose an Earn App where productive time should count."
+        helperText = "Choose one or more Earn Apps. Time across selected apps is combined."
     ) {
         if (selectedApp != null) {
             AppSelectionSummary(
-                label = "Selected Earn App",
+                label = "Selected Earn Apps",
                 text = selectedApp.name,
                 app = EarnItAppUiState(packageName = selectedApp.packageName, name = selectedApp.name)
             )
@@ -617,7 +616,7 @@ private fun EarnStep(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(text = if (selectedApp == null) "Choose Earn App" else "Change Earn App")
+                Text(text = if (selectedApp == null) "Choose Earn Apps" else "Manage Earn Apps")
                 Text(text = ">", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
@@ -631,12 +630,9 @@ private fun EarnStep(
             BuilderAppList(
                 apps = visibleApps,
                 selectedPackages = selectedProductivePackages,
-                multiSelect = false,
+                multiSelect = true,
                 emptyText = "No Earn Apps match your search.",
-                onClickApp = { packageName ->
-                    onSelectProductiveApp(packageName)
-                    onCloseProductivePicker()
-                }
+                onClickApp = onSelectProductiveApp
             )
         }
     }
@@ -883,7 +879,7 @@ private fun ExchangeStatement(earnAppName: String, ratio: Int) {
             Text(text = "Every", style = MaterialTheme.typography.labelSmall)
             Text(text = "10 min", style = MaterialTheme.typography.titleMedium)
             Text(text = "in $earnAppName earns", style = MaterialTheme.typography.bodyMedium)
-            Text(text = "${ratio * 10} min Reward Time", style = MaterialTheme.typography.titleMedium)
+            Text(text = "${ratio.coerceAtLeast(1)} min Reward Time", style = MaterialTheme.typography.titleMedium)
         }
     }
 }
@@ -905,7 +901,7 @@ private fun ExchangeOption(
             containerColor = if (selected) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.surface
         )
     ) {
-        Text(text = "${ratio * 10} min Reward Time")
+        Text(text = "${ratio.coerceAtLeast(1)} min Reward Time")
     }
 }
 
@@ -1177,7 +1173,7 @@ private fun EarnRewardReviewStep(draft: RuleDraftUiState) {
                 )
                 ReviewAgreementSection(
                     label = "I EARN",
-                    value = if (draft.exchangeSelection in EarnItRuleStore.allowedRatios) {
+                    value = if (draft.exchangeSelection > 0) {
                         EarnItUiFormatters.exchangeSummary(draft.exchangeSelection)
                     } else {
                         "Choose a Reward Time exchange before saving."
@@ -1264,7 +1260,7 @@ private fun reviewMissingItems(draft: RuleDraftUiState): List<String> {
     return buildList {
         if (draft.selectedEarnApp == null) add("Earn App")
         if (draft.selectedRewardApps.isEmpty()) add("Reward App")
-        if (draft.exchangeSelection !in EarnItRuleStore.allowedRatios) add("Reward Time exchange")
+        if (draft.exchangeSelection <= 0) add("Reward Time exchange")
         if (!reviewScheduleIsValid(draft)) add("Active schedule")
     }
 }
@@ -1338,7 +1334,7 @@ private fun stepIsComplete(
             EarnItRuleStore.RuleType.ScheduledBlock -> true
         }
         RuleBuilderStep.Reward -> draft.selectedRewardApps.isNotEmpty()
-        RuleBuilderStep.Exchange -> draft.exchangeSelection in EarnItRuleStore.allowedRatios
+        RuleBuilderStep.Exchange -> draft.exchangeSelection > 0
         RuleBuilderStep.Schedule -> reviewScheduleIsValid(draft)
         RuleBuilderStep.Review -> false
     }
@@ -1361,7 +1357,7 @@ private fun stepIsEnabled(
         RuleBuilderStep.Schedule -> when (ruleType) {
             EarnItRuleStore.RuleType.EarnRewardTime -> draft.selectedEarnApp != null &&
                 draft.selectedRewardApps.isNotEmpty() &&
-                draft.exchangeSelection in EarnItRuleStore.allowedRatios
+                draft.exchangeSelection > 0
             EarnItRuleStore.RuleType.CompleteToUnlock -> requirements.isNotEmpty() && draft.selectedRewardApps.isNotEmpty()
             EarnItRuleStore.RuleType.ScheduledBlock -> draft.selectedRewardApps.isNotEmpty()
         }
@@ -1381,7 +1377,7 @@ private fun canContinue(
             EarnItRuleStore.RuleType.ScheduledBlock -> true
         }
         RuleBuilderStep.Reward -> draft.selectedRewardApps.isNotEmpty()
-        RuleBuilderStep.Exchange -> draft.exchangeSelection in EarnItRuleStore.allowedRatios
+        RuleBuilderStep.Exchange -> draft.exchangeSelection > 0
         RuleBuilderStep.Schedule -> draft.activeDays.isNotEmpty() && draft.startMinute in 0..1_439 && draft.endMinute in 1..1_440
         RuleBuilderStep.Review -> canSaveRule(ruleType, draft, requirements)
     }

@@ -247,7 +247,7 @@ object RewardLedger {
     }
 
     private fun issueRewardSeconds(productiveSeconds: Long, rule: EarnItRuleStore.Rule): Long {
-        return productiveSeconds * rule.rewardSecondsPerProductiveSecond
+        return productiveSeconds * rule.rewardSecondsPerProductiveSecond.coerceAtLeast(1) / 10L
     }
 
     private fun ruleKey(rule: EarnItRuleStore.Rule, key: String): String {
@@ -263,7 +263,8 @@ object RewardLedger {
         val activeDaysId = activeDays.sorted().joinToString(",")
         val earnRuleId = earnApps.map { it.packageName }.sorted().joinToString(",")
         val requirementsId = requirements.joinToString(",") { "${it.app.packageName}:${it.requiredSeconds}" }
-        return "$type|$earnRuleId|$blockedRuleId|$rewardSecondsPerProductiveSecond|$activeDaysId|$startMinute|$endMinute|$requirementsId"
+        val windowsId = effectiveTimeWindows.joinToString(",") { "${it.startMinute}-${it.endMinute}" }
+        return "$type|$earnRuleId|$blockedRuleId|$rewardSecondsPerProductiveSecond|$activeDaysId|$windowsId|$requirementsId"
     }
 
     private fun todayKey(): String {

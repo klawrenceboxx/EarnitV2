@@ -14,6 +14,7 @@ data class RuleCardUiState(
     val ruleId: String,
     val earnAppName: String,
     val earnAppPackage: String,
+    val earnApps: List<EarnItAppUiState>,
     val rewardApps: List<EarnItAppUiState>,
     val rewardAppCount: Int,
     val availableRewardTimeLabel: String,
@@ -36,11 +37,13 @@ data class RuleDetailUiState(
 
 data class RuleDraftUiState(
     val selectedEarnApp: EarnItAppUiState?,
+    val selectedEarnApps: List<EarnItAppUiState>,
     val selectedRewardApps: List<EarnItAppUiState>,
     val exchangeSelection: Int,
     val activeDays: Set<Int>,
     val startMinute: Int,
     val endMinute: Int,
+    val timeWindows: List<EarnItRuleStore.TimeWindow>,
     val canReview: Boolean,
     val canSave: Boolean,
     val reviewSummary: String
@@ -63,10 +66,13 @@ object EarnItUiStateAdapters {
         appBlockingEnabled: Boolean,
         isActiveNow: Boolean
     ): RuleCardUiState {
+        val earnApps = rule.earnApps.map { it.toUiState() }
+        val primaryEarnApp = earnApps.firstOrNull()
         return RuleCardUiState(
             ruleId = rule.id,
-            earnAppName = rule.productiveName,
-            earnAppPackage = rule.productivePackage,
+            earnAppName = primaryEarnApp?.name ?: rule.productiveName,
+            earnAppPackage = primaryEarnApp?.packageName ?: rule.productivePackage,
+            earnApps = earnApps,
             rewardApps = rule.blockedApps.map { it.toUiState() },
             rewardAppCount = rule.blockedApps.size,
             availableRewardTimeLabel = EarnItUiFormatters.rewardTimeAvailability(remainingRewardSeconds),
@@ -94,40 +100,41 @@ object EarnItUiStateAdapters {
     }
 
     fun ruleDraft(
-        selectedEarnApp: EarnItRuleStore.LaunchableApp?,
+        selectedEarnApps: List<EarnItRuleStore.LaunchableApp>,
         selectedRewardApps: List<EarnItRuleStore.RuleApp>,
         exchangeSelection: Int,
         activeDays: Set<Int>,
-        startMinute: Int,
-        endMinute: Int
+        timeWindows: List<EarnItRuleStore.TimeWindow>
     ): RuleDraftUiState {
-        val validExchange = exchangeSelection in EarnItRuleStore.allowedRatios
-        val validSchedule = activeDays.any { it in EarnItRuleStore.allDays } &&
-            startMinute in 0..1_439 &&
-            endMinute in 1..1_440
-        val ready = selectedEarnApp != null &&
-            selectedRewardApps.isNotEmpty() &&
+        val validExchange = exchangeSelection > 0
+        val validDays = activeDays.filter { it in EarnItRuleStore.allDays }.toSet()
+        val normalizedWindows = EarnItRuleStore.normalizeTimeWindows(timeWindows)
+        val validSchedule = validDays.isNotEmpty() && normalizedWindows.isNotEmpty()
+        val earnApps = selectedEarnApps.distinctBy { it.packageName }.map { EarnItAppUiState(it.packageName, it.name) }
+        val rewardApps = selectedRewardApps.distinctBy { it.packageName }.map { it.toUiState() }
+        val ready = earnApps.isNotEmpty() &&
+            rewardApps.isNotEmpty() &&
             validExchange &&
             validSchedule
-        val earnApp = selectedEarnApp?.let { EarnItAppUiState(it.packageName, it.name) }
-        val rewardApps = selectedRewardApps.map { it.toUiState() }
+        val firstWindow = normalizedWindows.first()
 
         return RuleDraftUiState(
-            selectedEarnApp = earnApp,
+            selectedEarnApp = earnApps.firstOrNull(),
+            selectedEarnApps = earnApps,
             selectedRewardApps = rewardApps,
-            exchangeSelection = exchangeSelection,
-            activeDays = activeDays.filter { it in EarnItRuleStore.allDays }.toSet(),
-            startMinute = startMinute.coerceIn(0, 1_439),
-            endMinute = endMinute.coerceIn(1, 1_440),
+            exchangeSelection = exchangeSelection.coerceAtLeast(1),
+            activeDays = validDays,
+            startMinute = firstWindow.startMinute,
+            endMinute = firstWindow.endMinute,
+            timeWindows = normalizedWindows,
             canReview = ready,
             canSave = ready,
             reviewSummary = EarnItUiFormatters.draftReviewSummary(
-                earnAppName = earnApp?.name,
+                earnAppNames = earnApps.map { it.name },
                 rewardAppNames = rewardApps.map { it.name },
                 exchangeSelection = exchangeSelection,
-                activeDays = activeDays,
-                startMinute = startMinute,
-                endMinute = endMinute
+                activeDays = validDays,
+                timeWindows = normalizedWindows
             )
         )
     }
@@ -187,12 +194,16 @@ object EarnItUiFormatters {
     }
 
     fun exchangeAgreement(rule: EarnItRuleStore.Rule): String {
-        return "Every 10 min in ${rule.productiveName} earns " +
-            "${rule.rewardSecondsPerProductiveSecond * 10} min of Reward Time."
+        val earnLabel = if (rule.earnApps.size == 1) {
+            "in ${rule.earnApps.first().name}"
+        } else {
+            "across ${rule.earnApps.size} Earn Apps"
+        }
+        return "Every 10 min $earnLabel earns ${rule.rewardSecondsPerProductiveSecond} min of Reward Time."
     }
 
     fun exchangeSummary(exchangeSelection: Int): String {
-        return "Every 10 min earns ${exchangeSelection * 10} min Reward Time"
+        return "Every 10 min earns ${exchangeSelection.coerceAtLeast(1)} min Reward Time"
     }
 
     fun savedRewardTime(totalSeconds: Long): String {
@@ -216,7 +227,7 @@ object EarnItUiFormatters {
     fun scheduleStatus(rule: EarnItRuleStore.Rule, isActiveNow: Boolean): String {
         return when {
             !rule.enabled -> "Rule paused"
-            isActiveNow -> "Active now - until ${EarnItRuleStore.formatMinute(rule.endMinute)}"
+            isActiveNow -> "Active now"
             else -> "Unrestricted right now"
         }
     }
@@ -226,48 +237,38 @@ object EarnItUiFormatters {
     }
 
     fun scheduleExplanation(rule: EarnItRuleStore.Rule): String {
-        return if (rule.activeDays == EarnItRuleStore.allDays.toSet() &&
-            rule.startMinute == 0 &&
-            rule.endMinute == 1_440
+        return if (rule.effectiveTimeWindows.size == 1 &&
+            rule.effectiveTimeWindows.first() == EarnItRuleStore.TimeWindow(0, 1_440) &&
+            rule.activeDays == EarnItRuleStore.allDays.toSet()
         ) {
-            "This Rule applies every day, all day."
+            ""
         } else {
-            "Outside these times, your Reward Apps are unrestricted by this Rule."
+            "Outside these times, selected apps are unrestricted by this Rule."
         }
     }
 
     fun draftReviewSummary(
-        earnAppName: String?,
+        earnAppNames: List<String>,
         rewardAppNames: List<String>,
         exchangeSelection: Int,
         activeDays: Set<Int>,
-        startMinute: Int,
-        endMinute: Int
+        timeWindows: List<EarnItRuleStore.TimeWindow>
     ): String {
         val parts = mutableListOf<String>()
-        if (!earnAppName.isNullOrBlank()) {
-            parts.add("When I use $earnAppName")
+        if (earnAppNames.isNotEmpty()) {
+            parts.add("When I use ${earnAppNames.take(2).joinToString(", ")}" + if (earnAppNames.size > 2) " +${earnAppNames.size - 2}" else "")
         }
-        if (exchangeSelection in EarnItRuleStore.allowedRatios) {
+        if (exchangeSelection > 0) {
             parts.add(exchangeSummary(exchangeSelection))
         }
         if (rewardAppNames.isNotEmpty()) {
-            parts.add("For ${rewardAppNames.joinToString(", ")}")
+            parts.add("For ${rewardAppNames.take(2).joinToString(", ")}" + if (rewardAppNames.size > 2) " +${rewardAppNames.size - 2}" else "")
         }
         val validDays = activeDays.filter { it in EarnItRuleStore.allDays }.toSet()
-        if (validDays.isNotEmpty() && startMinute in 0..1_439 && endMinute in 1..1_440) {
-            parts.add(scheduleLabel(validDays, startMinute, endMinute))
+        if (validDays.isNotEmpty()) {
+            parts.add(EarnItRuleStore.scheduleSummary(validDays, timeWindows))
         }
         return parts.joinToString("\n")
-    }
-
-    private fun scheduleLabel(activeDays: Set<Int>, startMinute: Int, endMinute: Int): String {
-        val dayLabel = if (activeDays == EarnItRuleStore.allDays.toSet()) {
-            "Every day"
-        } else {
-            activeDays.sorted().joinToString(" ") { EarnItRuleStore.dayShortName(it) }
-        }
-        return "$dayLabel ${EarnItRuleStore.formatMinute(startMinute)}-${EarnItRuleStore.formatMinute(endMinute)}"
     }
 
     private fun formatWholeMinutes(totalSeconds: Long): String {

@@ -37,6 +37,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.example.earnitv2.ui.theme.EarnitV2Theme
+import kotlin.concurrent.thread
 
 data class RuleDashboardState(
     val rule: EarnItRuleStore.Rule,
@@ -49,6 +50,7 @@ class MainActivity : ComponentActivity() {
     private var ruleStates by mutableStateOf(emptyList<RuleDashboardState>())
     private var editingRuleTemplate by mutableStateOf<EarnItRuleStore.Rule?>(null)
     private var launchableApps by mutableStateOf(emptyList<EarnItRuleStore.LaunchableApp>())
+    private var appLoadInProgress = false
     private var selectedProductivePackage by mutableStateOf("")
     private var selectedProductivePackages by mutableStateOf(emptySet<String>())
     private var selectedBlockedPackages by mutableStateOf(emptySet<String>())
@@ -310,10 +312,13 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun selectProductiveApp(packageName: String) {
-        selectedProductivePackage = packageName
-        selectedProductivePackages = setOf(packageName)
+        selectedProductivePackages = if (packageName in selectedProductivePackages) {
+            selectedProductivePackages - packageName
+        } else {
+            selectedProductivePackages + packageName
+        }
+        selectedProductivePackage = selectedProductivePackages.firstOrNull().orEmpty()
         productiveSearch = ""
-        productivePickerOpen = false
     }
 
     private fun openRequirementPicker() {
