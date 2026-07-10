@@ -49,6 +49,26 @@ class EarnItRuleStoreSerializationTest {
     }
 
     @Test
+    fun scheduledBlock_roundTripsMultipleTimeWindows() {
+        val rule = scheduledRule().copy(
+            timeWindows = listOf(
+                EarnItRuleStore.TimeWindow(8 * 60, 12 * 60),
+                EarnItRuleStore.TimeWindow(13 * 60, 16 * 60)
+            )
+        )
+
+        val decoded = EarnItRuleStore.decodeRules(EarnItRuleStore.encodeRules(listOf(rule))).single()
+
+        assertEquals(
+            listOf(
+                EarnItRuleStore.TimeWindow(8 * 60, 12 * 60),
+                EarnItRuleStore.TimeWindow(13 * 60, 16 * 60)
+            ),
+            decoded.effectiveTimeWindows
+        )
+    }
+
+    @Test
     fun editingCompleteToUnlockKeepsRuleIdAndDoesNotDuplicate() {
         val original = completeRule(
             id = "rule_complete",

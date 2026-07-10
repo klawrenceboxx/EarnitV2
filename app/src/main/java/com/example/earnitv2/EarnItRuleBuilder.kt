@@ -75,6 +75,11 @@ fun EarnItRuleBuilder(
     selectedActiveDays: Set<Int>,
     selectedStartMinute: Int,
     selectedEndMinute: Int,
+    selectedTimeWindows: List<EarnItRuleStore.TimeWindow>,
+    scheduleWindowEditorOpen: Boolean,
+    editingScheduleWindowIndex: Int?,
+    scheduleEditorStartMinute: Int,
+    scheduleEditorEndMinute: Int,
     productivePickerOpen: Boolean,
     blockedPickerOpen: Boolean,
     productiveSearch: String,
@@ -101,6 +106,12 @@ fun EarnItRuleBuilder(
     onToggleActiveDay: (Int) -> Unit,
     onSelectActiveDays: (Set<Int>) -> Unit,
     onSelectAllDay: () -> Unit,
+    onSetHours: () -> Unit,
+    onAddTimeWindow: () -> Unit,
+    onEditTimeWindow: (Int) -> Unit,
+    onRemoveTimeWindow: (Int) -> Unit,
+    onSaveTimeWindow: () -> Unit,
+    onCancelTimeWindow: () -> Unit,
     onEditStartTime: () -> Unit,
     onEditEndTime: () -> Unit,
     onSaveRule: () -> Unit,
@@ -120,7 +131,8 @@ fun EarnItRuleBuilder(
         selectedRatio = selectedRatio,
         selectedActiveDays = selectedActiveDays,
         selectedStartMinute = selectedStartMinute,
-        selectedEndMinute = selectedEndMinute
+        selectedEndMinute = selectedEndMinute,
+        selectedTimeWindows = selectedTimeWindows
     )
     BackHandler(onBack = logicalBack)
 
@@ -202,9 +214,20 @@ fun EarnItRuleBuilder(
                 selectedActiveDays = selectedActiveDays,
                 selectedStartMinute = selectedStartMinute,
                 selectedEndMinute = selectedEndMinute,
+                selectedTimeWindows = selectedTimeWindows,
+                editorOpen = scheduleWindowEditorOpen,
+                editingWindowIndex = editingScheduleWindowIndex,
+                editorStartMinute = scheduleEditorStartMinute,
+                editorEndMinute = scheduleEditorEndMinute,
                 onToggleActiveDay = onToggleActiveDay,
                 onSelectActiveDays = onSelectActiveDays,
                 onSelectAllDay = onSelectAllDay,
+                onSetHours = onSetHours,
+                onAddTimeWindow = onAddTimeWindow,
+                onEditTimeWindow = onEditTimeWindow,
+                onRemoveTimeWindow = onRemoveTimeWindow,
+                onSaveTimeWindow = onSaveTimeWindow,
+                onCancelTimeWindow = onCancelTimeWindow,
                 onEditStartTime = onEditStartTime,
                 onEditEndTime = onEditEndTime
             )
@@ -233,7 +256,8 @@ fun ruleDraftUiState(
     selectedRatio: Int,
     selectedActiveDays: Set<Int>,
     selectedStartMinute: Int,
-    selectedEndMinute: Int
+    selectedEndMinute: Int,
+    selectedTimeWindows: List<EarnItRuleStore.TimeWindow> = listOf(EarnItRuleStore.TimeWindow(selectedStartMinute, selectedEndMinute))
 ): RuleDraftUiState {
     val savedEarnApps = rule.earnApps.associateBy { it.packageName }
     val launchableApps = apps.associateBy { it.packageName }
@@ -253,7 +277,7 @@ fun ruleDraftUiState(
         selectedRewardApps = selectedRewardApps,
         exchangeSelection = selectedRatio,
         activeDays = selectedActiveDays,
-        timeWindows = listOf(EarnItRuleStore.TimeWindow(selectedStartMinute, selectedEndMinute))
+        timeWindows = selectedTimeWindows
     )
 }
 
@@ -796,16 +820,16 @@ internal fun compactRuleSoFarLines(
                 if (draft.selectedEarnApps.isNotEmpty() && draft.selectedRewardApps.isNotEmpty()) {
                     add(EarnItUiFormatters.exchangeSummary(draft.exchangeSelection))
                 }
-                if (reviewScheduleIsValid(draft)) add(reviewScheduleSummary(draft.activeDays, draft.startMinute, draft.endMinute))
+                if (reviewScheduleIsValid(draft)) add(reviewScheduleSummary(draft))
             }
             EarnItRuleStore.RuleType.CompleteToUnlock -> {
                 if (requirements.isNotEmpty()) add("${requirements.size} ${if (requirements.size == 1) "requirement" else "requirements"}")
                 if (requirements.isNotEmpty() && draft.selectedRewardApps.isNotEmpty()) add("Complete all")
-                if (reviewScheduleIsValid(draft)) add(reviewScheduleSummary(draft.activeDays, draft.startMinute, draft.endMinute))
+                if (reviewScheduleIsValid(draft)) add(reviewScheduleSummary(draft))
             }
             EarnItRuleStore.RuleType.ScheduledBlock -> {
                 if (draft.selectedRewardApps.isNotEmpty()) add("Blocked")
-                if (reviewScheduleIsValid(draft)) add(reviewScheduleSummary(draft.activeDays, draft.startMinute, draft.endMinute))
+                if (reviewScheduleIsValid(draft)) add(reviewScheduleSummary(draft))
             }
         }
     }
@@ -1229,9 +1253,20 @@ private fun ScheduleStep(
     selectedActiveDays: Set<Int>,
     selectedStartMinute: Int,
     selectedEndMinute: Int,
+    selectedTimeWindows: List<EarnItRuleStore.TimeWindow>,
+    editorOpen: Boolean,
+    editingWindowIndex: Int?,
+    editorStartMinute: Int,
+    editorEndMinute: Int,
     onToggleActiveDay: (Int) -> Unit,
     onSelectActiveDays: (Set<Int>) -> Unit,
     onSelectAllDay: () -> Unit,
+    onSetHours: () -> Unit,
+    onAddTimeWindow: () -> Unit,
+    onEditTimeWindow: (Int) -> Unit,
+    onRemoveTimeWindow: (Int) -> Unit,
+    onSaveTimeWindow: () -> Unit,
+    onCancelTimeWindow: () -> Unit,
     onEditStartTime: () -> Unit,
     onEditEndTime: () -> Unit
 ) {
@@ -1259,9 +1294,18 @@ private fun ScheduleStep(
         }
         ScheduleTimePresets(
             ruleType = ruleType,
-            selectedStartMinute = selectedStartMinute,
-            selectedEndMinute = selectedEndMinute,
+            windows = selectedTimeWindows,
+            editorOpen = editorOpen,
+            editingWindowIndex = editingWindowIndex,
+            editorStartMinute = editorStartMinute,
+            editorEndMinute = editorEndMinute,
             onSelectAllDay = onSelectAllDay,
+            onSetHours = onSetHours,
+            onAddTimeWindow = onAddTimeWindow,
+            onEditTimeWindow = onEditTimeWindow,
+            onRemoveTimeWindow = onRemoveTimeWindow,
+            onSaveTimeWindow = onSaveTimeWindow,
+            onCancelTimeWindow = onCancelTimeWindow,
             onEditStartTime = onEditStartTime,
             onEditEndTime = onEditEndTime
         )
@@ -1344,13 +1388,28 @@ private fun ScheduleDayPresets(
 @Composable
 private fun ScheduleTimePresets(
     ruleType: EarnItRuleStore.RuleType,
-    selectedStartMinute: Int,
-    selectedEndMinute: Int,
+    windows: List<EarnItRuleStore.TimeWindow>,
+    editorOpen: Boolean,
+    editingWindowIndex: Int?,
+    editorStartMinute: Int,
+    editorEndMinute: Int,
     onSelectAllDay: () -> Unit,
+    onSetHours: () -> Unit,
+    onAddTimeWindow: () -> Unit,
+    onEditTimeWindow: (Int) -> Unit,
+    onRemoveTimeWindow: (Int) -> Unit,
+    onSaveTimeWindow: () -> Unit,
+    onCancelTimeWindow: () -> Unit,
     onEditStartTime: () -> Unit,
     onEditEndTime: () -> Unit
 ) {
-    val allDay = selectedStartMinute == 0 && selectedEndMinute == 1_440
+    val normalizedWindows = EarnItRuleStore.normalizeTimeWindows(windows)
+    val allDay = normalizedWindows.size == 1 && normalizedWindows.first() == EarnItRuleStore.TimeWindow(0, 1_440)
+    val validationMessage = scheduleWindowValidationMessage(
+        windows = normalizedWindows,
+        editingIndex = editingWindowIndex,
+        candidate = EarnItRuleStore.TimeWindow(editorStartMinute, editorEndMinute)
+    )
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(text = "During", style = MaterialTheme.typography.titleSmall)
         SchedulePresetButton(
@@ -1361,28 +1420,28 @@ private fun ScheduleTimePresets(
         SchedulePresetButton(
             label = "Set hours",
             selected = !allDay,
-            onClick = { if (allDay) onEditStartTime() }
+            onClick = onSetHours
         )
         if (!allDay) {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = onEditStartTime, modifier = Modifier.fillMaxWidth()) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text(text = "Start")
-                        Text(text = EarnItRuleStore.formatMinute(selectedStartMinute))
-                    }
-                }
-                OutlinedButton(onClick = onEditEndTime, modifier = Modifier.fillMaxWidth()) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text(text = "End")
-                        Text(text = EarnItRuleStore.formatMinute(selectedEndMinute))
-                    }
-                }
+            TimeWindowList(
+                windows = normalizedWindows,
+                onEditTimeWindow = onEditTimeWindow,
+                onRemoveTimeWindow = onRemoveTimeWindow
+            )
+            OutlinedButton(onClick = onAddTimeWindow, modifier = Modifier.fillMaxWidth()) {
+                Text(text = "+ Add time window")
+            }
+            if (editorOpen) {
+                TimeWindowEditor(
+                    editing = editingWindowIndex != null,
+                    startMinute = editorStartMinute,
+                    endMinute = editorEndMinute,
+                    validationMessage = validationMessage,
+                    onEditStartTime = onEditStartTime,
+                    onEditEndTime = onEditEndTime,
+                    onSaveTimeWindow = onSaveTimeWindow,
+                    onCancelTimeWindow = onCancelTimeWindow
+                )
             }
         }
         Text(
@@ -1390,6 +1449,129 @@ private fun ScheduleTimePresets(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+    }
+}
+
+@Composable
+private fun TimeWindowList(
+    windows: List<EarnItRuleStore.TimeWindow>,
+    onEditTimeWindow: (Int) -> Unit,
+    onRemoveTimeWindow: (Int) -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(text = "Time windows", style = MaterialTheme.typography.labelSmall)
+        windows.forEachIndexed { index, window ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(text = timeWindowLabel(window), style = MaterialTheme.typography.bodyLarge)
+                    if (window.startMinute > window.endMinute) {
+                        Text(
+                            text = "Overnight",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                TextButton(onClick = { onEditTimeWindow(index) }) {
+                    Text(text = "Edit")
+                }
+                TextButton(onClick = { onRemoveTimeWindow(index) }) {
+                    Text(text = "Remove")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TimeWindowEditor(
+    editing: Boolean,
+    startMinute: Int,
+    endMinute: Int,
+    validationMessage: String?,
+    onEditStartTime: () -> Unit,
+    onEditEndTime: () -> Unit,
+    onSaveTimeWindow: () -> Unit,
+    onCancelTimeWindow: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Text(text = if (editing) "Edit time window" else "Add time window", style = MaterialTheme.typography.titleSmall)
+        TimePickerTrigger(label = "Start", minute = startMinute, onClick = onEditStartTime)
+        TimePickerTrigger(label = "End", minute = endMinute, onClick = onEditEndTime)
+        if (validationMessage != null) {
+            Text(
+                text = validationMessage,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error
+            )
+        }
+        Button(
+            onClick = onSaveTimeWindow,
+            enabled = validationMessage == null,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(text = if (editing) "Save changes" else "Add window")
+        }
+        TextButton(onClick = onCancelTimeWindow, modifier = Modifier.fillMaxWidth()) {
+            Text(text = "Cancel")
+        }
+    }
+}
+
+@Composable
+private fun TimePickerTrigger(label: String, minute: Int, onClick: () -> Unit) {
+    OutlinedButton(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(text = label)
+            Text(text = EarnItRuleStore.formatMinute(minute))
+        }
+    }
+}
+
+private fun timeWindowLabel(window: EarnItRuleStore.TimeWindow): String {
+    return "${EarnItRuleStore.formatMinute(window.startMinute)}-${EarnItRuleStore.formatMinute(window.endMinute)}"
+}
+
+internal fun scheduleWindowValidationMessage(
+    windows: List<EarnItRuleStore.TimeWindow>,
+    editingIndex: Int?,
+    candidate: EarnItRuleStore.TimeWindow
+): String? {
+    if (candidate.startMinute == candidate.endMinute) return "Start and end must be different."
+    val others = windows.filterIndexed { index, _ -> index != editingIndex }
+    if (candidate in others) return "This time window already exists."
+    if (others.any { windowsOverlap(it, candidate) }) return "Time windows cannot overlap."
+    return null
+}
+
+private fun windowsOverlap(a: EarnItRuleStore.TimeWindow, b: EarnItRuleStore.TimeWindow): Boolean {
+    return expandedWindowRanges(a).any { first ->
+        expandedWindowRanges(b).any { second ->
+            first.first < second.second && second.first < first.second
+        }
+    }
+}
+
+private fun expandedWindowRanges(window: EarnItRuleStore.TimeWindow): List<Pair<Int, Int>> {
+    return if (window.startMinute < window.endMinute) {
+        listOf(window.startMinute to window.endMinute)
+    } else {
+        listOf(window.startMinute to 1_440, 0 to window.endMinute)
     }
 }
 
@@ -1454,7 +1636,7 @@ private fun CompleteToUnlockReviewStep(
             )
             ReviewAgreementSection(
                 label = "ACTIVE",
-                value = reviewScheduleSummary(draft.activeDays, draft.startMinute, draft.endMinute)
+                value = reviewScheduleDetail(draft)
             )
         }
     }
@@ -1473,8 +1655,8 @@ private fun ScheduledBlockReviewStep(draft: RuleDraftUiState) {
                 missingValue = "Choose at least one app before saving."
             )
             ReviewAgreementSection(
-                label = "DURING",
-                value = reviewScheduleSummary(draft.activeDays, draft.startMinute, draft.endMinute)
+                label = "BLOCK DURING",
+                value = reviewScheduleDetail(draft)
             )
         }
     }
@@ -1523,7 +1705,7 @@ private fun EarnRewardReviewStep(draft: RuleDraftUiState) {
                 ReviewAgreementSection(
                     label = "ACTIVE",
                     value = if (reviewScheduleIsValid(draft)) {
-                        reviewScheduleSummary(draft.activeDays, draft.startMinute, draft.endMinute)
+                        reviewScheduleDetail(draft)
                     } else {
                         "Choose when this Rule should be active before saving."
                     }
@@ -1626,23 +1808,15 @@ private fun reviewMissingItems(draft: RuleDraftUiState): List<String> {
 
 private fun reviewScheduleIsValid(draft: RuleDraftUiState): Boolean {
     return draft.activeDays.any { it in EarnItRuleStore.allDays } &&
-        draft.startMinute in 0..1_439 &&
-        draft.endMinute in 1..1_440
+        draft.timeWindows.isNotEmpty()
 }
 
-private fun reviewScheduleSummary(activeDays: Set<Int>, startMinute: Int, endMinute: Int): String {
-    val validDays = activeDays.filter { it in EarnItRuleStore.allDays }.toSet()
-    val dayLabel = when (validDays) {
-        EarnItRuleStore.allDays.toSet() -> "Every day"
-        setOf(1, 2, 3, 4, 5) -> "Weekdays"
-        else -> validDays.sorted().joinToString(" ") { EarnItRuleStore.dayShortName(it) }
-    }
-    val timeLabel = if (startMinute == 0 && endMinute == 1_440) {
-        "all day"
-    } else {
-        "${EarnItRuleStore.formatMinute(startMinute)}-${EarnItRuleStore.formatMinute(endMinute)}"
-    }
-    return "$dayLabel, $timeLabel"
+private fun reviewScheduleSummary(draft: RuleDraftUiState): String {
+    return EarnItRuleStore.scheduleSummary(draft.activeDays, draft.timeWindows)
+}
+
+private fun reviewScheduleDetail(draft: RuleDraftUiState): String {
+    return EarnItRuleStore.scheduleDetailLines(draft.activeDays, draft.timeWindows).joinToString("\n")
 }
 @Composable
 private fun BuilderActions(

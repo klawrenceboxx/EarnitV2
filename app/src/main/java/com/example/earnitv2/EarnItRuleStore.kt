@@ -353,20 +353,37 @@ object EarnItRuleStore {
         }
     }
 
-    fun scheduleSummary(activeDays: Set<Int>, windows: List<TimeWindow>): String {
+    fun scheduleDaysLabel(activeDays: Set<Int>): String {
         val days = normalizeActiveDays(activeDays)
-        val dayLabel = when (days) {
+        return when (days) {
             allDays.toSet() -> "Every day"
             setOf(1, 2, 3, 4, 5) -> "Weekdays"
-            else -> days.sorted().joinToString(" ") { dayShortName(it) }
+            else -> days.sorted().joinToString(", ") { dayShortName(it) }
         }
+    }
+
+    fun scheduleWindowLabels(windows: List<TimeWindow>): List<String> {
         val normalizedWindows = normalizeTimeWindows(windows)
-        val timeLabel = if (normalizedWindows.size == 1 && normalizedWindows.first() == TimeWindow(0, 1_440)) {
-            "all day"
+        return if (normalizedWindows.size == 1 && normalizedWindows.first() == TimeWindow(0, 1_440)) {
+            listOf("All day")
         } else {
-            normalizedWindows.joinToString(", ") { "${formatMinute(it.startMinute)}-${formatMinute(it.endMinute)}" }
+            normalizedWindows.map { "${formatMinute(it.startMinute)}-${formatMinute(it.endMinute)}" }
         }
-        return "$dayLabel, $timeLabel"
+    }
+
+    fun scheduleSummary(activeDays: Set<Int>, windows: List<TimeWindow>): String {
+        val dayLabel = scheduleDaysLabel(activeDays)
+        val normalizedWindows = normalizeTimeWindows(windows)
+        val timeLabel = when {
+            normalizedWindows.size == 1 && normalizedWindows.first() == TimeWindow(0, 1_440) -> "All day"
+            normalizedWindows.size == 1 -> scheduleWindowLabels(normalizedWindows).first()
+            else -> "${normalizedWindows.size} time windows"
+        }
+        return "$dayLabel · $timeLabel"
+    }
+
+    fun scheduleDetailLines(activeDays: Set<Int>, windows: List<TimeWindow>): List<String> {
+        return listOf(scheduleDaysLabel(activeDays)) + scheduleWindowLabels(windows)
     }
 
     private fun encodeActiveDays(activeDays: Set<Int>): String {

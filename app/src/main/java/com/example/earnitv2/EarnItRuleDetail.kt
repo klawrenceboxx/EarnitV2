@@ -65,8 +65,7 @@ fun EarnItRuleDetail(
             EarnItRuleStore.RuleType.EarnRewardTime -> {
                 RuleDetailApps(title = "Reward Apps this applies to", apps = detail.card.rewardApps)
                 RuleDetailEarnAction(
-                    earnAppName = detail.card.earnAppName,
-                    earnAppPackage = detail.card.earnAppPackage,
+                    apps = detail.card.earnApps,
                     onOpenEarnApp = onOpenEarnApp
                 )
                 RuleDetailAgreement(summary = detail.ruleAgreementSummary)
@@ -81,8 +80,7 @@ fun EarnItRuleDetail(
         }
         RuleDetailSchedule(
             title = if (rule.type == EarnItRuleStore.RuleType.ScheduledBlock) "Block schedule" else "Applies",
-            summary = detail.scheduleSummary,
-            explanation = detail.scheduleExplanation
+            rule = rule
         )
         RuleDetailManagement(
             rule = rule,
@@ -219,23 +217,25 @@ private fun RuleDetailRequirements(requirements: List<EarnItRuleStore.RuleRequir
 
 @Composable
 private fun RuleDetailEarnAction(
-    earnAppName: String,
-    earnAppPackage: String,
+    apps: List<EarnItAppUiState>,
     onOpenEarnApp: (String) -> Unit
 ) {
     RuleDetailSection(title = "Earn with") {
-        Row(
-            modifier = Modifier
-                .clip(RoundedCornerShape(4.dp))
-                .clickable { onOpenEarnApp(earnAppPackage) }
-                .background(MaterialTheme.colorScheme.surfaceVariant)
-                .padding(horizontal = 12.dp, vertical = 10.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            EarnItAppIcon(packageName = earnAppPackage, appName = earnAppName, size = 28.dp)
-            Text(text = earnAppName, style = MaterialTheme.typography.bodyLarge)
-            Text(text = "Open", style = MaterialTheme.typography.bodyMedium)
+        apps.forEach { app ->
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                EarnItAppIcon(packageName = app.packageName, appName = app.name, size = 28.dp)
+                Text(text = app.name, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+                TextButton(onClick = { onOpenEarnApp(app.packageName) }) {
+                    Text(text = "Open")
+                }
+            }
         }
     }
 }
@@ -248,14 +248,13 @@ private fun RuleDetailAgreement(summary: String) {
 }
 
 @Composable
-private fun RuleDetailSchedule(title: String, summary: String, explanation: String) {
+private fun RuleDetailSchedule(title: String, rule: EarnItRuleStore.Rule) {
     RuleDetailSection(title = title) {
-        Text(text = summary, style = MaterialTheme.typography.bodyLarge)
-        if (explanation.isNotBlank()) {
+        EarnItRuleStore.scheduleDetailLines(rule.activeDays, rule.effectiveTimeWindows).forEachIndexed { index, line ->
             Text(
-                text = explanation,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                text = line,
+                style = if (index == 0) MaterialTheme.typography.bodyLarge else MaterialTheme.typography.bodyMedium,
+                color = if (index == 0) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
     }

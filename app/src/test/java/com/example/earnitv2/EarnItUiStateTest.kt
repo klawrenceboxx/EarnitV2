@@ -143,7 +143,7 @@ class EarnItUiStateTest {
         )
 
         assertEquals("Blocked now", state.primaryText)
-        assertEquals("Every day, all day", state.secondaryText)
+        assertEquals("Every day · All day", state.secondaryText)
         assertNull(state.earnContextText)
     }
 

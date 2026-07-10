@@ -197,7 +197,7 @@ object EarnItUiFormatters {
         val earnLabel = if (rule.earnApps.size == 1) {
             "in ${rule.earnApps.first().name}"
         } else {
-            "across ${rule.earnApps.size} Earn Apps"
+            "across selected Earn Apps"
         }
         return "Every 10 min $earnLabel earns ${rule.rewardSecondsPerProductiveSecond} min of Reward Time."
     }

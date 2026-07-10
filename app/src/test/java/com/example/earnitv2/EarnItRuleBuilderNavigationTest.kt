@@ -98,7 +98,7 @@ class EarnItRuleBuilderNavigationTest {
         )
 
         assertEquals(
-            listOf("Every 10 min earns 2 min Reward Time", "Every day, all day"),
+            listOf("Every 10 min earns 2 min Reward Time", "Every day · All day"),
             lines
         )
     }
@@ -120,7 +120,7 @@ class EarnItRuleBuilderNavigationTest {
             )
         )
 
-        assertEquals(listOf("2 requirements", "Complete all", "Every day, all day"), lines)
+        assertEquals(listOf("2 requirements", "Complete all", "Every day · All day"), lines)
     }
 
     @Test
@@ -131,7 +131,7 @@ class EarnItRuleBuilderNavigationTest {
             requirements = emptyList()
         )
 
-        assertEquals(listOf("Blocked", "Every day, all day"), lines)
+        assertEquals(listOf("Blocked", "Every day · All day"), lines)
     }
 
     private fun earnRewardDraft(): RuleDraftUiState {

@@ -66,6 +66,11 @@ class MainActivity : ComponentActivity() {
     private var selectedActiveDays by mutableStateOf(EarnItRuleStore.allDays.toSet())
     private var selectedStartMinute by mutableStateOf(0)
     private var selectedEndMinute by mutableStateOf(1_440)
+    private var selectedTimeWindows by mutableStateOf(listOf(EarnItRuleStore.TimeWindow(0, 1_440)))
+    private var scheduleWindowEditorOpen by mutableStateOf(false)
+    private var editingScheduleWindowIndex by mutableStateOf<Int?>(null)
+    private var scheduleEditorStartMinute by mutableStateOf(9 * 60)
+    private var scheduleEditorEndMinute by mutableStateOf(17 * 60)
     private var productivePickerOpen by mutableStateOf(false)
     private var blockedPickerOpen by mutableStateOf(false)
     private var productiveSearch by mutableStateOf("")
@@ -123,6 +128,11 @@ class MainActivity : ComponentActivity() {
                             selectedActiveDays = selectedActiveDays,
                             selectedStartMinute = selectedStartMinute,
                             selectedEndMinute = selectedEndMinute,
+                            selectedTimeWindows = selectedTimeWindows,
+                            scheduleWindowEditorOpen = scheduleWindowEditorOpen,
+                            editingScheduleWindowIndex = editingScheduleWindowIndex,
+                            scheduleEditorStartMinute = scheduleEditorStartMinute,
+                            scheduleEditorEndMinute = scheduleEditorEndMinute,
                             productivePickerOpen = productivePickerOpen,
                             blockedPickerOpen = blockedPickerOpen,
                             productiveSearch = productiveSearch,
@@ -177,9 +187,15 @@ class MainActivity : ComponentActivity() {
                             onSelectRatio = { selectedRatio = it },
                             onToggleActiveDay = ::toggleActiveDay,
                             onSelectActiveDays = { selectedActiveDays = it },
-                            onSelectAllDay = { selectedStartMinute = 0; selectedEndMinute = 1_440 },
-                            onEditStartTime = ::showStartTimePicker,
-                            onEditEndTime = ::showEndTimePicker,
+                            onSelectAllDay = ::selectAllDaySchedule,
+                            onSetHours = ::setHoursSchedule,
+                            onAddTimeWindow = ::addScheduleWindow,
+                            onEditTimeWindow = ::editScheduleWindow,
+                            onRemoveTimeWindow = ::removeScheduleWindow,
+                            onSaveTimeWindow = ::saveScheduleWindow,
+                            onCancelTimeWindow = ::cancelScheduleWindow,
+                            onEditStartTime = ::showScheduleEditorStartPicker,
+                            onEditEndTime = ::showScheduleEditorEndPicker,
                             builderStep = builderStep,
                             onBuilderStepChange = { builderStep = it },
                             onSaveRule = ::saveRule,
@@ -312,8 +328,13 @@ class MainActivity : ComponentActivity() {
         editingRequirementIndex = null
         selectedRatio = rule.rewardSecondsPerProductiveSecond
         selectedActiveDays = rule.activeDays
-        selectedStartMinute = rule.startMinute
-        selectedEndMinute = rule.endMinute
+        selectedTimeWindows = rule.effectiveTimeWindows
+        selectedStartMinute = selectedTimeWindows.first().startMinute
+        selectedEndMinute = selectedTimeWindows.first().endMinute
+        scheduleWindowEditorOpen = false
+        editingScheduleWindowIndex = null
+        scheduleEditorStartMinute = 9 * 60
+        scheduleEditorEndMinute = 17 * 60
         productivePickerOpen = false
         blockedPickerOpen = false
         productiveSearch = ""
@@ -327,6 +348,7 @@ class MainActivity : ComponentActivity() {
         productivePickerOpen = false
         blockedPickerOpen = false
         requirementPickerOpen = false
+        cancelScheduleWindow()
     }
 
     private fun returnToRuleTypeSelection() {
@@ -336,6 +358,7 @@ class MainActivity : ComponentActivity() {
         productivePickerOpen = false
         blockedPickerOpen = false
         requirementPickerOpen = false
+        cancelScheduleWindow()
         ruleTypeSelectionOpen = true
     }
 
@@ -446,14 +469,72 @@ class MainActivity : ComponentActivity() {
         refreshDashboardState()
     }
 
-    private fun showStartTimePicker() {
-        showTimePicker(selectedStartMinute) { selectedStartMinute = it.coerceIn(0, 1_439) }
+    private fun selectAllDaySchedule() {
+        selectedTimeWindows = listOf(EarnItRuleStore.TimeWindow(0, 1_440))
+        selectedStartMinute = 0
+        selectedEndMinute = 1_440
+        cancelScheduleWindow()
     }
 
-    private fun showEndTimePicker() {
-        val dialogMinute = if (selectedEndMinute == 1_440) 0 else selectedEndMinute
+    private fun setHoursSchedule() {
+        if (selectedTimeWindows.size == 1 && selectedTimeWindows.first() == EarnItRuleStore.TimeWindow(0, 1_440)) {
+            selectedTimeWindows = listOf(EarnItRuleStore.TimeWindow(9 * 60, 17 * 60))
+        }
+        selectedStartMinute = selectedTimeWindows.first().startMinute
+        selectedEndMinute = selectedTimeWindows.first().endMinute
+    }
+
+    private fun addScheduleWindow() {
+        scheduleWindowEditorOpen = true
+        editingScheduleWindowIndex = null
+        scheduleEditorStartMinute = 9 * 60
+        scheduleEditorEndMinute = 17 * 60
+    }
+
+    private fun editScheduleWindow(index: Int) {
+        val window = selectedTimeWindows.getOrNull(index) ?: return
+        scheduleWindowEditorOpen = true
+        editingScheduleWindowIndex = index
+        scheduleEditorStartMinute = window.startMinute
+        scheduleEditorEndMinute = window.endMinute
+    }
+
+    private fun removeScheduleWindow(index: Int) {
+        val updated = selectedTimeWindows.filterIndexed { itemIndex, _ -> itemIndex != index }
+        selectedTimeWindows = updated.ifEmpty { listOf(EarnItRuleStore.TimeWindow(9 * 60, 17 * 60)) }
+        selectedStartMinute = selectedTimeWindows.first().startMinute
+        selectedEndMinute = selectedTimeWindows.first().endMinute
+        if (editingScheduleWindowIndex == index) cancelScheduleWindow()
+    }
+
+    private fun saveScheduleWindow() {
+        val window = EarnItRuleStore.TimeWindow(scheduleEditorStartMinute, scheduleEditorEndMinute)
+        if (window.startMinute == window.endMinute) return
+        val editIndex = editingScheduleWindowIndex
+        val updated = if (editIndex != null && editIndex in selectedTimeWindows.indices) {
+            selectedTimeWindows.mapIndexed { index, existing -> if (index == editIndex) window else existing }
+        } else {
+            selectedTimeWindows.filterNot { it == EarnItRuleStore.TimeWindow(0, 1_440) } + window
+        }
+        selectedTimeWindows = EarnItRuleStore.normalizeTimeWindows(updated)
+        selectedStartMinute = selectedTimeWindows.first().startMinute
+        selectedEndMinute = selectedTimeWindows.first().endMinute
+        cancelScheduleWindow()
+    }
+
+    private fun cancelScheduleWindow() {
+        scheduleWindowEditorOpen = false
+        editingScheduleWindowIndex = null
+    }
+
+    private fun showScheduleEditorStartPicker() {
+        showTimePicker(scheduleEditorStartMinute) { scheduleEditorStartMinute = it.coerceIn(0, 1_439) }
+    }
+
+    private fun showScheduleEditorEndPicker() {
+        val dialogMinute = if (scheduleEditorEndMinute == 1_440) 0 else scheduleEditorEndMinute
         showTimePicker(dialogMinute) { selectedMinute ->
-            selectedEndMinute = if (selectedMinute == 0) 1_440 else selectedMinute.coerceIn(1, 1_439)
+            scheduleEditorEndMinute = if (selectedMinute == 0) 1_440 else selectedMinute.coerceIn(1, 1_439)
         }
     }
 
@@ -498,6 +579,7 @@ class MainActivity : ComponentActivity() {
             activeDays = selectedActiveDays,
             startMinute = selectedStartMinute,
             endMinute = selectedEndMinute,
+            timeWindows = selectedTimeWindows,
             enabled = editingRule.enabled,
             type = editingRule.type,
             productiveApps = if (editingRule.type == EarnItRuleStore.RuleType.EarnRewardTime) productiveApps else emptyList(),
@@ -601,6 +683,11 @@ fun Dashboard(
     selectedActiveDays: Set<Int>,
     selectedStartMinute: Int,
     selectedEndMinute: Int,
+    selectedTimeWindows: List<EarnItRuleStore.TimeWindow>,
+    scheduleWindowEditorOpen: Boolean,
+    editingScheduleWindowIndex: Int?,
+    scheduleEditorStartMinute: Int,
+    scheduleEditorEndMinute: Int,
     productivePickerOpen: Boolean,
     blockedPickerOpen: Boolean,
     productiveSearch: String,
@@ -650,6 +737,12 @@ fun Dashboard(
     onToggleActiveDay: (Int) -> Unit,
     onSelectActiveDays: (Set<Int>) -> Unit,
     onSelectAllDay: () -> Unit,
+    onSetHours: () -> Unit,
+    onAddTimeWindow: () -> Unit,
+    onEditTimeWindow: (Int) -> Unit,
+    onRemoveTimeWindow: (Int) -> Unit,
+    onSaveTimeWindow: () -> Unit,
+    onCancelTimeWindow: () -> Unit,
     onEditStartTime: () -> Unit,
     onEditEndTime: () -> Unit,
     builderStep: RuleBuilderStep,
@@ -752,6 +845,11 @@ fun Dashboard(
                 selectedActiveDays = selectedActiveDays,
                 selectedStartMinute = selectedStartMinute,
                 selectedEndMinute = selectedEndMinute,
+                selectedTimeWindows = selectedTimeWindows,
+                scheduleWindowEditorOpen = scheduleWindowEditorOpen,
+                editingScheduleWindowIndex = editingScheduleWindowIndex,
+                scheduleEditorStartMinute = scheduleEditorStartMinute,
+                scheduleEditorEndMinute = scheduleEditorEndMinute,
                 productivePickerOpen = productivePickerOpen,
                 blockedPickerOpen = blockedPickerOpen,
                 productiveSearch = productiveSearch,
@@ -776,6 +874,12 @@ fun Dashboard(
                 onToggleActiveDay = onToggleActiveDay,
                 onSelectActiveDays = onSelectActiveDays,
                 onSelectAllDay = onSelectAllDay,
+                onSetHours = onSetHours,
+                onAddTimeWindow = onAddTimeWindow,
+                onEditTimeWindow = onEditTimeWindow,
+                onRemoveTimeWindow = onRemoveTimeWindow,
+                onSaveTimeWindow = onSaveTimeWindow,
+                onCancelTimeWindow = onCancelTimeWindow,
                 onEditStartTime = onEditStartTime,
                 onEditEndTime = onEditEndTime,
                 builderStep = builderStep,
@@ -846,6 +950,11 @@ private fun RuleEditor(
     selectedActiveDays: Set<Int>,
     selectedStartMinute: Int,
     selectedEndMinute: Int,
+    selectedTimeWindows: List<EarnItRuleStore.TimeWindow>,
+    scheduleWindowEditorOpen: Boolean,
+    editingScheduleWindowIndex: Int?,
+    scheduleEditorStartMinute: Int,
+    scheduleEditorEndMinute: Int,
     productivePickerOpen: Boolean,
     blockedPickerOpen: Boolean,
     productiveSearch: String,
@@ -870,6 +979,12 @@ private fun RuleEditor(
     onToggleActiveDay: (Int) -> Unit,
     onSelectActiveDays: (Set<Int>) -> Unit,
     onSelectAllDay: () -> Unit,
+    onSetHours: () -> Unit,
+    onAddTimeWindow: () -> Unit,
+    onEditTimeWindow: (Int) -> Unit,
+    onRemoveTimeWindow: (Int) -> Unit,
+    onSaveTimeWindow: () -> Unit,
+    onCancelTimeWindow: () -> Unit,
     onEditStartTime: () -> Unit,
     onEditEndTime: () -> Unit,
     builderStep: RuleBuilderStep,
@@ -894,6 +1009,11 @@ private fun RuleEditor(
         selectedActiveDays = selectedActiveDays,
         selectedStartMinute = selectedStartMinute,
         selectedEndMinute = selectedEndMinute,
+        selectedTimeWindows = selectedTimeWindows,
+        scheduleWindowEditorOpen = scheduleWindowEditorOpen,
+        editingScheduleWindowIndex = editingScheduleWindowIndex,
+        scheduleEditorStartMinute = scheduleEditorStartMinute,
+        scheduleEditorEndMinute = scheduleEditorEndMinute,
         productivePickerOpen = productivePickerOpen,
         blockedPickerOpen = blockedPickerOpen,
         productiveSearch = productiveSearch,
@@ -920,6 +1040,12 @@ private fun RuleEditor(
         onToggleActiveDay = onToggleActiveDay,
         onSelectActiveDays = onSelectActiveDays,
         onSelectAllDay = onSelectAllDay,
+        onSetHours = onSetHours,
+        onAddTimeWindow = onAddTimeWindow,
+        onEditTimeWindow = onEditTimeWindow,
+        onRemoveTimeWindow = onRemoveTimeWindow,
+        onSaveTimeWindow = onSaveTimeWindow,
+        onCancelTimeWindow = onCancelTimeWindow,
         onEditStartTime = onEditStartTime,
         onEditEndTime = onEditEndTime,
         onSaveRule = onSaveRule,
@@ -1114,6 +1240,11 @@ fun DashboardPreview() {
             selectedActiveDays = EarnItRuleStore.allDays.toSet(),
             selectedStartMinute = 0,
             selectedEndMinute = 1_440,
+            selectedTimeWindows = listOf(EarnItRuleStore.TimeWindow(0, 1_440)),
+            scheduleWindowEditorOpen = false,
+            editingScheduleWindowIndex = null,
+            scheduleEditorStartMinute = 9 * 60,
+            scheduleEditorEndMinute = 17 * 60,
             productivePickerOpen = false,
             blockedPickerOpen = false,
             productiveSearch = "",
@@ -1163,6 +1294,12 @@ fun DashboardPreview() {
             onToggleActiveDay = {},
             onSelectActiveDays = {},
             onSelectAllDay = {},
+            onSetHours = {},
+            onAddTimeWindow = {},
+            onEditTimeWindow = {},
+            onRemoveTimeWindow = {},
+            onSaveTimeWindow = {},
+            onCancelTimeWindow = {},
             onEditStartTime = {},
             onEditEndTime = {},
             builderStep = RuleBuilderStep.Earn,
