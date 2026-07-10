@@ -8,6 +8,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -197,6 +198,7 @@ fun EarnItRuleBuilder(
                 onSelectRatio = onSelectRatio
             )
             RuleBuilderStep.Schedule -> ScheduleStep(
+                ruleType = rule.type,
                 selectedActiveDays = selectedActiveDays,
                 selectedStartMinute = selectedStartMinute,
                 selectedEndMinute = selectedEndMinute,
@@ -469,12 +471,13 @@ private fun RequirementsStep(
     val namesByPackage = apps.associate { it.packageName to it.name } +
         requirements.associate { it.app.packageName to it.app.name }
     val selectedName = selectedPackage?.let { namesByPackage[it] }
+    val editorOpen = pickerOpen || selectedPackage != null || editingIndex != null
 
     EditorSection(
         title = "What must you complete?",
         helperText = "Add one or more requirements. All requirements must be completed."
     ) {
-        if (requirements.isEmpty()) {
+        if (requirements.isEmpty() && !editorOpen) {
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
@@ -491,7 +494,7 @@ private fun RequirementsStep(
                     }
                 }
             }
-        } else {
+        } else if (requirements.isNotEmpty()) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 requirements.forEachIndexed { index, requirement ->
                     RequirementCard(
@@ -501,11 +504,74 @@ private fun RequirementsStep(
                     )
                 }
                 OutlinedButton(onClick = onOpenPicker, modifier = Modifier.fillMaxWidth()) {
-                    Text(text = "Add another requirement")
+                    Text(text = "Add requirement")
                 }
             }
         }
 
+        if (editorOpen) {
+            RequirementEditor(
+                selectedName = selectedName ?: selectedPackage,
+                selectedPackage = selectedPackage,
+                selectedMinutes = selectedMinutes,
+                editing = editingIndex != null,
+                pickerOpen = pickerOpen,
+                search = search,
+                apps = apps,
+                appsLoading = appsLoading,
+                onOpenPicker = onOpenPicker,
+                onSearchChange = onSearchChange,
+                onSelectApp = onSelectApp,
+                onSelectMinutes = onSelectMinutes,
+                onSaveRequirement = onSaveRequirement,
+                onCancel = onClosePicker
+            )
+        }
+    }
+}
+
+@Composable
+private fun RequirementEditor(
+    selectedName: String?,
+    selectedPackage: String?,
+    selectedMinutes: Int,
+    editing: Boolean,
+    pickerOpen: Boolean,
+    search: String,
+    apps: List<EarnItRuleStore.LaunchableApp>,
+    appsLoading: Boolean,
+    onOpenPicker: () -> Unit,
+    onSearchChange: (String) -> Unit,
+    onSelectApp: (String) -> Unit,
+    onSelectMinutes: (Int) -> Unit,
+    onSaveRequirement: () -> Unit,
+    onCancel: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Text(
+            text = if (editing) "Edit requirement" else "New requirement",
+            style = MaterialTheme.typography.titleSmall
+        )
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(text = "App", style = MaterialTheme.typography.labelSmall)
+            OutlinedButton(onClick = onOpenPicker, modifier = Modifier.fillMaxWidth()) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(text = selectedName ?: "Choose app")
+                    Text(text = ">", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
         if (pickerOpen) {
             BuilderAppSearchField(
                 value = search,
@@ -519,53 +585,96 @@ private fun RequirementsStep(
                 searchQuery = search,
                 loading = appsLoading,
                 selectedCountLabel = null,
-                onClickApp = { packageName ->
-                    onSelectApp(packageName)
-                    onClosePicker()
-                }
+                onClickApp = onSelectApp
             )
         }
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(text = "Required time", style = MaterialTheme.typography.labelSmall)
+            RequirementDurationSelector(
+                selectedMinutes = selectedMinutes,
+                onSelectMinutes = onSelectMinutes
+            )
+        }
+        Button(
+            onClick = onSaveRequirement,
+            enabled = selectedPackage != null && selectedMinutes > 0,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(text = if (editing) "Save changes" else "Add requirement")
+        }
+        TextButton(onClick = onCancel, modifier = Modifier.fillMaxWidth()) {
+            Text(text = "Cancel")
+        }
+    }
+}
 
-        if (selectedPackage != null) {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
-            ) {
-                Column(
-                    modifier = Modifier.padding(14.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    Text(
-                        text = if (editingIndex == null) "New requirement" else "Edit requirement",
-                        style = MaterialTheme.typography.titleSmall
-                    )
-                    Text(text = selectedName ?: selectedPackage, style = MaterialTheme.typography.bodyLarge)
-                    Text(text = "Required duration", style = MaterialTheme.typography.labelSmall)
-                    listOf(5, 10, 20, 30).forEach { minutes ->
-                        OutlinedButton(
-                            onClick = { onSelectMinutes(minutes) },
-                            modifier = Modifier.fillMaxWidth(),
-                            border = BorderStroke(
-                                width = if (selectedMinutes == minutes) 2.dp else 1.dp,
-                                color = if (selectedMinutes == minutes) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outlineVariant
-                            ),
-                            colors = ButtonDefaults.outlinedButtonColors(
-                                containerColor = if (selectedMinutes == minutes) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.surface
-                            )
-                        ) {
-                            Text(text = "$minutes min")
-                        }
-                    }
-                    OutlinedButton(onClick = { onSelectMinutes(selectedMinutes) }, modifier = Modifier.fillMaxWidth()) {
-                        Text(text = "Custom")
-                    }
-                    Button(onClick = onSaveRequirement, modifier = Modifier.fillMaxWidth()) {
-                        Text(text = if (editingIndex == null) "Add requirement" else "Save requirement")
-                    }
-                }
+@Composable
+private fun RequirementDurationSelector(
+    selectedMinutes: Int,
+    onSelectMinutes: (Int) -> Unit
+) {
+    val presets = listOf(5, 10, 20, 30)
+    val customSelected = selectedMinutes !in presets
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+            presets.take(2).forEach { minutes ->
+                RequirementDurationChip(
+                    label = "$minutes min",
+                    selected = selectedMinutes == minutes,
+                    onClick = { onSelectMinutes(minutes) },
+                    modifier = Modifier.weight(1f)
+                )
             }
         }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+            presets.drop(2).forEach { minutes ->
+                RequirementDurationChip(
+                    label = "$minutes min",
+                    selected = selectedMinutes == minutes,
+                    onClick = { onSelectMinutes(minutes) },
+                    modifier = Modifier.weight(1f)
+                )
+            }
+        }
+        RequirementDurationChip(
+            label = "Custom",
+            selected = customSelected,
+            onClick = { if (!customSelected) onSelectMinutes(45) },
+            modifier = Modifier.fillMaxWidth()
+        )
+        if (customSelected) {
+            TextField(
+                value = selectedMinutes.coerceAtLeast(1).toString(),
+                onValueChange = { rawValue ->
+                    rawValue.filter { it.isDigit() }.toIntOrNull()?.takeIf { it > 0 }?.let(onSelectMinutes)
+                },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text(text = "Custom minutes") },
+                singleLine = true
+            )
+        }
+    }
+}
+
+@Composable
+private fun RequirementDurationChip(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    OutlinedButton(
+        onClick = onClick,
+        modifier = modifier.height(44.dp),
+        border = BorderStroke(
+            width = if (selected) 2.dp else 1.dp,
+            color = if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outlineVariant
+        ),
+        colors = ButtonDefaults.outlinedButtonColors(
+            containerColor = if (selected) MaterialTheme.colorScheme.surface else MaterialTheme.colorScheme.surfaceVariant
+        )
+    ) {
+        Text(text = label)
     }
 }
 
@@ -575,25 +684,24 @@ private fun RequirementCard(
     onEdit: () -> Unit,
     onDelete: () -> Unit
 ) {
-    Card(
+    Row(
         modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
+        EarnItAppIcon(packageName = requirement.app.packageName, appName = requirement.app.name, size = 36.dp)
         Column(
-            modifier = Modifier.padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(2.dp)
         ) {
             Text(text = requirement.app.name, style = MaterialTheme.typography.titleSmall)
-            Text(text = "${requirement.requiredSeconds / 60L} min", style = MaterialTheme.typography.bodyMedium)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = onEdit, modifier = Modifier.weight(1f)) {
-                    Text(text = "Edit")
-                }
-                OutlinedButton(onClick = onDelete, modifier = Modifier.weight(1f)) {
-                    Text(text = "Remove")
-                }
-            }
+            Text(text = "${requirement.requiredSeconds / 60L} min required", style = MaterialTheme.typography.bodyMedium)
+        }
+        TextButton(onClick = onEdit) {
+            Text(text = "Edit")
+        }
+        TextButton(onClick = onDelete) {
+            Text(text = "Remove")
         }
     }
 }
@@ -666,6 +774,14 @@ internal fun reviewActionLabel(ruleType: EarnItRuleStore.RuleType): String {
     return when (ruleType) {
         EarnItRuleStore.RuleType.ScheduledBlock -> "Review Block Rule"
         else -> "Review Rule"
+    }
+}
+
+private fun scheduleHelperText(ruleType: EarnItRuleStore.RuleType): String {
+    return when (ruleType) {
+        EarnItRuleStore.RuleType.EarnRewardTime -> "Outside these times, Reward Apps are unrestricted by this Rule."
+        EarnItRuleStore.RuleType.CompleteToUnlock -> "Outside these times, Apps to Unlock are unrestricted by this Rule."
+        EarnItRuleStore.RuleType.ScheduledBlock -> "Outside these times, Blocked Apps are unrestricted by this Rule."
     }
 }
 
@@ -1109,6 +1225,7 @@ private fun ExchangeOption(
 
 @Composable
 private fun ScheduleStep(
+    ruleType: EarnItRuleStore.RuleType,
     selectedActiveDays: Set<Int>,
     selectedStartMinute: Int,
     selectedEndMinute: Int,
@@ -1124,7 +1241,7 @@ private fun ScheduleStep(
 
     EditorSection(
         title = "When should this Rule apply?",
-        helperText = "Outside these times, Reward Apps are unrestricted by this Rule."
+        helperText = scheduleHelperText(ruleType)
     ) {
         ScheduleDayPresets(
             selectedActiveDays = selectedActiveDays,
@@ -1141,6 +1258,7 @@ private fun ScheduleStep(
             CompactDayButtons(selectedActiveDays = selectedActiveDays, onToggleActiveDay = onToggleActiveDay)
         }
         ScheduleTimePresets(
+            ruleType = ruleType,
             selectedStartMinute = selectedStartMinute,
             selectedEndMinute = selectedEndMinute,
             onSelectAllDay = onSelectAllDay,
@@ -1225,6 +1343,7 @@ private fun ScheduleDayPresets(
 
 @Composable
 private fun ScheduleTimePresets(
+    ruleType: EarnItRuleStore.RuleType,
     selectedStartMinute: Int,
     selectedEndMinute: Int,
     onSelectAllDay: () -> Unit,
@@ -1267,7 +1386,7 @@ private fun ScheduleTimePresets(
             }
         }
         Text(
-            text = "Outside these times, Reward Apps are unrestricted by this Rule.",
+            text = scheduleHelperText(ruleType),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
@@ -1312,44 +1431,67 @@ private fun ReviewStep(
 ) {
     when (rule.type) {
         EarnItRuleStore.RuleType.EarnRewardTime -> EarnRewardReviewStep(draft)
-        EarnItRuleStore.RuleType.CompleteToUnlock -> TypedReviewStep(
-            title = "Review Rule",
-            sections = buildList {
-                add("COMPLETE ALL" to requirements.joinToString("\n") { "${it.app.name} - ${it.requiredSeconds / 60L} min" })
-                add("THEN UNLOCK" to draft.selectedRewardApps.joinToString("\n") { it.name }.ifBlank { "Choose at least one app before saving." })
-                add("ACTIVE" to reviewScheduleSummary(draft.activeDays, draft.startMinute, draft.endMinute))
-            }
-        )
-        EarnItRuleStore.RuleType.ScheduledBlock -> TypedReviewStep(
-            title = "Review Block Rule",
-            sections = buildList {
-                add("BLOCK" to draft.selectedRewardApps.joinToString("\n") { it.name }.ifBlank { "Choose at least one app before saving." })
-                add("ACTIVE" to reviewScheduleSummary(draft.activeDays, draft.startMinute, draft.endMinute))
-            }
-        )
+        EarnItRuleStore.RuleType.CompleteToUnlock -> CompleteToUnlockReviewStep(draft, requirements)
+        EarnItRuleStore.RuleType.ScheduledBlock -> ScheduledBlockReviewStep(draft)
     }
 }
 
 @Composable
-private fun TypedReviewStep(title: String, sections: List<Pair<String, String>>) {
+private fun CompleteToUnlockReviewStep(
+    draft: RuleDraftUiState,
+    requirements: List<EarnItRuleStore.RuleRequirement>
+) {
     EditorSection(
-        title = title,
-        helperText = "Read this as the agreement EarnIt will enforce."
+        title = "Review Rule",
+        helperText = "All requirements must be complete before these apps unlock."
     ) {
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
-        ) {
-            Column(
-                modifier = Modifier.padding(14.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                sections.forEach { (label, value) ->
-                    ReviewAgreementSection(label = label, value = value)
-                }
-            }
+        ReviewCard {
+            ReviewRequirementsSection(requirements = requirements)
+            ReviewAppsSection(
+                label = "TO UNLOCK",
+                apps = draft.selectedRewardApps,
+                missingValue = "Choose at least one app before saving."
+            )
+            ReviewAgreementSection(
+                label = "ACTIVE",
+                value = reviewScheduleSummary(draft.activeDays, draft.startMinute, draft.endMinute)
+            )
         }
+    }
+}
+
+@Composable
+private fun ScheduledBlockReviewStep(draft: RuleDraftUiState) {
+    EditorSection(
+        title = "Review Block Rule",
+        helperText = "These apps are blocked only during the selected schedule."
+    ) {
+        ReviewCard {
+            ReviewAppsSection(
+                label = "BLOCK",
+                apps = draft.selectedRewardApps,
+                missingValue = "Choose at least one app before saving."
+            )
+            ReviewAgreementSection(
+                label = "DURING",
+                value = reviewScheduleSummary(draft.activeDays, draft.startMinute, draft.endMinute)
+            )
+        }
+    }
+}
+
+@Composable
+private fun ReviewCard(content: @Composable ColumnScope.() -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            content = content
+        )
     }
 }
 @Composable
@@ -1359,15 +1501,7 @@ private fun EarnRewardReviewStep(draft: RuleDraftUiState) {
         title = "Review Rule",
         helperText = "Read this as the agreement EarnIt will enforce."
     ) {
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
-        ) {
-            Column(
-                modifier = Modifier.padding(14.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
+        ReviewCard {
                 ReviewAppSection(
                     label = "WHEN I USE",
                     app = draft.selectedEarnApp,
@@ -1394,7 +1528,6 @@ private fun EarnRewardReviewStep(draft: RuleDraftUiState) {
                         "Choose when this Rule should be active before saving."
                     }
                 )
-            }
         }
 
         if (missingItems.isNotEmpty()) {
@@ -1410,6 +1543,30 @@ private fun EarnRewardReviewStep(draft: RuleDraftUiState) {
                     Text(text = "Before saving, finish:", style = MaterialTheme.typography.titleSmall)
                     missingItems.forEach { item ->
                         Text(text = item, style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ReviewRequirementsSection(requirements: List<EarnItRuleStore.RuleRequirement>) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(text = "COMPLETE ALL", style = MaterialTheme.typography.labelSmall)
+        if (requirements.isEmpty()) {
+            Text(text = "Add at least one requirement before saving.", style = MaterialTheme.typography.bodyLarge)
+        } else {
+            requirements.forEach { requirement ->
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                    EarnItAppIcon(packageName = requirement.app.packageName, appName = requirement.app.name, size = 32.dp)
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text(text = requirement.app.name, style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            text = "${requirement.requiredSeconds / 60L} min",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                 }
             }

@@ -125,18 +125,8 @@ fun homeRuleUiState(
         appBlockingEnabled = appBlockingEnabled,
         isActiveNow = isActiveNow
     )
-    val primaryText = when {
-        !rule.enabled -> "Rule paused"
-        !isActiveNow -> "Unrestricted right now"
-        state.remainingRewardSeconds <= 0L -> "No Reward Time"
-        else -> card.availableRewardTimeLabel
-    }
-    val secondaryText = when {
-        !rule.enabled -> EarnItUiFormatters.savedRewardTime(state.remainingRewardSeconds)
-        !isActiveNow -> EarnItUiFormatters.remainingRewardTime(state.remainingRewardSeconds)
-        state.remainingRewardSeconds <= 0L -> EarnItUiFormatters.exchangeSummary(rule.rewardSecondsPerProductiveSecond)
-        else -> null
-    }
+    val primaryText = homePrimaryText(rule, card, state.remainingRewardSeconds, isActiveNow)
+    val secondaryText = homeSecondaryText(rule, state.remainingRewardSeconds, isActiveNow)
     val statusText = when {
         card.attentionLabel != null -> "Protection needs attention"
         !rule.enabled -> "Available if resumed today"
@@ -147,13 +137,55 @@ fun homeRuleUiState(
         card = card,
         primaryText = primaryText,
         secondaryText = secondaryText,
-        earnContextText = if (rule.enabled && isActiveNow) {
+        earnContextText = if (rule.type == EarnItRuleStore.RuleType.EarnRewardTime && rule.enabled && isActiveNow) {
             EarnItUiFormatters.exchangeSummary(rule.rewardSecondsPerProductiveSecond)
         } else {
             null
         },
         statusText = statusText
     )
+}
+
+private fun homePrimaryText(
+    rule: EarnItRuleStore.Rule,
+    card: RuleCardUiState,
+    remainingRewardSeconds: Long,
+    isActiveNow: Boolean
+): String {
+    if (!rule.enabled) return "Rule paused"
+    return when (rule.type) {
+        EarnItRuleStore.RuleType.EarnRewardTime -> when {
+            !isActiveNow -> "Unrestricted right now"
+            remainingRewardSeconds <= 0L -> "No Reward Time"
+            else -> card.availableRewardTimeLabel
+        }
+        EarnItRuleStore.RuleType.CompleteToUnlock -> {
+            if (isActiveNow) "Complete requirements to unlock" else "Unlock rule scheduled"
+        }
+        EarnItRuleStore.RuleType.ScheduledBlock -> {
+            if (isActiveNow) "Blocked now" else "Scheduled block"
+        }
+    }
+}
+
+private fun homeSecondaryText(
+    rule: EarnItRuleStore.Rule,
+    remainingRewardSeconds: Long,
+    isActiveNow: Boolean
+): String? {
+    return when (rule.type) {
+        EarnItRuleStore.RuleType.EarnRewardTime -> when {
+            !rule.enabled -> EarnItUiFormatters.savedRewardTime(remainingRewardSeconds)
+            !isActiveNow -> EarnItUiFormatters.remainingRewardTime(remainingRewardSeconds)
+            remainingRewardSeconds <= 0L -> EarnItUiFormatters.exchangeSummary(rule.rewardSecondsPerProductiveSecond)
+            else -> null
+        }
+        EarnItRuleStore.RuleType.CompleteToUnlock -> {
+            val count = rule.requirements.size
+            "$count ${if (count == 1) "requirement" else "requirements"}"
+        }
+        EarnItRuleStore.RuleType.ScheduledBlock -> rule.scheduleLabel
+    }
 }
 
 @Composable
@@ -248,13 +280,24 @@ private fun LiveRuleCard(
             if (homeRule.secondaryText != null) {
                 Text(text = homeRule.secondaryText, style = MaterialTheme.typography.bodyMedium)
             }
-            RewardAppsRow(apps = card.rewardApps)
-            EarnAppRow(
-                appName = card.earnAppName,
-                packageName = card.earnAppPackage,
-                contextText = homeRule.earnContextText,
-                onOpenEarnApp = onOpenEarnApp
-            )
+            when (homeRule.rule.type) {
+                EarnItRuleStore.RuleType.EarnRewardTime -> {
+                    RewardAppsRow(label = "For", apps = card.rewardApps)
+                    EarnAppRow(
+                        appName = card.earnAppName,
+                        packageName = card.earnAppPackage,
+                        contextText = homeRule.earnContextText,
+                        onOpenEarnApp = onOpenEarnApp
+                    )
+                }
+                EarnItRuleStore.RuleType.CompleteToUnlock -> {
+                    RequirementCountRow(requirements = homeRule.rule.requirements)
+                    RewardAppsRow(label = "Unlocks", apps = card.rewardApps)
+                }
+                EarnItRuleStore.RuleType.ScheduledBlock -> {
+                    RewardAppsRow(label = "Blocked Apps", apps = card.rewardApps)
+                }
+            }
             Text(
                 text = homeRule.statusText,
                 style = MaterialTheme.typography.bodySmall,
@@ -265,9 +308,21 @@ private fun LiveRuleCard(
 }
 
 @Composable
-private fun RewardAppsRow(apps: List<EarnItAppUiState>) {
+private fun RequirementCountRow(requirements: List<EarnItRuleStore.RuleRequirement>) {
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text(text = "For", style = MaterialTheme.typography.labelSmall)
+        Text(text = "Requirements", style = MaterialTheme.typography.labelSmall)
+        Text(
+            text = "${requirements.size} ${if (requirements.size == 1) "requirement" else "requirements"} must be complete",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+@Composable
+private fun RewardAppsRow(label: String, apps: List<EarnItAppUiState>) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(text = label, style = MaterialTheme.typography.labelSmall)
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
             apps.take(5).forEach { app ->
                 EarnItAppIcon(packageName = app.packageName, appName = app.name, size = 28.dp)
@@ -338,6 +393,22 @@ private fun AppInitialTile(name: String, size: Int) {
     }
 }
 
+private fun temporaryRuleTitle(rule: EarnItRuleStore.Rule): String {
+    return when (rule.type) {
+        EarnItRuleStore.RuleType.EarnRewardTime -> rule.earnApps.firstOrNull()?.name ?: rule.productiveName
+        EarnItRuleStore.RuleType.CompleteToUnlock -> "Complete to Unlock"
+        EarnItRuleStore.RuleType.ScheduledBlock -> "Scheduled Block"
+    }
+}
+
+private fun temporaryRuleSubtitle(rule: EarnItRuleStore.Rule): String {
+    return when (rule.type) {
+        EarnItRuleStore.RuleType.EarnRewardTime -> "For ${rule.blockedSummary}"
+        EarnItRuleStore.RuleType.CompleteToUnlock -> "${rule.requirements.size} requirements unlock ${rule.blockedSummary}"
+        EarnItRuleStore.RuleType.ScheduledBlock -> "Blocks ${rule.blockedSummary}"
+    }
+}
+
 @Composable
 private fun TemporaryRuleManagement(
     rules: List<EarnItRuleStore.Rule>,
@@ -367,8 +438,8 @@ private fun TemporaryRuleManagement(
                             modifier = Modifier.padding(12.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Text(text = rule.productiveName, style = MaterialTheme.typography.titleSmall)
-                            Text(text = "For ${rule.blockedSummary}", style = MaterialTheme.typography.bodySmall)
+                            Text(text = temporaryRuleTitle(rule), style = MaterialTheme.typography.titleSmall)
+                            Text(text = temporaryRuleSubtitle(rule), style = MaterialTheme.typography.bodySmall)
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 OutlinedButton(onClick = { onEditRule(rule) }) {
                                     Text(text = "Edit")

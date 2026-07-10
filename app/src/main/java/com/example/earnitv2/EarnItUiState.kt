@@ -227,6 +227,10 @@ object EarnItUiFormatters {
     fun scheduleStatus(rule: EarnItRuleStore.Rule, isActiveNow: Boolean): String {
         return when {
             !rule.enabled -> "Rule paused"
+            rule.type == EarnItRuleStore.RuleType.ScheduledBlock && isActiveNow -> "Block active now"
+            rule.type == EarnItRuleStore.RuleType.ScheduledBlock -> "Outside block schedule"
+            rule.type == EarnItRuleStore.RuleType.CompleteToUnlock && isActiveNow -> "Requirements active now"
+            rule.type == EarnItRuleStore.RuleType.CompleteToUnlock -> "Apps unrestricted right now"
             isActiveNow -> "Active now"
             else -> "Unrestricted right now"
         }
@@ -237,13 +241,16 @@ object EarnItUiFormatters {
     }
 
     fun scheduleExplanation(rule: EarnItRuleStore.Rule): String {
-        return if (rule.effectiveTimeWindows.size == 1 &&
+        if (rule.effectiveTimeWindows.size == 1 &&
             rule.effectiveTimeWindows.first() == EarnItRuleStore.TimeWindow(0, 1_440) &&
             rule.activeDays == EarnItRuleStore.allDays.toSet()
         ) {
-            ""
-        } else {
-            "Outside these times, selected apps are unrestricted by this Rule."
+            return ""
+        }
+        return when (rule.type) {
+            EarnItRuleStore.RuleType.EarnRewardTime -> "Outside these times, Reward Apps are unrestricted by this Rule."
+            EarnItRuleStore.RuleType.CompleteToUnlock -> "Outside these times, Apps to Unlock are unrestricted by this Rule."
+            EarnItRuleStore.RuleType.ScheduledBlock -> "Outside these times, Blocked Apps are unrestricted by this Rule."
         }
     }
 

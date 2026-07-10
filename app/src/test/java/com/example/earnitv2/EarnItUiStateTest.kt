@@ -113,6 +113,40 @@ class EarnItUiStateTest {
         assertFalse(state.canSave)
     }
 
+    @Test
+    fun homeRuleUiState_completeToUnlockDoesNotUseRewardTimeBalanceCopy() {
+        val state = homeRuleUiState(
+            state = RuleDashboardState(
+                rule = completeToUnlockRule(),
+                productiveUsageSeconds = 0,
+                remainingRewardSeconds = 0
+            ),
+            usageAccessGranted = true,
+            appBlockingEnabled = true
+        )
+
+        assertEquals("Complete requirements to unlock", state.primaryText)
+        assertEquals("2 requirements", state.secondaryText)
+        assertNull(state.earnContextText)
+    }
+
+    @Test
+    fun homeRuleUiState_scheduledBlockDoesNotUseRewardTimeBalanceCopy() {
+        val state = homeRuleUiState(
+            state = RuleDashboardState(
+                rule = scheduledBlockRule(),
+                productiveUsageSeconds = 0,
+                remainingRewardSeconds = 0
+            ),
+            usageAccessGranted = true,
+            appBlockingEnabled = true
+        )
+
+        assertEquals("Blocked now", state.primaryText)
+        assertEquals("Every day, all day", state.secondaryText)
+        assertNull(state.earnContextText)
+    }
+
     private fun sampleRule(): EarnItRuleStore.Rule {
         return EarnItRuleStore.Rule(
             id = "rule_1",
@@ -127,6 +161,46 @@ class EarnItUiStateTest {
             startMinute = 9 * 60,
             endMinute = 17 * 60,
             enabled = true
+        )
+    }
+
+    private fun completeToUnlockRule(): EarnItRuleStore.Rule {
+        return EarnItRuleStore.Rule(
+            id = "rule_complete",
+            productivePackage = "",
+            productiveName = "",
+            blockedApps = listOf(
+                EarnItRuleStore.RuleApp("com.instagram.android", "Instagram"),
+                EarnItRuleStore.RuleApp("com.snapchat.android", "Snapchat")
+            ),
+            rewardSecondsPerProductiveSecond = 1,
+            activeDays = EarnItRuleStore.allDays.toSet(),
+            startMinute = 0,
+            endMinute = 1_440,
+            enabled = true,
+            type = EarnItRuleStore.RuleType.CompleteToUnlock,
+            requirements = listOf(
+                EarnItRuleStore.RuleRequirement(EarnItRuleStore.RuleApp("com.duolingo", "Duolingo"), 10 * 60L),
+                EarnItRuleStore.RuleRequirement(EarnItRuleStore.RuleApp("com.headspace", "Headspace"), 20 * 60L)
+            )
+        )
+    }
+
+    private fun scheduledBlockRule(): EarnItRuleStore.Rule {
+        return EarnItRuleStore.Rule(
+            id = "rule_schedule",
+            productivePackage = "",
+            productiveName = "",
+            blockedApps = listOf(
+                EarnItRuleStore.RuleApp("com.instagram.android", "Instagram"),
+                EarnItRuleStore.RuleApp("com.snapchat.android", "Snapchat")
+            ),
+            rewardSecondsPerProductiveSecond = 1,
+            activeDays = EarnItRuleStore.allDays.toSet(),
+            startMinute = 0,
+            endMinute = 1_440,
+            enabled = true,
+            type = EarnItRuleStore.RuleType.ScheduledBlock
         )
     }
 }

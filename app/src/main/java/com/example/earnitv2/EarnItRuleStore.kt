@@ -382,7 +382,7 @@ object EarnItRuleStore {
             .ifEmpty { allDays.toSet() }
     }
 
-    private fun encodeRules(rules: List<Rule>): String {
+    internal fun encodeRules(rules: List<Rule>): String {
         return rules.joinToString(RULE_RECORD_SEPARATOR) { rule ->
             listOf(
                 rule.id,
@@ -402,25 +402,27 @@ object EarnItRuleStore {
         }
     }
 
-    private fun decodeRules(rawValue: String?): List<Rule> {
+    internal fun decodeRules(rawValue: String?): List<Rule> {
         if (rawValue.isNullOrBlank()) return emptyList()
         return rawValue.split(RULE_RECORD_SEPARATOR)
             .mapNotNull { record ->
                 val fields = record.split(RULE_FIELD_SEPARATOR).map { decodeField(it) }
                 val id = fields.getOrNull(0)?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
-                val productivePackage = fields.getOrNull(1)?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
-                val productiveName = fields.getOrNull(2)?.takeIf { it.isNotBlank() } ?: productivePackage
+                val type = fields.getOrNull(9)?.let { rawType ->
+                    RuleType.entries.firstOrNull { it.name == rawType }
+                } ?: RuleType.EarnRewardTime
+                val productivePackage = fields.getOrNull(1)?.takeIf { it.isNotBlank() }
+                    ?: if (type == RuleType.EarnRewardTime) return@mapNotNull null else ""
+                val productiveName = fields.getOrNull(2)?.takeIf { it.isNotBlank() }
+                    ?: productivePackage.takeIf { it.isNotBlank() }.orEmpty()
                 val blockedApps = decodeBlockedApps(fields.getOrNull(3)).ifEmpty { return@mapNotNull null }
                 val ratio = fields.getOrNull(4)?.toIntOrNull()?.takeIf { it > 0 } ?: 2
                 val activeDays = decodeActiveDays(fields.getOrNull(5))
                 val startMinute = fields.getOrNull(6)?.toIntOrNull()?.coerceIn(0, 1_439) ?: 0
                 val endMinute = fields.getOrNull(7)?.toIntOrNull()?.coerceIn(1, 1_440) ?: 1_440
                 val enabled = fields.getOrNull(8)?.toBooleanStrictOrNull() ?: true
-                val type = fields.getOrNull(9)?.let { rawType ->
-                    RuleType.entries.firstOrNull { it.name == rawType }
-                } ?: RuleType.EarnRewardTime
                 val productiveApps = decodeBlockedApps(fields.getOrNull(10)).ifEmpty {
-                    listOf(RuleApp(productivePackage, productiveName))
+                    if (productivePackage.isBlank()) emptyList() else listOf(RuleApp(productivePackage, productiveName))
                 }
                 val requirements = decodeRequirements(fields.getOrNull(11))
                 val timeWindows = decodeTimeWindows(fields.getOrNull(12)).ifEmpty {

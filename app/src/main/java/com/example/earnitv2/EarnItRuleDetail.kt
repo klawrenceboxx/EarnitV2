@@ -61,14 +61,26 @@ fun EarnItRuleDetail(
         }
 
         RuleDetailLiveState(homeRule = homeRule)
-        RuleDetailRewardApps(apps = detail.card.rewardApps)
-        RuleDetailEarnAction(
-            earnAppName = detail.card.earnAppName,
-            earnAppPackage = detail.card.earnAppPackage,
-            onOpenEarnApp = onOpenEarnApp
-        )
-        RuleDetailAgreement(summary = detail.ruleAgreementSummary)
+        when (rule.type) {
+            EarnItRuleStore.RuleType.EarnRewardTime -> {
+                RuleDetailApps(title = "Reward Apps this applies to", apps = detail.card.rewardApps)
+                RuleDetailEarnAction(
+                    earnAppName = detail.card.earnAppName,
+                    earnAppPackage = detail.card.earnAppPackage,
+                    onOpenEarnApp = onOpenEarnApp
+                )
+                RuleDetailAgreement(summary = detail.ruleAgreementSummary)
+            }
+            EarnItRuleStore.RuleType.CompleteToUnlock -> {
+                RuleDetailRequirements(requirements = rule.requirements)
+                RuleDetailApps(title = "Apps to Unlock", apps = detail.card.rewardApps)
+            }
+            EarnItRuleStore.RuleType.ScheduledBlock -> {
+                RuleDetailApps(title = "Blocked Apps", apps = detail.card.rewardApps)
+            }
+        }
         RuleDetailSchedule(
+            title = if (rule.type == EarnItRuleStore.RuleType.ScheduledBlock) "Block schedule" else "Applies",
             summary = detail.scheduleSummary,
             explanation = detail.scheduleExplanation
         )
@@ -165,8 +177,8 @@ private fun RuleDetailLiveState(homeRule: HomeRuleUiState) {
     }
 }
 @Composable
-private fun RuleDetailRewardApps(apps: List<EarnItAppUiState>) {
-    RuleDetailSection(title = "Reward Apps this applies to") {
+private fun RuleDetailApps(title: String, apps: List<EarnItAppUiState>) {
+    RuleDetailSection(title = title) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             apps.take(5).forEach { app ->
                 EarnItAppIcon(packageName = app.packageName, appName = app.name, size = 32.dp)
@@ -179,6 +191,29 @@ private fun RuleDetailRewardApps(apps: List<EarnItAppUiState>) {
             text = apps.joinToString(", ") { it.name },
             style = MaterialTheme.typography.bodyMedium
         )
+    }
+}
+
+@Composable
+private fun RuleDetailRequirements(requirements: List<EarnItRuleStore.RuleRequirement>) {
+    RuleDetailSection(title = "Complete all") {
+        if (requirements.isEmpty()) {
+            Text(text = "No requirements saved.", style = MaterialTheme.typography.bodyMedium)
+        } else {
+            requirements.forEach { requirement ->
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                    EarnItAppIcon(packageName = requirement.app.packageName, appName = requirement.app.name, size = 32.dp)
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text(text = requirement.app.name, style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            text = "${requirement.requiredSeconds / 60L} min required",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -213,14 +248,16 @@ private fun RuleDetailAgreement(summary: String) {
 }
 
 @Composable
-private fun RuleDetailSchedule(summary: String, explanation: String) {
-    RuleDetailSection(title = "Applies") {
+private fun RuleDetailSchedule(title: String, summary: String, explanation: String) {
+    RuleDetailSection(title = title) {
         Text(text = summary, style = MaterialTheme.typography.bodyLarge)
-        Text(
-            text = explanation,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
+        if (explanation.isNotBlank()) {
+            Text(
+                text = explanation,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
     }
 }
 

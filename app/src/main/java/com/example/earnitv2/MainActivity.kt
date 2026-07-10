@@ -166,7 +166,7 @@ class MainActivity : ComponentActivity() {
                             onBlockedSearchChange = { blockedSearch = it },
                             onSelectProductiveApp = ::selectProductiveApp,
                             onOpenRequirementPicker = ::openRequirementPicker,
-                            onCloseRequirementPicker = { requirementPickerOpen = false },
+                            onCloseRequirementPicker = ::cancelRequirementEditor,
                             onRequirementSearchChange = { requirementSearch = it },
                             onSelectRequirementApp = ::selectRequirementApp,
                             onSelectRequirementMinutes = { selectedRequirementMinutes = it },
@@ -307,8 +307,8 @@ class MainActivity : ComponentActivity() {
         selectedRequirements = rule.requirements
         requirementPickerOpen = false
         requirementSearch = ""
-        selectedRequirementPackage = rule.requirements.firstOrNull()?.app?.packageName
-        selectedRequirementMinutes = (rule.requirements.firstOrNull()?.requiredSeconds?.div(60L)?.toInt() ?: 10).coerceAtLeast(1)
+        selectedRequirementPackage = null
+        selectedRequirementMinutes = 10
         editingRequirementIndex = null
         selectedRatio = rule.rewardSecondsPerProductiveSecond
         selectedActiveDays = rule.activeDays
@@ -352,9 +352,9 @@ class MainActivity : ComponentActivity() {
     private fun openRequirementPicker() {
         requirementPickerOpen = true
         requirementSearch = ""
-        selectedRequirementPackage = null
-        selectedRequirementMinutes = 10
-        editingRequirementIndex = null
+        if (selectedRequirementPackage == null && editingRequirementIndex == null) {
+            selectedRequirementMinutes = selectedRequirementMinutes.coerceAtLeast(1)
+        }
         refreshLaunchableApps()
     }
 
@@ -383,6 +383,8 @@ class MainActivity : ComponentActivity() {
         selectedRequirementPackage = null
         selectedRequirementMinutes = 10
         editingRequirementIndex = null
+        requirementPickerOpen = false
+        requirementSearch = ""
     }
 
     private fun editRequirement(index: Int) {
@@ -399,7 +401,18 @@ class MainActivity : ComponentActivity() {
         if (editingRequirementIndex == index) {
             editingRequirementIndex = null
             selectedRequirementPackage = null
+            selectedRequirementMinutes = 10
+            requirementPickerOpen = false
+            requirementSearch = ""
         }
+    }
+
+    private fun cancelRequirementEditor() {
+        requirementPickerOpen = false
+        requirementSearch = ""
+        selectedRequirementPackage = null
+        selectedRequirementMinutes = 10
+        editingRequirementIndex = null
     }
     private fun toggleActiveDay(day: Int) {
         selectedActiveDays = if (day in selectedActiveDays) {
