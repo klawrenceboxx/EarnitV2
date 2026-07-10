@@ -107,6 +107,9 @@ fun EarnItRuleBuilder(
 ) {
     val steps = builderStepsFor(rule.type)
     val currentStep = if (builderStep in steps) builderStep else steps.first()
+    val logicalBack = {
+        currentStep.previous(steps)?.let(onBuilderStepChange) ?: onCancel()
+    }
     val draft = ruleDraftUiState(
         rule = rule,
         apps = apps,
@@ -118,7 +121,7 @@ fun EarnItRuleBuilder(
         selectedStartMinute = selectedStartMinute,
         selectedEndMinute = selectedEndMinute
     )
-    BackHandler(onBack = onCancel)
+    BackHandler(onBack = logicalBack)
 
     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
         BuilderHeader(
@@ -128,11 +131,15 @@ fun EarnItRuleBuilder(
             ruleType = rule.type,
             draft = draft,
             requirements = selectedRequirements,
-            onBack = onCancel,
+            onBack = logicalBack,
             onStepClick = onBuilderStepChange
         )
         if (currentStep != RuleBuilderStep.Review) {
-            RuleSoFar(draft = draft, currentStep = currentStep)
+            RuleSoFar(
+                draft = draft,
+                ruleType = rule.type,
+                requirements = selectedRequirements
+            )
         }
 
         when (currentStep) {
@@ -205,12 +212,9 @@ fun EarnItRuleBuilder(
         BuilderActions(
             currentStep = currentStep,
             steps = steps,
+            ruleType = rule.type,
             canContinue = canContinue(rule.type, currentStep, draft, selectedRequirements),
             canSave = canSaveRule(rule.type, draft, selectedRequirements),
-            onBack = {
-                val previous = currentStep.previous(steps)
-                if (previous == null) onCancel() else onBuilderStepChange(previous)
-            },
             onContinue = {
                 currentStep.next(steps)?.let(onBuilderStepChange)
             },
@@ -277,15 +281,11 @@ private fun BuilderHeader(
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             steps.forEach { step ->
-                val current = step == currentStep
-                val complete = stepIsComplete(ruleType, step, draft, requirements)
-                val enabled = current || stepIsEnabled(ruleType, step, draft, requirements)
+                val state = builderStageState(ruleType, step, currentStep, draft, requirements)
                 StageButton(
-                    label = step.label,
-                    current = current,
-                    complete = complete,
-                    enabled = enabled,
-                    onClick = { if (!current && enabled) onStepClick(step) },
+                    label = stageLabel(ruleType, step),
+                    state = state,
+                    onClick = { if (state.clickable) onStepClick(step) },
                     modifier = Modifier.weight(1f)
                 )
             }
@@ -296,28 +296,27 @@ private fun BuilderHeader(
 @Composable
 private fun StageButton(
     label: String,
-    current: Boolean,
-    complete: Boolean,
-    enabled: Boolean,
+    state: BuilderStageState,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val lineColor = when {
-        current -> MaterialTheme.colorScheme.onSurface
-        complete -> MaterialTheme.colorScheme.primary
+        state == BuilderStageState.Current -> MaterialTheme.colorScheme.onSurface
+        state == BuilderStageState.Completed -> MaterialTheme.colorScheme.primary
+        state == BuilderStageState.Available -> MaterialTheme.colorScheme.outline
         else -> MaterialTheme.colorScheme.outlineVariant
     }
     val textColor = when {
-        current || complete -> MaterialTheme.colorScheme.onSurface
-        enabled -> MaterialTheme.colorScheme.onSurfaceVariant
+        state == BuilderStageState.Current || state == BuilderStageState.Completed -> MaterialTheme.colorScheme.onSurface
+        state == BuilderStageState.Available -> MaterialTheme.colorScheme.onSurfaceVariant
         else -> MaterialTheme.colorScheme.outlineVariant
     }
     Column(
         modifier = modifier
             .clip(RoundedCornerShape(2.dp))
-            .clickable(enabled = enabled && !current, onClick = onClick)
+            .clickable(enabled = state.clickable, onClick = onClick)
             .padding(vertical = 4.dp),
-        verticalArrangement = Arrangement.spacedBy(5.dp)
+        verticalArrangement = Arrangement.spacedBy(3.dp)
     ) {
         Box(
             modifier = Modifier
@@ -332,73 +331,107 @@ private fun StageButton(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
+        Text(
+            text = state.statusLabel,
+            style = MaterialTheme.typography.labelSmall,
+            color = textColor,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
     }
 }
 @Composable
-private fun RuleSoFar(draft: RuleDraftUiState, currentStep: RuleBuilderStep) {
-    if (draft.selectedEarnApp == null && draft.selectedRewardApps.isEmpty()) return
-    val showExchange = currentStep == RuleBuilderStep.Exchange || currentStep == RuleBuilderStep.Schedule
-    val showSchedule = currentStep == RuleBuilderStep.Schedule && reviewScheduleIsValid(draft)
+private fun RuleSoFar(
+    draft: RuleDraftUiState,
+    ruleType: EarnItRuleStore.RuleType,
+    requirements: List<EarnItRuleStore.RuleRequirement>
+) {
+    val lines = compactRuleSoFarLines(ruleType, draft, requirements)
+    val hasApps = draft.selectedEarnApps.isNotEmpty() || draft.selectedRewardApps.isNotEmpty()
+    if (lines.isEmpty() && !hasApps) return
 
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        Column(
-            modifier = Modifier.padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Text(
-                text = "YOUR RULE SO FAR",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            RuleIconSummary(
-                earnApp = draft.selectedEarnApp,
+        Text(
+            text = "YOUR RULE SO FAR",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        when (ruleType) {
+            EarnItRuleStore.RuleType.EarnRewardTime -> RuleIconSummary(
+                earnApps = draft.selectedEarnApps,
                 rewardApps = draft.selectedRewardApps
             )
-            if (showExchange && draft.selectedEarnApp != null && draft.selectedRewardApps.isNotEmpty()) {
-                Text(
-                    text = EarnItUiFormatters.exchangeSummary(draft.exchangeSelection),
-                    style = MaterialTheme.typography.bodySmall
-                )
-            }
-            if (showSchedule) {
-                Text(
-                    text = reviewScheduleSummary(draft.activeDays, draft.startMinute, draft.endMinute),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
+            EarnItRuleStore.RuleType.CompleteToUnlock -> RuleRequirementSummary(
+                requirementCount = requirements.size,
+                unlockApps = draft.selectedRewardApps
+            )
+            EarnItRuleStore.RuleType.ScheduledBlock -> RuleBlockedSummary(apps = draft.selectedRewardApps)
+        }
+        lines.forEach { line ->
+            Text(
+                text = line,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }
 
 @Composable
 private fun RuleIconSummary(
-    earnApp: EarnItAppUiState?,
+    earnApps: List<EarnItAppUiState>,
     rewardApps: List<EarnItAppUiState>
 ) {
     Row(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        if (earnApp != null) {
-            EarnItAppIcon(packageName = earnApp.packageName, appName = earnApp.name, size = 28.dp)
-            if (rewardApps.isEmpty()) {
-                Text(text = earnApp.name, style = MaterialTheme.typography.bodyMedium)
-            }
+        earnApps.take(2).forEach { app ->
+            EarnItAppIcon(packageName = app.packageName, appName = app.name, size = 24.dp)
         }
-        if (earnApp != null && rewardApps.isNotEmpty()) {
+        if (earnApps.size > 2) CountChip(count = earnApps.size - 2)
+        if (earnApps.isNotEmpty() && rewardApps.isNotEmpty()) {
             Text(text = "->", color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         rewardApps.take(2).forEach { app ->
-            EarnItAppIcon(packageName = app.packageName, appName = app.name, size = 28.dp)
+            EarnItAppIcon(packageName = app.packageName, appName = app.name, size = 24.dp)
         }
         if (rewardApps.size > 2) {
             CountChip(count = rewardApps.size - 2)
         }
+    }
+}
+
+@Composable
+private fun RuleRequirementSummary(requirementCount: Int, unlockApps: List<EarnItAppUiState>) {
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        if (requirementCount > 0) {
+            Text(text = "$requirementCount ${if (requirementCount == 1) "requirement" else "requirements"}")
+        }
+        if (requirementCount > 0 && unlockApps.isNotEmpty()) {
+            Text(text = "->", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        unlockApps.take(2).forEach { app ->
+            EarnItAppIcon(packageName = app.packageName, appName = app.name, size = 24.dp)
+        }
+        if (unlockApps.size > 2) CountChip(count = unlockApps.size - 2)
+    }
+}
+
+@Composable
+private fun RuleBlockedSummary(apps: List<EarnItAppUiState>) {
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        apps.take(3).forEach { app ->
+            EarnItAppIcon(packageName = app.packageName, appName = app.name, size = 24.dp)
+        }
+        if (apps.size > 3) CountChip(count = apps.size - 3)
     }
 }
 
@@ -438,8 +471,8 @@ private fun RequirementsStep(
     val selectedName = selectedPackage?.let { namesByPackage[it] }
 
     EditorSection(
-        title = "Complete to Unlock",
-        helperText = "Add productive app requirements. Every requirement must be completed before selected apps unlock."
+        title = "What must you complete?",
+        helperText = "Add one or more requirements. All requirements must be completed."
     ) {
         if (requirements.isEmpty()) {
             Card(
@@ -587,6 +620,80 @@ private fun builderStepsFor(ruleType: EarnItRuleStore.RuleType): List<RuleBuilde
         )
     }
 }
+
+internal enum class BuilderStageState(val statusLabel: String, val clickable: Boolean) {
+    Current("Current", false),
+    Completed("Done", true),
+    Available("Open", true),
+    Locked("Locked", false)
+}
+
+internal fun builderStageState(
+    ruleType: EarnItRuleStore.RuleType,
+    step: RuleBuilderStep,
+    currentStep: RuleBuilderStep,
+    draft: RuleDraftUiState,
+    requirements: List<EarnItRuleStore.RuleRequirement>
+): BuilderStageState {
+    val steps = builderStepsFor(ruleType)
+    val stepIndex = steps.indexOf(step)
+    val currentIndex = steps.indexOf(currentStep)
+    return when {
+        step == currentStep -> BuilderStageState.Current
+        stepIndex >= 0 && currentIndex >= 0 &&
+            stepIndex < currentIndex &&
+            stepIsComplete(ruleType, step, draft, requirements) -> BuilderStageState.Completed
+        stepIsEnabled(ruleType, step, draft, requirements) -> BuilderStageState.Available
+        else -> BuilderStageState.Locked
+    }
+}
+
+internal fun stageLabel(ruleType: EarnItRuleStore.RuleType, step: RuleBuilderStep): String {
+    return when {
+        ruleType == EarnItRuleStore.RuleType.ScheduledBlock && step == RuleBuilderStep.Reward -> "Apps"
+        else -> step.label
+    }
+}
+
+internal fun logicalPreviousStep(
+    ruleType: EarnItRuleStore.RuleType,
+    currentStep: RuleBuilderStep
+): RuleBuilderStep? {
+    return currentStep.previous(builderStepsFor(ruleType))
+}
+
+internal fun reviewActionLabel(ruleType: EarnItRuleStore.RuleType): String {
+    return when (ruleType) {
+        EarnItRuleStore.RuleType.ScheduledBlock -> "Review Block Rule"
+        else -> "Review Rule"
+    }
+}
+
+internal fun compactRuleSoFarLines(
+    ruleType: EarnItRuleStore.RuleType,
+    draft: RuleDraftUiState,
+    requirements: List<EarnItRuleStore.RuleRequirement>
+): List<String> {
+    return buildList {
+        when (ruleType) {
+            EarnItRuleStore.RuleType.EarnRewardTime -> {
+                if (draft.selectedEarnApps.isNotEmpty() && draft.selectedRewardApps.isNotEmpty()) {
+                    add(EarnItUiFormatters.exchangeSummary(draft.exchangeSelection))
+                }
+                if (reviewScheduleIsValid(draft)) add(reviewScheduleSummary(draft.activeDays, draft.startMinute, draft.endMinute))
+            }
+            EarnItRuleStore.RuleType.CompleteToUnlock -> {
+                if (requirements.isNotEmpty()) add("${requirements.size} ${if (requirements.size == 1) "requirement" else "requirements"}")
+                if (requirements.isNotEmpty() && draft.selectedRewardApps.isNotEmpty()) add("Complete all")
+                if (reviewScheduleIsValid(draft)) add(reviewScheduleSummary(draft.activeDays, draft.startMinute, draft.endMinute))
+            }
+            EarnItRuleStore.RuleType.ScheduledBlock -> {
+                if (draft.selectedRewardApps.isNotEmpty()) add("Blocked")
+                if (reviewScheduleIsValid(draft)) add(reviewScheduleSummary(draft.activeDays, draft.startMinute, draft.endMinute))
+            }
+        }
+    }
+}
 @Composable
 private fun EarnStep(
     rule: EarnItRuleStore.Rule,
@@ -609,16 +716,8 @@ private fun EarnStep(
     }
     EditorSection(
         title = "How will you earn Reward Time?",
-        helperText = "Choose one or more Earn Apps. Time across selected apps is combined."
+        helperText = "Choose one or more Earn Apps where productive time should count."
     ) {
-        if (selectedApps.isNotEmpty()) {
-            AppSelectionSummary(
-                label = "Selected Earn Apps",
-                text = selectedAppCountLabel(selectedApps.size),
-                apps = selectedApps
-            )
-        }
-
         OutlinedButton(onClick = onOpenProductivePicker, modifier = Modifier.fillMaxWidth()) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -626,6 +725,12 @@ private fun EarnStep(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(text = if (selectedApps.isEmpty()) "Choose Earn Apps" else "Manage Earn Apps")
+                if (selectedApps.isNotEmpty()) {
+                    Text(
+                        text = selectedAppCountLabel(selectedApps.size),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
                 Text(text = ">", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
@@ -670,24 +775,16 @@ private fun RewardStep(
     }
     EditorSection(
         title = when (ruleType) {
-            EarnItRuleStore.RuleType.ScheduledBlock -> "Choose apps to block"
-            EarnItRuleStore.RuleType.CompleteToUnlock -> "Which apps unlock after completion?"
+            EarnItRuleStore.RuleType.ScheduledBlock -> "Which apps should be blocked?"
+            EarnItRuleStore.RuleType.CompleteToUnlock -> "What should completing them unlock?"
             EarnItRuleStore.RuleType.EarnRewardTime -> "Where can Reward Time be spent?"
         },
         helperText = when (ruleType) {
             EarnItRuleStore.RuleType.ScheduledBlock -> "Choose one or more apps this Rule blocks during its active schedule."
-            EarnItRuleStore.RuleType.CompleteToUnlock -> "Choose one or more apps that unlock after all requirements complete."
+            EarnItRuleStore.RuleType.CompleteToUnlock -> "Choose the apps that become available after every requirement is complete."
             EarnItRuleStore.RuleType.EarnRewardTime -> "Choose one or more Reward Apps that share this Rule balance."
         }
     ) {
-        if (selectedApps.isNotEmpty()) {
-            AppSelectionSummary(
-                label = selectedAppsLabel(ruleType),
-                text = selectedAppCountLabel(selectedApps.size),
-                apps = selectedApps
-            )
-        }
-
         OutlinedButton(onClick = onOpenBlockedPicker, modifier = Modifier.fillMaxWidth()) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -695,6 +792,12 @@ private fun RewardStep(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(text = if (selectedApps.isEmpty()) chooseAppsLabel(ruleType) else manageAppsLabel(ruleType))
+                if (selectedApps.isNotEmpty()) {
+                    Text(
+                        text = selectedAppCountLabel(selectedApps.size),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
                 Text(text = ">", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
@@ -1218,7 +1321,7 @@ private fun ReviewStep(
             }
         )
         EarnItRuleStore.RuleType.ScheduledBlock -> TypedReviewStep(
-            title = "Review Rule",
+            title = "Review Block Rule",
             sections = buildList {
                 add("BLOCK" to draft.selectedRewardApps.joinToString("\n") { it.name }.ifBlank { "Choose at least one app before saving." })
                 add("ACTIVE" to reviewScheduleSummary(draft.activeDays, draft.startMinute, draft.endMinute))
@@ -1388,34 +1491,29 @@ private fun reviewScheduleSummary(activeDays: Set<Int>, startMinute: Int, endMin
 private fun BuilderActions(
     currentStep: RuleBuilderStep,
     steps: List<RuleBuilderStep>,
+    ruleType: EarnItRuleStore.RuleType,
     canContinue: Boolean,
     canSave: Boolean,
-    onBack: () -> Unit,
     onContinue: () -> Unit,
     onSaveRule: () -> Unit
 ) {
-    val isFirstStep = currentStep.previous(steps) == null
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        if (!isFirstStep) {
-            OutlinedButton(onClick = onBack, modifier = Modifier.weight(1f)) {
-                Text(text = "Back")
-            }
-        }
         if (currentStep == RuleBuilderStep.Review) {
             Button(
                 onClick = onSaveRule,
                 enabled = canSave,
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.fillMaxWidth()
             ) {
                 Text(text = "Save Rule")
             }
         } else {
+            val nextStep = currentStep.next(steps)
             Button(
                 onClick = onContinue,
                 enabled = canContinue,
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.fillMaxWidth()
             ) {
-                Text(text = "Continue")
+                Text(text = if (nextStep == RuleBuilderStep.Review) reviewActionLabel(ruleType) else "Continue")
             }
         }
     }
