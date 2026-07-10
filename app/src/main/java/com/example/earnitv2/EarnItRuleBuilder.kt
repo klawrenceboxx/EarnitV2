@@ -120,7 +120,10 @@ fun EarnItRuleBuilder(
     val steps = builderStepsFor(rule.type)
     val currentStep = if (builderStep in steps) builderStep else steps.first()
     val logicalBack = {
-        currentStep.previous(steps)?.let(onBuilderStepChange) ?: onCancel()
+        when (val action = ruleBuilderBackAction(rule.type, currentStep)) {
+            RuleBuilderBackAction.ExitBuilder -> onCancel()
+            is RuleBuilderBackAction.PreviousStep -> onBuilderStepChange(action.step)
+        }
     }
     val draft = ruleDraftUiState(
         rule = rule,
@@ -792,6 +795,20 @@ internal fun logicalPreviousStep(
     currentStep: RuleBuilderStep
 ): RuleBuilderStep? {
     return currentStep.previous(builderStepsFor(ruleType))
+}
+
+internal sealed class RuleBuilderBackAction {
+    data class PreviousStep(val step: RuleBuilderStep) : RuleBuilderBackAction()
+    data object ExitBuilder : RuleBuilderBackAction()
+}
+
+internal fun ruleBuilderBackAction(
+    ruleType: EarnItRuleStore.RuleType,
+    currentStep: RuleBuilderStep
+): RuleBuilderBackAction {
+    return logicalPreviousStep(ruleType, currentStep)?.let { previousStep ->
+        RuleBuilderBackAction.PreviousStep(previousStep)
+    } ?: RuleBuilderBackAction.ExitBuilder
 }
 
 internal fun reviewActionLabel(ruleType: EarnItRuleStore.RuleType): String {

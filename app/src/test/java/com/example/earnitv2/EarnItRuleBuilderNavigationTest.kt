@@ -24,6 +24,100 @@ class EarnItRuleBuilderNavigationTest {
     }
 
     @Test
+    fun newEarnRewardTime_firstStageBackReturnsToRuleTypeSelection() {
+        assertEquals(
+            RuleBuilderExitDestination(RuleBuilderExitTarget.RuleTypeSelection),
+            firstStageBuilderExitDestination(
+                entryContext = RuleBuilderEntryContext.Create,
+                editingRuleId = "earn"
+            )
+        )
+    }
+
+    @Test
+    fun newCompleteToUnlock_firstStageBackReturnsToRuleTypeSelection() {
+        assertEquals(
+            RuleBuilderExitDestination(RuleBuilderExitTarget.RuleTypeSelection),
+            firstStageBuilderExitDestination(
+                entryContext = RuleBuilderEntryContext.Create,
+                editingRuleId = "complete"
+            )
+        )
+    }
+
+    @Test
+    fun newScheduledBlock_firstStageBackReturnsToRuleTypeSelection() {
+        assertEquals(
+            RuleBuilderExitDestination(RuleBuilderExitTarget.RuleTypeSelection),
+            firstStageBuilderExitDestination(
+                entryContext = RuleBuilderEntryContext.Create,
+                editingRuleId = "schedule"
+            )
+        )
+    }
+
+    @Test
+    fun editingEarnRewardTime_firstStageBackReturnsToRuleDetail() {
+        assertEquals(
+            RuleBuilderExitDestination(RuleBuilderExitTarget.RuleDetail, ruleDetailId = "earn"),
+            firstStageBuilderExitDestination(
+                entryContext = RuleBuilderEntryContext.Edit,
+                editingRuleId = "earn"
+            )
+        )
+    }
+
+    @Test
+    fun editingCompleteToUnlock_firstStageBackReturnsToRuleDetail() {
+        assertEquals(
+            RuleBuilderExitDestination(RuleBuilderExitTarget.RuleDetail, ruleDetailId = "complete"),
+            firstStageBuilderExitDestination(
+                entryContext = RuleBuilderEntryContext.Edit,
+                editingRuleId = "complete"
+            )
+        )
+    }
+
+    @Test
+    fun editingScheduledBlock_firstStageBackReturnsToRuleDetail() {
+        assertEquals(
+            RuleBuilderExitDestination(RuleBuilderExitTarget.RuleDetail, ruleDetailId = "schedule"),
+            firstStageBuilderExitDestination(
+                entryContext = RuleBuilderEntryContext.Edit,
+                editingRuleId = "schedule"
+            )
+        )
+    }
+
+    @Test
+    fun builderBackAction_laterStageMovesToPreviousLogicalStage() {
+        assertEquals(
+            RuleBuilderBackAction.PreviousStep(RuleBuilderStep.Exchange),
+            ruleBuilderBackAction(EarnItRuleStore.RuleType.EarnRewardTime, RuleBuilderStep.Schedule)
+        )
+        assertEquals(
+            RuleBuilderBackAction.PreviousStep(RuleBuilderStep.Reward),
+            ruleBuilderBackAction(EarnItRuleStore.RuleType.ScheduledBlock, RuleBuilderStep.Schedule)
+        )
+    }
+
+    @Test
+    fun builderBackAction_firstStageExitsBuilderForTopLeftAndSystemBack() {
+        assertEquals(
+            RuleBuilderBackAction.ExitBuilder,
+            ruleBuilderBackAction(EarnItRuleStore.RuleType.EarnRewardTime, RuleBuilderStep.Earn)
+        )
+        assertEquals(
+            RuleBuilderBackAction.ExitBuilder,
+            ruleBuilderBackAction(EarnItRuleStore.RuleType.CompleteToUnlock, RuleBuilderStep.Earn)
+        )
+        assertEquals(
+            RuleBuilderBackAction.ExitBuilder,
+            ruleBuilderBackAction(EarnItRuleStore.RuleType.ScheduledBlock, RuleBuilderStep.Reward)
+        )
+    }
+
+    @Test
     fun stageLabel_usesAppsForScheduledBlockFirstStage() {
         assertEquals("Apps", stageLabel(EarnItRuleStore.RuleType.ScheduledBlock, RuleBuilderStep.Reward))
         assertEquals("Reward", stageLabel(EarnItRuleStore.RuleType.EarnRewardTime, RuleBuilderStep.Reward))

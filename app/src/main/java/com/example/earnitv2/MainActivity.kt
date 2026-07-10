@@ -45,10 +45,41 @@ data class RuleDashboardState(
     val remainingRewardSeconds: Long
 )
 
+internal enum class RuleBuilderEntryContext {
+    Create,
+    Edit
+}
+
+internal enum class RuleBuilderExitTarget {
+    RuleTypeSelection,
+    RuleDetail
+}
+
+internal data class RuleBuilderExitDestination(
+    val target: RuleBuilderExitTarget,
+    val ruleDetailId: String? = null
+)
+
+internal fun firstStageBuilderExitDestination(
+    entryContext: RuleBuilderEntryContext?,
+    editingRuleId: String?
+): RuleBuilderExitDestination {
+    return when (entryContext) {
+        RuleBuilderEntryContext.Edit -> RuleBuilderExitDestination(
+            target = RuleBuilderExitTarget.RuleDetail,
+            ruleDetailId = editingRuleId
+        )
+        RuleBuilderEntryContext.Create,
+        null -> RuleBuilderExitDestination(target = RuleBuilderExitTarget.RuleTypeSelection)
+    }
+}
+
 class MainActivity : ComponentActivity() {
     private var rules by mutableStateOf(emptyList<EarnItRuleStore.Rule>())
     private var ruleStates by mutableStateOf(emptyList<RuleDashboardState>())
     private var editingRuleTemplate by mutableStateOf<EarnItRuleStore.Rule?>(null)
+    private var builderEntryContext by mutableStateOf<RuleBuilderEntryContext?>(null)
+    private var builderReturnRuleDetailId by mutableStateOf<String?>(null)
     private var launchableApps by mutableStateOf(emptyList<EarnItRuleStore.LaunchableApp>())
     private var appLoadInProgress = false
     private var appListLoading by mutableStateOf(false)
@@ -161,7 +192,7 @@ class MainActivity : ComponentActivity() {
                             onToggleManageRules = { manageRulesOpen = !manageRulesOpen },
                             onOpenRuleDetail = { selectedRuleDetailId = it },
                             onBackFromRuleDetail = { selectedRuleDetailId = null },
-                            onCancelEditingRule = ::returnToRuleTypeSelection,
+                            onCancelEditingRule = ::exitBuilderFromFirstStage,
                             onOpenProductivePicker = {
                                 productivePickerOpen = true
                                 refreshLaunchableApps()
@@ -286,6 +317,8 @@ class MainActivity : ComponentActivity() {
         builderStep = RuleBuilderStep.Earn
         manageRulesOpen = false
         unavailableRuleType = null
+        builderEntryContext = null
+        builderReturnRuleDetailId = null
         ruleTypeSelectionOpen = true
     }
 
@@ -297,10 +330,17 @@ class MainActivity : ComponentActivity() {
     private fun startRuleType(ruleType: EarnItRuleStore.RuleType) {
         ruleTypeSelectionOpen = false
         unavailableRuleType = null
-        startEditingRule(EarnItRuleStore.newRuleFromDefault(this, ruleType))
+        startBuilder(
+            rule = EarnItRuleStore.newRuleFromDefault(this, ruleType),
+            entryContext = RuleBuilderEntryContext.Create
+        )
     }
 
     private fun startEditingRule(rule: EarnItRuleStore.Rule) {
+        startBuilder(rule = rule, entryContext = RuleBuilderEntryContext.Edit)
+    }
+
+    private fun startBuilder(rule: EarnItRuleStore.Rule, entryContext: RuleBuilderEntryContext) {
         settingsOpen = false
         selectedRuleDetailId = null
         ruleTypeSelectionOpen = false
@@ -308,6 +348,8 @@ class MainActivity : ComponentActivity() {
         builderStep = if (rule.type == EarnItRuleStore.RuleType.ScheduledBlock) RuleBuilderStep.Reward else RuleBuilderStep.Earn
         manageRulesOpen = false
         editingRuleTemplate = rule
+        builderEntryContext = entryContext
+        builderReturnRuleDetailId = if (entryContext == RuleBuilderEntryContext.Edit) rule.id else null
         val hasEarnSelection = rule.productiveApps.isNotEmpty() || rule.productivePackage.isNotBlank()
         selectedProductivePackage = if (hasEarnSelection) {
             rule.earnApps.firstOrNull()?.packageName.orEmpty()
@@ -344,6 +386,8 @@ class MainActivity : ComponentActivity() {
     private fun cancelEditingRule() {
         builderStep = RuleBuilderStep.Earn
         editingRuleTemplate = null
+        builderEntryContext = null
+        builderReturnRuleDetailId = null
         unavailableRuleType = null
         productivePickerOpen = false
         blockedPickerOpen = false
@@ -351,9 +395,23 @@ class MainActivity : ComponentActivity() {
         cancelScheduleWindow()
     }
 
+    private fun exitBuilderFromFirstStage() {
+        val destination = firstStageBuilderExitDestination(
+            entryContext = builderEntryContext,
+            editingRuleId = builderReturnRuleDetailId ?: editingRuleTemplate?.id
+        )
+        cancelEditingRule()
+        when (destination.target) {
+            RuleBuilderExitTarget.RuleTypeSelection -> ruleTypeSelectionOpen = true
+            RuleBuilderExitTarget.RuleDetail -> selectedRuleDetailId = destination.ruleDetailId
+        }
+    }
+
     private fun returnToRuleTypeSelection() {
         builderStep = RuleBuilderStep.Earn
         editingRuleTemplate = null
+        builderEntryContext = null
+        builderReturnRuleDetailId = null
         unavailableRuleType = null
         productivePickerOpen = false
         blockedPickerOpen = false
@@ -587,6 +645,8 @@ class MainActivity : ComponentActivity() {
         )
         EarnItRuleStore.saveRule(this, rule)
         editingRuleTemplate = null
+        builderEntryContext = null
+        builderReturnRuleDetailId = null
         builderStep = RuleBuilderStep.Earn
         productivePickerOpen = false
         blockedPickerOpen = false
