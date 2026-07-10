@@ -7,11 +7,11 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -27,7 +27,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
 data class HomeRuleUiState(
@@ -131,6 +132,7 @@ fun homeRuleUiState(
         card.attentionLabel != null -> "Protection needs attention"
         !rule.enabled -> "Available if resumed today"
         rule.type == EarnItRuleStore.RuleType.CompleteToUnlock -> homeCompleteStatusText(rule)
+        rule.type == EarnItRuleStore.RuleType.ScheduledBlock -> homeScheduledBlockStatusText(isActiveNow)
         else -> card.scheduleStatusLabel
     }
     return HomeRuleUiState(
@@ -178,8 +180,7 @@ private fun homeSecondaryText(
         EarnItRuleStore.RuleType.EarnRewardTime -> when {
             !rule.enabled -> EarnItUiFormatters.savedRewardTime(remainingRewardSeconds)
             !isActiveNow -> EarnItUiFormatters.remainingRewardTime(remainingRewardSeconds)
-            remainingRewardSeconds <= 0L -> EarnItUiFormatters.exchangeSummary(rule.rewardSecondsPerProductiveSecond)
-            else -> null
+            else -> "Active now"
         }
         EarnItRuleStore.RuleType.CompleteToUnlock -> {
             requirementSummaryLabel(rule.requirements.size)
@@ -193,6 +194,14 @@ private fun homeCompleteStatusText(rule: EarnItRuleStore.Rule): String {
         "No requirements saved"
     } else {
         "Requirements incomplete"
+    }
+}
+
+private fun homeScheduledBlockStatusText(isActiveNow: Boolean): String {
+    return if (isActiveNow) {
+        "Within block schedule"
+    } else {
+        "Outside block schedule"
     }
 }
 
@@ -281,40 +290,45 @@ private fun LiveRuleCard(
     onOpenEarnApp: (String) -> Unit
 ) {
     val card = homeRule.card
+    val presentation = ruleTypePresentation(homeRule.rule.type)
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .clickable { onOpenRuleDetail(homeRule.rule.id) },
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        border = BorderStroke(2.dp, MaterialTheme.colorScheme.outlineVariant)
+        border = BorderStroke(1.dp, presentation.accentColor.copy(alpha = 0.30f))
     ) {
         Column(
             modifier = Modifier.padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
+            verticalArrangement = Arrangement.spacedBy(9.dp)
         ) {
-            Text(text = ruleTypeTitle(homeRule.rule.type), style = MaterialTheme.typography.labelSmall)
-            Text(text = homeRule.primaryText, style = MaterialTheme.typography.headlineSmall)
-            if (homeRule.secondaryText != null) {
-                Text(text = homeRule.secondaryText, style = MaterialTheme.typography.bodyMedium)
-            }
-            when (homeRule.rule.type) {
-                EarnItRuleStore.RuleType.EarnRewardTime -> {
-                    RewardAppsRow(label = "For", apps = card.rewardApps)
-                    EarnAppRow(
-                        apps = card.earnApps,
-                        contextText = homeRule.earnContextText,
-                        onOpenEarnApp = onOpenEarnApp
-                    )
-                }
-                EarnItRuleStore.RuleType.CompleteToUnlock -> {
-                    RequirementsRows(
-                        requirements = homeRule.rule.requirements,
-                        onOpenEarnApp = onOpenEarnApp
-                    )
-                    RewardAppsRow(label = "Unlocks", apps = card.rewardApps)
-                }
-                EarnItRuleStore.RuleType.ScheduledBlock -> {
-                    RewardAppsRow(label = "Blocked Apps", apps = card.rewardApps)
+            RuleCardHeader(ruleType = homeRule.rule.type)
+            RuleCardStatus(
+                primaryText = homeRule.primaryText,
+                secondaryText = homeRule.secondaryText,
+                accentColor = presentation.accentColor
+            )
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.42f))
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                when (homeRule.rule.type) {
+                    EarnItRuleStore.RuleType.EarnRewardTime -> {
+                        RewardAppsRow(label = "For", apps = card.rewardApps)
+                        EarnAppRow(
+                            apps = card.earnApps,
+                            contextText = homeRule.earnContextText,
+                            onOpenEarnApp = onOpenEarnApp
+                        )
+                    }
+                    EarnItRuleStore.RuleType.CompleteToUnlock -> {
+                        RequirementsRows(
+                            requirements = homeRule.rule.requirements,
+                            onOpenEarnApp = onOpenEarnApp
+                        )
+                        RewardAppsRow(label = "Unlocks", apps = card.rewardApps)
+                    }
+                    EarnItRuleStore.RuleType.ScheduledBlock -> {
+                        RewardAppsRow(label = "Blocked Apps", apps = card.rewardApps)
+                    }
                 }
             }
             Text(
@@ -326,11 +340,45 @@ private fun LiveRuleCard(
     }
 }
 
-private fun ruleTypeTitle(ruleType: EarnItRuleStore.RuleType): String {
-    return when (ruleType) {
-        EarnItRuleStore.RuleType.EarnRewardTime -> "Earn Reward Time"
-        EarnItRuleStore.RuleType.CompleteToUnlock -> "Complete to Unlock"
-        EarnItRuleStore.RuleType.ScheduledBlock -> "Scheduled Block"
+@Composable
+private fun RuleCardHeader(ruleType: EarnItRuleStore.RuleType) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        RuleTypeBadge(ruleType = ruleType, iconSize = 32.dp)
+        Text(
+            text = ">",
+            style = MaterialTheme.typography.titleLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f)
+        )
+    }
+}
+
+@Composable
+private fun RuleCardStatus(
+    primaryText: String,
+    secondaryText: String?,
+    accentColor: Color
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        Text(
+            text = primaryText,
+            style = MaterialTheme.typography.headlineSmall,
+            color = accentColor,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
+        )
+        if (secondaryText != null) {
+            Text(
+                text = secondaryText,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
     }
 }
 
@@ -339,24 +387,32 @@ private fun RequirementsRows(
     requirements: List<EarnItRuleStore.RuleRequirement>,
     onOpenEarnApp: (String) -> Unit
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(text = "Requirements", style = MaterialTheme.typography.labelSmall)
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        SectionLabel(text = "Requirements")
         requirements.take(2).forEach { requirement ->
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                EarnItAppIcon(packageName = requirement.app.packageName, appName = requirement.app.name, size = 28.dp)
+                EarnItAppIcon(packageName = requirement.app.packageName, appName = requirement.app.name, size = 30.dp)
                 Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text(text = requirement.app.name, style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        text = requirement.app.name,
+                        style = MaterialTheme.typography.bodyMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
                     Text(
                         text = "${requirement.requiredSeconds / 60L} min required",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                TextButton(onClick = { onOpenEarnApp(requirement.app.packageName) }) {
+                TextButton(
+                    onClick = { onOpenEarnApp(requirement.app.packageName) },
+                    modifier = Modifier.widthIn(min = 64.dp)
+                ) {
                     Text(text = "Open")
                 }
             }
@@ -374,15 +430,19 @@ private fun RequirementsRows(
 @Composable
 private fun RewardAppsRow(label: String, apps: List<EarnItAppUiState>) {
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text(text = label, style = MaterialTheme.typography.labelSmall)
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+        SectionLabel(text = label)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
             apps.take(5).forEach { app ->
-                EarnItAppIcon(packageName = app.packageName, appName = app.name, size = 28.dp)
+                EarnItAppIcon(packageName = app.packageName, appName = app.name, size = 30.dp)
             }
             if (apps.size > 5) {
                 Box(
                     modifier = Modifier
-                        .size(28.dp)
+                        .size(30.dp)
                         .clip(RoundedCornerShape(4.dp))
                         .background(MaterialTheme.colorScheme.surfaceVariant),
                     contentAlignment = Alignment.Center
@@ -392,8 +452,11 @@ private fun RewardAppsRow(label: String, apps: List<EarnItAppUiState>) {
             }
             Text(
                 text = apps.joinToString(", ") { it.name },
+                modifier = Modifier.weight(1f, fill = false),
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
         }
     }
@@ -406,23 +469,32 @@ private fun EarnAppRow(
     onOpenEarnApp: (String) -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text(text = "Earn with", style = MaterialTheme.typography.labelSmall)
+        SectionLabel(text = "Earn with")
         Row(
             modifier = Modifier
+                .fillMaxWidth()
                 .clip(RoundedCornerShape(4.dp))
                 .background(MaterialTheme.colorScheme.surfaceVariant)
-                .padding(horizontal = 10.dp, vertical = 8.dp),
+                .padding(start = 10.dp, top = 7.dp, end = 6.dp, bottom = 7.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             apps.take(3).forEach { app ->
-                EarnItAppIcon(packageName = app.packageName, appName = app.name, size = 24.dp)
+                EarnItAppIcon(packageName = app.packageName, appName = app.name, size = 28.dp)
             }
             if (apps.size > 3) CountBubble(count = apps.size - 3)
-            Text(text = apps.take(2).joinToString(", ") { it.name } + if (apps.size > 2) " +${apps.size - 2}" else "", style = MaterialTheme.typography.bodyMedium)
-            Spacer(modifier = Modifier.weight(1f, fill = false))
+            Text(
+                text = apps.take(2).joinToString(", ") { it.name } + if (apps.size > 2) " +${apps.size - 2}" else "",
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
             if (apps.size == 1) {
-                TextButton(onClick = { onOpenEarnApp(apps.first().packageName) }) {
+                TextButton(
+                    onClick = { onOpenEarnApp(apps.first().packageName) },
+                    modifier = Modifier.widthIn(min = 64.dp)
+                ) {
                     Text(text = "Open")
                 }
             }
@@ -435,6 +507,15 @@ private fun EarnAppRow(
             )
         }
     }
+}
+
+@Composable
+private fun SectionLabel(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.onSurface
+    )
 }
 
 @Composable

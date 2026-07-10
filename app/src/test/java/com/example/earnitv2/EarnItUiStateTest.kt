@@ -144,6 +144,7 @@ class EarnItUiStateTest {
         )
 
         assertEquals("Blocking now", state.primaryText)
+        assertEquals("Within block schedule", state.statusText)
         assertEquals("Every day · All day", state.secondaryText)
         assertNull(state.earnContextText)
     }
@@ -159,7 +160,12 @@ class EarnItUiStateTest {
     fun homeRuleUiState_earnRewardTimePreservesBalanceAndExchangeContext() {
         val state = homeRuleUiState(
             state = RuleDashboardState(
-                rule = sampleRule(),
+                rule = sampleRule().copy(
+                    activeDays = EarnItRuleStore.allDays.toSet(),
+                    startMinute = 0,
+                    endMinute = 1_440,
+                    timeWindows = listOf(EarnItRuleStore.TimeWindow(0, 1_440))
+                ),
                 productiveUsageSeconds = 0,
                 remainingRewardSeconds = 0
             ),
@@ -168,8 +174,46 @@ class EarnItUiStateTest {
         )
 
         assertEquals("No Reward Time", state.primaryText)
-        assertEquals("Every 10 min earns 2 min Reward Time", state.secondaryText)
+        assertEquals("Active now", state.secondaryText)
         assertEquals("Every 10 min earns 2 min Reward Time", state.earnContextText)
+    }
+
+    @Test
+    fun homeRuleUiState_earnRewardTimeKeepsExchangeCopyOutOfStatusArea() {
+        val state = homeRuleUiState(
+            state = RuleDashboardState(
+                rule = sampleRule().copy(
+                    activeDays = EarnItRuleStore.allDays.toSet(),
+                    startMinute = 0,
+                    endMinute = 1_440,
+                    timeWindows = listOf(EarnItRuleStore.TimeWindow(0, 1_440))
+                ),
+                productiveUsageSeconds = 0,
+                remainingRewardSeconds = 0
+            ),
+            usageAccessGranted = true,
+            appBlockingEnabled = true
+        )
+
+        assertFalse(state.secondaryText.orEmpty().contains("Every 10 min earns"))
+        assertEquals("Every 10 min earns 2 min Reward Time", state.earnContextText)
+    }
+
+    @Test
+    fun homeRuleUiState_pausedEarnRewardTimeUsesCompactPausedCopy() {
+        val state = homeRuleUiState(
+            state = RuleDashboardState(
+                rule = sampleRule().copy(enabled = false),
+                productiveUsageSeconds = 0,
+                remainingRewardSeconds = 0
+            ),
+            usageAccessGranted = true,
+            appBlockingEnabled = true
+        )
+
+        assertEquals("Rule paused", state.primaryText)
+        assertEquals("No Reward Time saved today", state.secondaryText)
+        assertEquals("Available if resumed today", state.statusText)
     }
 
     @Test
@@ -191,6 +235,7 @@ class EarnItUiStateTest {
 
         assertEquals("Not blocking now", state.primaryText)
         assertEquals("Mon · 9:00 AM-10:00 AM", state.secondaryText)
+        assertEquals("Outside block schedule", state.statusText)
         assertNull(state.earnContextText)
     }
 

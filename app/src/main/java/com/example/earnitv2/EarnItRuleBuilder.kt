@@ -303,7 +303,10 @@ private fun BuilderHeader(
             TextButton(onClick = onBack) {
                 Text(text = "<")
             }
-            Text(text = title, style = MaterialTheme.typography.titleLarge)
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(text = title, style = MaterialTheme.typography.titleLarge)
+                RuleTypeBadge(ruleType = ruleType, iconSize = 24.dp)
+            }
         }
         Row(
             modifier = Modifier.fillMaxWidth(),

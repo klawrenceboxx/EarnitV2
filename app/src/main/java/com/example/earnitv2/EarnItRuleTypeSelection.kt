@@ -36,28 +36,24 @@ enum class RuleTypeOption(
     val title: String,
     val description: String,
     val example: String,
-    val iconLabel: String,
     val ruleType: EarnItRuleStore.RuleType
 ) {
     EarnRewardTime(
         title = "Earn Reward Time",
         description = "Use productive apps to earn time for distracting apps.",
         example = "10 min productive -> 2 min Reward Time",
-        iconLabel = "ER",
         ruleType = EarnItRuleStore.RuleType.EarnRewardTime
     ),
     CompleteToUnlock(
         title = "Complete to Unlock",
         description = "Finish required productive activity before selected apps unlock.",
         example = "Complete all requirements to unlock",
-        iconLabel = "CU",
         ruleType = EarnItRuleStore.RuleType.CompleteToUnlock
     ),
     ScheduledBlock(
         title = "Scheduled Block",
         description = "Block selected apps during chosen days and times.",
         example = "Weekdays - 9:00 AM-5:00 PM",
-        iconLabel = "SB",
         ruleType = EarnItRuleStore.RuleType.ScheduledBlock
     )
 }
@@ -124,6 +120,7 @@ private fun RuleTypeCard(
     selected: Boolean,
     onClick: () -> Unit
 ) {
+    val presentation = ruleTypePresentation(option.ruleType)
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -137,7 +134,7 @@ private fun RuleTypeCard(
         ),
         border = BorderStroke(
             width = if (selected) 2.dp else 1.dp,
-            color = MaterialTheme.colorScheme.outline
+            color = if (selected) presentation.accentColor else MaterialTheme.colorScheme.outline
         )
     ) {
         Row(
@@ -151,11 +148,11 @@ private fun RuleTypeCard(
                 modifier = Modifier
                     .size(44.dp)
                     .clip(RoundedCornerShape(6.dp)),
-                color = MaterialTheme.colorScheme.surface,
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                color = presentation.containerColor,
+                border = BorderStroke(1.dp, presentation.accentColor.copy(alpha = 0.5f))
             ) {
                 Box(contentAlignment = Alignment.Center) {
-                    Text(text = option.iconLabel, style = MaterialTheme.typography.labelMedium)
+                    RuleTypeIcon(ruleType = option.ruleType, size = 36.dp)
                 }
             }
 
@@ -163,7 +160,7 @@ private fun RuleTypeCard(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(5.dp)
             ) {
-                Text(text = option.title, style = MaterialTheme.typography.titleMedium)
+                Text(text = option.title, style = MaterialTheme.typography.titleMedium, color = presentation.accentColor)
                 Text(text = option.description, style = MaterialTheme.typography.bodyMedium)
                 Text(
                     text = option.example,

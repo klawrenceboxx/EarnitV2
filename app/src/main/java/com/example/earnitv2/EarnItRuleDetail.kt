@@ -101,6 +101,7 @@ fun EarnItRuleDetail(
         }
 
         RuleStatusCard(
+            ruleType = rule.type,
             state = statusState,
             onResume = { onToggleRuleEnabled(rule) }
         )
@@ -225,11 +226,13 @@ private fun RuleDetailAttention(
 
 @Composable
 private fun RuleStatusCard(
+    ruleType: EarnItRuleStore.RuleType,
     state: RuleDetailStatusCardState,
     onResume: () -> Unit
 ) {
     val accent = ruleDetailAccentColor(state.tone)
     SectionContainer(borderColor = accent) {
+        RuleTypeBadge(ruleType = ruleType, iconSize = 26.dp)
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.Top) {
             StatusGlyph(tone = state.tone)
             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
