@@ -4,6 +4,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -59,6 +60,7 @@ enum class RuleBuilderStep(val label: String) {
 fun EarnItRuleBuilder(
     rule: EarnItRuleStore.Rule,
     apps: List<EarnItRuleStore.LaunchableApp>,
+    appsLoading: Boolean,
     selectedProductivePackage: String,
     selectedProductivePackages: Set<String>,
     selectedBlockedPackages: Set<String>,
@@ -137,6 +139,7 @@ fun EarnItRuleBuilder(
             RuleBuilderStep.Earn -> if (rule.type == EarnItRuleStore.RuleType.CompleteToUnlock) {
                 RequirementsStep(
                     apps = apps,
+                    appsLoading = appsLoading,
                     requirements = selectedRequirements,
                     pickerOpen = requirementPickerOpen,
                     search = requirementSearch,
@@ -156,6 +159,7 @@ fun EarnItRuleBuilder(
                 EarnStep(
                 rule = rule,
                 apps = apps,
+                appsLoading = appsLoading,
                 selectedProductivePackage = selectedProductivePackage,
                 selectedProductivePackages = selectedProductivePackages,
                 productivePickerOpen = productivePickerOpen,
@@ -169,6 +173,7 @@ fun EarnItRuleBuilder(
             RuleBuilderStep.Reward -> RewardStep(
                 rule = rule,
                 apps = apps,
+                appsLoading = appsLoading,
                 selectedBlockedPackages = selectedBlockedPackages,
                 blockedPickerOpen = blockedPickerOpen,
                 blockedSearch = blockedSearch,
@@ -224,21 +229,21 @@ fun ruleDraftUiState(
     selectedStartMinute: Int,
     selectedEndMinute: Int
 ): RuleDraftUiState {
-    val selectedEarnApp = selectedProductivePackages.firstOrNull()?.let { selectedPackage ->
-        apps.firstOrNull { it.packageName == selectedPackage }
-            ?: rule.earnApps.firstOrNull { it.packageName == selectedPackage }?.let {
-                EarnItRuleStore.LaunchableApp(it.packageName, it.name)
-            }
+    val savedEarnApps = rule.earnApps.associateBy { it.packageName }
+    val launchableApps = apps.associateBy { it.packageName }
+    val selectedEarnApps = selectedProductivePackages.mapNotNull { selectedPackage ->
+        launchableApps[selectedPackage] ?: savedEarnApps[selectedPackage]?.let {
+            EarnItRuleStore.LaunchableApp(it.packageName, it.name)
+        }
     }
     val savedBlockedApps = rule.blockedApps.associateBy { it.packageName }
-    val launchableApps = apps.associateBy { it.packageName }
     val selectedRewardApps = selectedBlockedPackages.mapNotNull { packageName ->
         launchableApps[packageName]?.let { app ->
             EarnItRuleStore.RuleApp(packageName = app.packageName, name = app.name)
         } ?: savedBlockedApps[packageName]
     }
     return EarnItUiStateAdapters.ruleDraft(
-        selectedEarnApps = listOfNotNull(selectedEarnApp),
+        selectedEarnApps = selectedEarnApps,
         selectedRewardApps = selectedRewardApps,
         exchangeSelection = selectedRatio,
         activeDays = selectedActiveDays,
@@ -412,6 +417,7 @@ private fun CountChip(count: Int) {
 @Composable
 private fun RequirementsStep(
     apps: List<EarnItRuleStore.LaunchableApp>,
+    appsLoading: Boolean,
     requirements: List<EarnItRuleStore.RuleRequirement>,
     pickerOpen: Boolean,
     search: String,
@@ -474,10 +480,12 @@ private fun RequirementsStep(
                 label = "Search productive apps"
             )
             BuilderAppList(
-                apps = apps.builderFilteredBy(search),
+                apps = apps,
                 selectedPackages = selectedPackage?.let { setOf(it) } ?: emptySet(),
                 multiSelect = false,
-                emptyText = "No apps match your search.",
+                searchQuery = search,
+                loading = appsLoading,
+                selectedCountLabel = null,
                 onClickApp = { packageName ->
                     onSelectApp(packageName)
                     onClosePicker()
@@ -583,6 +591,7 @@ private fun builderStepsFor(ruleType: EarnItRuleStore.RuleType): List<RuleBuilde
 private fun EarnStep(
     rule: EarnItRuleStore.Rule,
     apps: List<EarnItRuleStore.LaunchableApp>,
+    appsLoading: Boolean,
     selectedProductivePackage: String,
     selectedProductivePackages: Set<String>,
     productivePickerOpen: Boolean,
@@ -593,20 +602,20 @@ private fun EarnStep(
     onSelectProductiveApp: (String) -> Unit
 ) {
     val savedEarnApps = rule.earnApps.associateBy { it.packageName }
-    val selectedApp = selectedProductivePackage.takeIf { it.isNotBlank() }?.let { packageName ->
-        apps.firstOrNull { it.packageName == packageName }
-            ?: savedEarnApps[packageName]?.let { EarnItRuleStore.LaunchableApp(it.packageName, it.name) }
+    val namesByPackage = apps.associate { it.packageName to it.name } +
+        savedEarnApps.mapValues { it.value.name }
+    val selectedApps = selectedProductivePackages.mapNotNull { packageName ->
+        namesByPackage[packageName]?.let { EarnItAppUiState(packageName = packageName, name = it) }
     }
-    val visibleApps = apps.builderFilteredBy(productiveSearch)
     EditorSection(
         title = "How will you earn Reward Time?",
         helperText = "Choose one or more Earn Apps. Time across selected apps is combined."
     ) {
-        if (selectedApp != null) {
+        if (selectedApps.isNotEmpty()) {
             AppSelectionSummary(
                 label = "Selected Earn Apps",
-                text = selectedApp.name,
-                app = EarnItAppUiState(packageName = selectedApp.packageName, name = selectedApp.name)
+                text = selectedAppCountLabel(selectedApps.size),
+                apps = selectedApps
             )
         }
 
@@ -616,7 +625,7 @@ private fun EarnStep(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(text = if (selectedApp == null) "Choose Earn Apps" else "Manage Earn Apps")
+                Text(text = if (selectedApps.isEmpty()) "Choose Earn Apps" else "Manage Earn Apps")
                 Text(text = ">", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
@@ -628,10 +637,12 @@ private fun EarnStep(
                 label = "Search Earn Apps"
             )
             BuilderAppList(
-                apps = visibleApps,
+                apps = apps,
                 selectedPackages = selectedProductivePackages,
                 multiSelect = true,
-                emptyText = "No Earn Apps match your search.",
+                searchQuery = productiveSearch,
+                loading = appsLoading,
+                selectedCountLabel = selectedAppCountLabel(selectedProductivePackages.size),
                 onClickApp = onSelectProductiveApp
             )
         }
@@ -642,6 +653,7 @@ private fun EarnStep(
 private fun RewardStep(
     rule: EarnItRuleStore.Rule,
     apps: List<EarnItRuleStore.LaunchableApp>,
+    appsLoading: Boolean,
     selectedBlockedPackages: Set<String>,
     blockedPickerOpen: Boolean,
     blockedSearch: String,
@@ -656,7 +668,6 @@ private fun RewardStep(
     val selectedApps = selectedBlockedPackages.mapNotNull { packageName ->
         namesByPackage[packageName]?.let { EarnItAppUiState(packageName = packageName, name = it) }
     }
-    val visibleApps = apps.builderFilteredBy(blockedSearch)
     EditorSection(
         title = when (ruleType) {
             EarnItRuleStore.RuleType.ScheduledBlock -> "Choose apps to block"
@@ -671,8 +682,8 @@ private fun RewardStep(
     ) {
         if (selectedApps.isNotEmpty()) {
             AppSelectionSummary(
-                label = "Selected Reward Apps",
-                text = "${selectedApps.size} selected",
+                label = selectedAppsLabel(ruleType),
+                text = selectedAppCountLabel(selectedApps.size),
                 apps = selectedApps
             )
         }
@@ -683,7 +694,7 @@ private fun RewardStep(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(text = if (selectedApps.isEmpty()) "Choose Reward Apps" else "${selectedApps.size} apps selected")
+                Text(text = if (selectedApps.isEmpty()) chooseAppsLabel(ruleType) else manageAppsLabel(ruleType))
                 Text(text = ">", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
@@ -692,13 +703,15 @@ private fun RewardStep(
             BuilderAppSearchField(
                 value = blockedSearch,
                 onValueChange = onBlockedSearchChange,
-                label = "Search Reward Apps"
+                label = searchAppsLabel(ruleType)
             )
             BuilderAppList(
-                apps = visibleApps,
+                apps = apps,
                 selectedPackages = selectedBlockedPackages,
                 multiSelect = true,
-                emptyText = "No Reward Apps match your search.",
+                searchQuery = blockedSearch,
+                loading = appsLoading,
+                selectedCountLabel = selectedAppCountLabel(selectedBlockedPackages.size),
                 onClickApp = onToggleBlockedApp
             )
             OutlinedButton(onClick = onCloseBlockedPicker, modifier = Modifier.fillMaxWidth()) {
@@ -707,6 +720,39 @@ private fun RewardStep(
         }
     }
 }
+
+private fun selectedAppsLabel(ruleType: EarnItRuleStore.RuleType): String {
+    return when (ruleType) {
+        EarnItRuleStore.RuleType.ScheduledBlock -> "Selected Blocked Apps"
+        EarnItRuleStore.RuleType.CompleteToUnlock -> "Selected Apps to Unlock"
+        EarnItRuleStore.RuleType.EarnRewardTime -> "Selected Reward Apps"
+    }
+}
+
+private fun chooseAppsLabel(ruleType: EarnItRuleStore.RuleType): String {
+    return when (ruleType) {
+        EarnItRuleStore.RuleType.ScheduledBlock -> "Choose Blocked Apps"
+        EarnItRuleStore.RuleType.CompleteToUnlock -> "Choose Apps to Unlock"
+        EarnItRuleStore.RuleType.EarnRewardTime -> "Choose Reward Apps"
+    }
+}
+
+private fun manageAppsLabel(ruleType: EarnItRuleStore.RuleType): String {
+    return when (ruleType) {
+        EarnItRuleStore.RuleType.ScheduledBlock -> "Manage Blocked Apps"
+        EarnItRuleStore.RuleType.CompleteToUnlock -> "Manage Apps to Unlock"
+        EarnItRuleStore.RuleType.EarnRewardTime -> "Manage Reward Apps"
+    }
+}
+
+private fun searchAppsLabel(ruleType: EarnItRuleStore.RuleType): String {
+    return when (ruleType) {
+        EarnItRuleStore.RuleType.ScheduledBlock -> "Search Blocked Apps"
+        EarnItRuleStore.RuleType.CompleteToUnlock -> "Search Apps to Unlock"
+        EarnItRuleStore.RuleType.EarnRewardTime -> "Search Reward Apps"
+    }
+}
+
 @Composable
 private fun AppSelectionSummary(
     label: String,
@@ -765,27 +811,82 @@ private fun BuilderAppList(
     apps: List<EarnItRuleStore.LaunchableApp>,
     selectedPackages: Set<String>,
     multiSelect: Boolean,
-    emptyText: String,
+    searchQuery: String,
+    loading: Boolean,
+    selectedCountLabel: String?,
     onClickApp: (String) -> Unit
 ) {
+    var selectedCategory by remember { mutableStateOf(AppPickerCategory.All) }
+    val visibleApps = remember(apps, selectedCategory, searchQuery) {
+        filterLaunchableApps(apps = apps, category = selectedCategory, query = searchQuery)
+    }
+
     Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .heightIn(max = 360.dp)
-            .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(6.dp)
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        if (apps.isEmpty()) {
-            Text(text = emptyText, style = MaterialTheme.typography.bodyMedium)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            AppPickerCategory.entries.forEach { category ->
+                CategoryChip(
+                    label = category.label,
+                    selected = category == selectedCategory,
+                    onClick = { selectedCategory = category }
+                )
+            }
         }
-        apps.forEach { app ->
-            BuilderAppRow(
-                app = app,
-                selected = app.packageName in selectedPackages,
-                multiSelect = multiSelect,
-                onClickApp = onClickApp
+
+        selectedCountLabel?.let { label ->
+            Text(
+                text = label,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
+
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = 360.dp)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            when {
+                loading && apps.isEmpty() -> Text(text = "Loading apps...", style = MaterialTheme.typography.bodyMedium)
+                visibleApps.isEmpty() -> Text(
+                    text = appPickerEmptyText(selectedCategory, searchQuery),
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                else -> visibleApps.forEach { app ->
+                    BuilderAppRow(
+                        app = app,
+                        selected = app.packageName in selectedPackages,
+                        multiSelect = multiSelect,
+                        onClickApp = onClickApp
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CategoryChip(label: String, selected: Boolean, onClick: () -> Unit) {
+    OutlinedButton(
+        onClick = onClick,
+        border = BorderStroke(
+            width = if (selected) 2.dp else 1.dp,
+            color = if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outlineVariant
+        ),
+        colors = ButtonDefaults.outlinedButtonColors(
+            containerColor = if (selected) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.surface
+        )
+    ) {
+        Text(text = label, style = MaterialTheme.typography.labelMedium)
     }
 }
 
@@ -819,14 +920,12 @@ private fun BuilderAppRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
-            Checkbox(checked = selected, onCheckedChange = null)
+            Checkbox(
+                checked = selected,
+                onCheckedChange = { onClickApp(app.packageName) }
+            )
         }
     }
-}
-private fun List<EarnItRuleStore.LaunchableApp>.builderFilteredBy(query: String): List<EarnItRuleStore.LaunchableApp> {
-    val trimmedQuery = query.trim()
-    if (trimmedQuery.isEmpty()) return this
-    return filter { it.name.contains(trimmedQuery, ignoreCase = true) }
 }
 
 @Composable

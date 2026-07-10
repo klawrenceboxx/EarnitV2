@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
+import android.util.LruCache
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -34,9 +35,9 @@ fun EarnItAppIcon(
     val context = LocalContext.current
     val bitmap = remember(packageName) {
         packageName?.takeIf { it.isNotBlank() }?.let { safePackage ->
-            runCatching {
+            EarnItAppIconCache.get(safePackage) {
                 context.packageManager.getApplicationIcon(safePackage).toIconBitmap()
-            }.getOrNull()
+            }
         }
     }
 
@@ -74,14 +75,37 @@ fun EarnItAppInitialTile(
     }
 }
 
-private fun Drawable.toIconBitmap(): Bitmap {
-    if (this is BitmapDrawable && bitmap != null) return bitmap
+private object EarnItAppIconCache {
+    private val cache = object : LruCache<String, Bitmap>(80) {
+        override fun sizeOf(key: String, value: Bitmap): Int = 1
+    }
 
-    val width = intrinsicWidth.takeIf { it > 0 } ?: 96
-    val height = intrinsicHeight.takeIf { it > 0 } ?: 96
+    fun get(packageName: String, loader: () -> Bitmap): Bitmap? {
+        cache.get(packageName)?.let { return it }
+        return runCatching { loader() }.getOrNull()?.also { bitmap ->
+            cache.put(packageName, bitmap)
+        }
+    }
+}
+
+private fun Drawable.toIconBitmap(): Bitmap {
+    if (this is BitmapDrawable && bitmap != null) return bitmap.toPickerSizedBitmap()
+
+    val width = intrinsicWidth.takeIf { it > 0 }?.coerceAtMost(PICKER_ICON_MAX_PX) ?: PICKER_ICON_MAX_PX
+    val height = intrinsicHeight.takeIf { it > 0 }?.coerceAtMost(PICKER_ICON_MAX_PX) ?: PICKER_ICON_MAX_PX
     val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
     val canvas = Canvas(bitmap)
     setBounds(0, 0, canvas.width, canvas.height)
     draw(canvas)
     return bitmap
 }
+
+private fun Bitmap.toPickerSizedBitmap(): Bitmap {
+    if (width <= PICKER_ICON_MAX_PX && height <= PICKER_ICON_MAX_PX) return this
+    val scale = minOf(PICKER_ICON_MAX_PX.toFloat() / width, PICKER_ICON_MAX_PX.toFloat() / height)
+    val targetWidth = (width * scale).toInt().coerceAtLeast(1)
+    val targetHeight = (height * scale).toInt().coerceAtLeast(1)
+    return Bitmap.createScaledBitmap(this, targetWidth, targetHeight, true)
+}
+
+private const val PICKER_ICON_MAX_PX = 96

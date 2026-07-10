@@ -117,7 +117,8 @@ object EarnItRuleStore {
 
     data class LaunchableApp(
         val packageName: String,
-        val name: String
+        val name: String,
+        val applicationCategory: Int? = null
     )
 
     fun getRules(context: Context): List<Rule> {
@@ -202,7 +203,8 @@ object EarnItRuleStore {
             .map { resolveInfo ->
                 LaunchableApp(
                     packageName = resolveInfo.activityInfo.packageName,
-                    name = resolveInfo.loadLabel(packageManager).toString()
+                    name = resolveInfo.loadLabel(packageManager).toString(),
+                    applicationCategory = resolveInfo.activityInfo.applicationInfo?.category
                 )
             }
             .distinctBy { it.packageName }

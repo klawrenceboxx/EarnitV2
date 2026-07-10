@@ -51,6 +51,8 @@ class MainActivity : ComponentActivity() {
     private var editingRuleTemplate by mutableStateOf<EarnItRuleStore.Rule?>(null)
     private var launchableApps by mutableStateOf(emptyList<EarnItRuleStore.LaunchableApp>())
     private var appLoadInProgress = false
+    private var appListLoading by mutableStateOf(false)
+    private var appListLoadedAtMillis = 0L
     private var selectedProductivePackage by mutableStateOf("")
     private var selectedProductivePackages by mutableStateOf(emptySet<String>())
     private var selectedBlockedPackages by mutableStateOf(emptySet<String>())
@@ -107,6 +109,7 @@ class MainActivity : ComponentActivity() {
                             ruleStates = ruleStates,
                             editingRule = editingRuleTemplate,
                             apps = launchableApps,
+                            appsLoading = appListLoading,
                             selectedProductivePackage = selectedProductivePackage,
                             selectedProductivePackages = selectedProductivePackages,
                             selectedBlockedPackages = selectedBlockedPackages,
@@ -149,9 +152,15 @@ class MainActivity : ComponentActivity() {
                             onOpenRuleDetail = { selectedRuleDetailId = it },
                             onBackFromRuleDetail = { selectedRuleDetailId = null },
                             onCancelEditingRule = ::returnToRuleTypeSelection,
-                            onOpenProductivePicker = { productivePickerOpen = true },
+                            onOpenProductivePicker = {
+                                productivePickerOpen = true
+                                refreshLaunchableApps()
+                            },
                             onCloseProductivePicker = { productivePickerOpen = false },
-                            onOpenBlockedPicker = { blockedPickerOpen = true },
+                            onOpenBlockedPicker = {
+                                blockedPickerOpen = true
+                                refreshLaunchableApps()
+                            },
                             onCloseBlockedPicker = { blockedPickerOpen = false },
                             onProductiveSearchChange = { productiveSearch = it },
                             onBlockedSearchChange = { blockedSearch = it },
@@ -190,9 +199,28 @@ class MainActivity : ComponentActivity() {
     private fun refreshDashboardState() {
         val savedRules = EarnItRuleStore.getRules(this)
         rules = savedRules
-        launchableApps = EarnItRuleStore.launchableApps(this)
+        refreshLaunchableApps()
         refreshUsageStats(savedRules)
         accessibilityServiceEnabled = isAccessibilityServiceEnabled()
+    }
+
+    private fun refreshLaunchableApps(force: Boolean = false) {
+        if (appLoadInProgress) return
+        val now = System.currentTimeMillis()
+        val stale = now - appListLoadedAtMillis > APP_LIST_REFRESH_INTERVAL_MS
+        if (!force && launchableApps.isNotEmpty() && !stale) return
+
+        appLoadInProgress = true
+        appListLoading = launchableApps.isEmpty()
+        thread(name = "EarnItAppLoader") {
+            val loadedApps = EarnItRuleStore.launchableApps(this)
+            runOnUiThread {
+                launchableApps = loadedApps
+                appListLoadedAtMillis = System.currentTimeMillis()
+                appLoadInProgress = false
+                appListLoading = false
+            }
+        }
     }
 
     private fun refreshUsageStats(savedRules: List<EarnItRuleStore.Rule>) {
@@ -327,6 +355,7 @@ class MainActivity : ComponentActivity() {
         selectedRequirementPackage = null
         selectedRequirementMinutes = 10
         editingRequirementIndex = null
+        refreshLaunchableApps()
     }
 
     private fun selectRequirementApp(packageName: String) {
@@ -536,6 +565,7 @@ class MainActivity : ComponentActivity() {
     private companion object {
         const val PREFS_NAME = "earnit_setup"
         const val KEY_FIRST_LAUNCH_COMPLETE = "first_launch_complete"
+        const val APP_LIST_REFRESH_INTERVAL_MS = 60_000L
     }
 }
 
@@ -544,6 +574,7 @@ fun Dashboard(
     ruleStates: List<RuleDashboardState>,
     editingRule: EarnItRuleStore.Rule?,
     apps: List<EarnItRuleStore.LaunchableApp>,
+    appsLoading: Boolean,
     selectedProductivePackage: String,
     selectedProductivePackages: Set<String>,
     selectedBlockedPackages: Set<String>,
@@ -694,6 +725,7 @@ fun Dashboard(
             RuleEditor(
                 rule = editingRule,
                 apps = apps,
+                appsLoading = appsLoading,
                 selectedProductivePackage = selectedProductivePackage,
                 selectedProductivePackages = selectedProductivePackages,
                 selectedBlockedPackages = selectedBlockedPackages,
@@ -787,6 +819,7 @@ private fun RuleRow(
 private fun RuleEditor(
     rule: EarnItRuleStore.Rule,
     apps: List<EarnItRuleStore.LaunchableApp>,
+    appsLoading: Boolean,
     selectedProductivePackage: String,
     selectedProductivePackages: Set<String>,
     selectedBlockedPackages: Set<String>,
@@ -834,6 +867,7 @@ private fun RuleEditor(
     EarnItRuleBuilder(
         rule = rule,
         apps = apps,
+        appsLoading = appsLoading,
         selectedProductivePackage = selectedProductivePackage,
         selectedProductivePackages = selectedProductivePackages,
         selectedBlockedPackages = selectedBlockedPackages,
@@ -1053,6 +1087,7 @@ fun DashboardPreview() {
             ruleStates = listOf(RuleDashboardState(rule, 735, 180)),
             editingRule = null,
             apps = emptyList(),
+            appsLoading = false,
             selectedProductivePackage = "com.duolingo",
             selectedProductivePackages = setOf("com.duolingo"),
             selectedBlockedPackages = setOf("com.instagram.android"),
