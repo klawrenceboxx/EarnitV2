@@ -328,6 +328,8 @@ private fun strictModeSettingsStatus(state: StrictModeLifecycleState): String {
         StrictModeLifecycleState.Inactive -> "Off"
         StrictModeLifecycleState.Activating -> "Activating"
         StrictModeLifecycleState.Active -> "Active"
+        StrictModeLifecycleState.DeactivationCounting -> "Deactivation countdown"
+        StrictModeLifecycleState.DeactivationReady -> "Ready to deactivate"
     }
 }
 

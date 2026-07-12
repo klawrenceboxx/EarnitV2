@@ -67,6 +67,24 @@ class StrictModePolicyTest {
     }
 
     @Test
+    fun deactivationStatesStillProtectEnabledRules() {
+        val enabled = rule(enabled = true)
+
+        assertTrue(
+            StrictModePolicy.isRuleProtected(
+                StrictModeState(lifecycleState = StrictModeLifecycleState.DeactivationCounting),
+                enabled
+            )
+        )
+        assertTrue(
+            StrictModePolicy.isRuleProtected(
+                StrictModeState(lifecycleState = StrictModeLifecycleState.DeactivationReady),
+                enabled
+            )
+        )
+    }
+
+    @Test
     fun actionsBecomeAvailableAgainWhenStrictModeExpires() {
         val inactive = StrictModeState(lifecycleState = StrictModeLifecycleState.Inactive)
         val protected = rule(enabled = true)

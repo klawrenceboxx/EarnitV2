@@ -134,6 +134,157 @@ class StrictModeStoreTest {
         assertTrue(store.isValidConfiguration(validTimedConfiguration()))
     }
 
+    @Test
+    fun beginDeactivationEntersPendingCountdownStateAndPersistsTimestamps() {
+        var now = 1_000L
+        val persistence = MemoryStrictModePersistence()
+        val store = store(persistence = persistence, nowProvider = { now })
+        store.beginActivation(validTimedConfiguration())
+        now = 31_000L
+        store.state()
+
+        val state = store.beginDeactivation()
+
+        assertEquals(StrictModeLifecycleState.DeactivationCounting, state.lifecycleState)
+        assertEquals(31_000L, state.deactivationStartedAtMillis)
+        assertEquals(631_000L, state.deactivationAvailableAtMillis)
+        assertEquals(StrictModeLifecycleState.DeactivationCounting, store(persistence = persistence, now = 32_000L).state().lifecycleState)
+    }
+
+    @Test
+    fun deactivationCountdownSurvivesRecreationAndDoesNotDeactivateAutomatically() {
+        var now = 1_000L
+        val persistence = MemoryStrictModePersistence()
+        val store = store(persistence = persistence, nowProvider = { now })
+        store.beginActivation(validTimedConfiguration())
+        now = 31_000L
+        store.state()
+        store.beginDeactivation()
+
+        now = 700_000L
+        val restored = store(persistence = persistence, nowProvider = { now }).state()
+
+        assertEquals(StrictModeLifecycleState.DeactivationReady, restored.lifecycleState)
+    }
+
+    @Test
+    fun cancellingDeactivationClearsPendingStateAndPreservesTimedExpiration() {
+        val persistence = MemoryStrictModePersistence()
+        var now = 1_000L
+        val store = store(persistence = persistence, nowProvider = { now })
+        store.beginActivation(validTimedConfiguration())
+        now = 31_000L
+        store.state()
+        val originalExpiration = store.state().expiresAtMillis
+        store.beginDeactivation()
+
+        val cancelled = store.cancelDeactivation()
+
+        assertEquals(StrictModeLifecycleState.Active, cancelled.lifecycleState)
+        assertEquals(originalExpiration, cancelled.expiresAtMillis)
+        assertEquals(null, cancelled.deactivationStartedAtMillis)
+        assertEquals(null, cancelled.deactivationAvailableAtMillis)
+    }
+
+    @Test
+    fun completedCountdownRequiresFinalConfirmationToDeactivate() {
+        var now = 1_000L
+        val store = store(nowProvider = { now })
+        store.beginActivation(validTimedConfiguration())
+        now = 31_000L
+        store.state()
+        store.beginDeactivation()
+        now = 700_000L
+
+        val ready = store.state()
+        assertEquals(StrictModeLifecycleState.DeactivationReady, ready.lifecycleState)
+
+        val inactive = store.confirmDeactivation()
+        assertEquals(StrictModeLifecycleState.Inactive, inactive.lifecycleState)
+        assertEquals(null, inactive.activatedAtMillis)
+        assertEquals(null, inactive.expiresAtMillis)
+    }
+
+    @Test
+    fun keepStrictModeActiveClearsCompletedRequestAndRequiresNewCountdown() {
+        var now = 1_000L
+        val store = store(nowProvider = { now })
+        store.beginActivation(validTimedConfiguration())
+        now = 31_000L
+        store.state()
+        store.beginDeactivation()
+        now = 700_000L
+        assertEquals(StrictModeLifecycleState.DeactivationReady, store.state().lifecycleState)
+
+        val active = store.keepStrictModeActive()
+
+        assertEquals(StrictModeLifecycleState.Active, active.lifecycleState)
+        assertEquals(null, active.deactivationStartedAtMillis)
+        assertEquals(null, active.deactivationAvailableAtMillis)
+    }
+
+    @Test
+    fun timedStrictModeExpiryClearsRunningDeactivation() {
+        var now = 1_000L
+        val store = store(nowProvider = { now })
+        store.beginActivation(validTimedConfiguration(durationMillis = 60_000L))
+        now = 31_000L
+        store.state()
+        store.beginDeactivation()
+        now = 100_000L
+
+        assertEquals(StrictModeLifecycleState.Inactive, store.state().lifecycleState)
+    }
+
+    @Test
+    fun timedStrictModeExpiryOverridesStaleFinalConfirmation() {
+        var now = 1_000L
+        val store = store(nowProvider = { now })
+        store.beginActivation(validTimedConfiguration(durationMillis = 20 * 60_000L))
+        now = 31_000L
+        store.state()
+        store.beginDeactivation()
+        now = 700_000L
+        assertEquals(StrictModeLifecycleState.DeactivationReady, store.state().lifecycleState)
+        now = 1_300_001L
+
+        assertEquals(StrictModeLifecycleState.Inactive, store.state().lifecycleState)
+    }
+
+    @Test
+    fun indefiniteStrictModeStaysActiveUntilConfirmation() {
+        var now = 1_000L
+        val persistence = MemoryStrictModePersistence()
+        val store = store(persistence = persistence, nowProvider = { now })
+        store.beginActivation(
+            StrictModeConfiguration(
+                durationType = StrictModeDurationType.Indefinite,
+                timedDurationMillis = null,
+                deactivationCountdownMillis = 10 * 60_000L
+            )
+        )
+        now = 31_000L
+        store.beginDeactivation()
+        now = 999_999_999L
+
+        assertEquals(StrictModeLifecycleState.DeactivationReady, store.state().lifecycleState)
+        assertEquals(StrictModeLifecycleState.Inactive, store.confirmDeactivation().lifecycleState)
+    }
+
+    @Test
+    fun repeatedStartCountdownDoesNotCreateMultipleRequests() {
+        var now = 1_000L
+        val store = store(nowProvider = { now })
+        store.beginActivation(validTimedConfiguration())
+        now = 31_000L
+        store.state()
+        val first = store.beginDeactivation()
+        val second = store.beginDeactivation()
+
+        assertEquals(first.deactivationStartedAtMillis, second.deactivationStartedAtMillis)
+        assertEquals(first.deactivationAvailableAtMillis, second.deactivationAvailableAtMillis)
+    }
+
     private fun validTimedConfiguration(durationMillis: Long = 60 * 60_000L): StrictModeConfiguration {
         return StrictModeConfiguration(
             durationType = StrictModeDurationType.Timed,

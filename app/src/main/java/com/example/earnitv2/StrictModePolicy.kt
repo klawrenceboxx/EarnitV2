@@ -6,7 +6,7 @@ internal object StrictModePolicy {
         rule: EarnItRuleStore.Rule,
         pauseExpirations: Map<String, Long> = emptyMap()
     ): Boolean {
-        return strictModeState.lifecycleState == StrictModeLifecycleState.Active &&
+        return strictModeState.lifecycleState.isStrictModeProtecting() &&
             rule.enabled &&
             rule.id !in pauseExpirations
     }
@@ -30,6 +30,12 @@ internal object StrictModePolicy {
     fun canEnableRule(rule: EarnItRuleStore.Rule): Boolean = !rule.enabled
 
     fun canResumeRule(rule: EarnItRuleStore.Rule): Boolean = !rule.enabled
+}
+
+internal fun StrictModeLifecycleState.isStrictModeProtecting(): Boolean {
+    return this == StrictModeLifecycleState.Active ||
+        this == StrictModeLifecycleState.DeactivationCounting ||
+        this == StrictModeLifecycleState.DeactivationReady
 }
 
 internal data class StrictModeRuleProtectionSummary(

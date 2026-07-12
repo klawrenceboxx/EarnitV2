@@ -203,6 +203,10 @@ class MainActivity : ComponentActivity() {
                             onSaveStrictModeConfiguration = ::saveStrictModeConfiguration,
                             onBeginStrictModeActivation = ::beginStrictModeActivation,
                             onCancelStrictModeActivation = ::cancelStrictModeActivation,
+                            onBeginStrictModeDeactivation = ::beginStrictModeDeactivation,
+                            onCancelStrictModeDeactivation = ::cancelStrictModeDeactivation,
+                            onConfirmStrictModeDeactivation = ::confirmStrictModeDeactivation,
+                            onKeepStrictModeActive = ::keepStrictModeActive,
                             onStrictModeTick = ::refreshStrictModeState,
                             onStrictModeBlockedAction = ::showStrictModeBlockedAction,
                             onOpenEarnApp = ::openEarnApp,
@@ -308,6 +312,22 @@ class MainActivity : ComponentActivity() {
 
     private fun cancelStrictModeActivation() {
         strictModeState = strictModeStore.cancelActivation()
+    }
+
+    private fun beginStrictModeDeactivation() {
+        strictModeState = strictModeStore.beginDeactivation()
+    }
+
+    private fun cancelStrictModeDeactivation() {
+        strictModeState = strictModeStore.cancelDeactivation()
+    }
+
+    private fun confirmStrictModeDeactivation() {
+        strictModeState = strictModeStore.confirmDeactivation()
+    }
+
+    private fun keepStrictModeActive() {
+        strictModeState = strictModeStore.keepStrictModeActive()
     }
 
     private fun refreshLaunchableApps(force: Boolean = false) {
@@ -893,6 +913,10 @@ internal fun Dashboard(
     onSaveStrictModeConfiguration: (StrictModeConfiguration) -> Unit,
     onBeginStrictModeActivation: (StrictModeConfiguration) -> Unit,
     onCancelStrictModeActivation: () -> Unit,
+    onBeginStrictModeDeactivation: () -> Unit,
+    onCancelStrictModeDeactivation: () -> Unit,
+    onConfirmStrictModeDeactivation: () -> Unit,
+    onKeepStrictModeActive: () -> Unit,
     onStrictModeTick: () -> Unit,
     onStrictModeBlockedAction: () -> Unit,
     onOpenEarnApp: (String) -> Unit,
@@ -951,7 +975,8 @@ internal fun Dashboard(
     }
     LaunchedEffect(strictModeState.lifecycleState, strictModeState.activationGraceEndsAtMillis, strictModeState.expiresAtMillis) {
         while (strictModeState.lifecycleState == StrictModeLifecycleState.Activating ||
-            (strictModeState.lifecycleState == StrictModeLifecycleState.Active && strictModeState.expiresAtMillis != null)
+            (strictModeState.lifecycleState.isStrictModeProtecting() && strictModeState.expiresAtMillis != null) ||
+            strictModeState.lifecycleState == StrictModeLifecycleState.DeactivationCounting
         ) {
             delay(1_000)
             onStrictModeTick()
@@ -994,6 +1019,10 @@ internal fun Dashboard(
                 onSaveConfiguration = onSaveStrictModeConfiguration,
                 onBeginActivation = onBeginStrictModeActivation,
                 onCancelActivation = onCancelStrictModeActivation,
+                onBeginDeactivation = onBeginStrictModeDeactivation,
+                onCancelDeactivation = onCancelStrictModeDeactivation,
+                onConfirmDeactivation = onConfirmStrictModeDeactivation,
+                onKeepStrictModeActive = onKeepStrictModeActive,
                 onTick = onStrictModeTick,
                 modifier = modifier
             )
@@ -1505,6 +1534,10 @@ fun DashboardPreview() {
             onSaveStrictModeConfiguration = {},
             onBeginStrictModeActivation = {},
             onCancelStrictModeActivation = {},
+            onBeginStrictModeDeactivation = {},
+            onCancelStrictModeDeactivation = {},
+            onConfirmStrictModeDeactivation = {},
+            onKeepStrictModeActive = {},
             onStrictModeTick = {},
             onStrictModeBlockedAction = {},
             onOpenEarnApp = {},

@@ -5,7 +5,9 @@ import android.content.Context
 internal enum class StrictModeLifecycleState {
     Inactive,
     Activating,
-    Active
+    Active,
+    DeactivationCounting,
+    DeactivationReady
 }
 
 internal enum class StrictModeDurationType {
@@ -30,7 +32,9 @@ internal data class StrictModeState(
     val activationGraceStartedAtMillis: Long? = null,
     val activationGraceEndsAtMillis: Long? = null,
     val activatedAtMillis: Long? = null,
-    val expiresAtMillis: Long? = null
+    val expiresAtMillis: Long? = null,
+    val deactivationStartedAtMillis: Long? = null,
+    val deactivationAvailableAtMillis: Long? = null
 )
 
 internal interface StrictModePersistence {
@@ -93,6 +97,56 @@ internal class StrictModeStore(
         return updated
     }
 
+    fun beginDeactivation(): StrictModeState {
+        val current = state()
+        if (current.lifecycleState == StrictModeLifecycleState.DeactivationCounting ||
+            current.lifecycleState == StrictModeLifecycleState.DeactivationReady
+        ) {
+            return current
+        }
+        if (current.lifecycleState != StrictModeLifecycleState.Active) return current
+        val countdownMillis = current.configuration.deactivationCountdownMillis ?: return current
+        if (countdownMillis <= 0L) return current
+        val now = nowMillis()
+        val updated = current.copy(
+            lifecycleState = StrictModeLifecycleState.DeactivationCounting,
+            deactivationStartedAtMillis = now,
+            deactivationAvailableAtMillis = now + countdownMillis
+        )
+        saveState(updated)
+        return updated
+    }
+
+    fun cancelDeactivation(): StrictModeState {
+        val current = state()
+        val updated = if (current.lifecycleState == StrictModeLifecycleState.DeactivationCounting ||
+            current.lifecycleState == StrictModeLifecycleState.DeactivationReady
+        ) {
+            current.copy(
+                lifecycleState = StrictModeLifecycleState.Active,
+                deactivationStartedAtMillis = null,
+                deactivationAvailableAtMillis = null
+            )
+        } else {
+            current
+        }
+        saveState(updated)
+        return updated
+    }
+
+    fun keepStrictModeActive(): StrictModeState = cancelDeactivation()
+
+    fun confirmDeactivation(): StrictModeState {
+        val current = state()
+        val updated = if (current.lifecycleState == StrictModeLifecycleState.DeactivationReady) {
+            StrictModeState(configuration = current.configuration)
+        } else {
+            current
+        }
+        saveState(updated)
+        return updated
+    }
+
     fun isValidConfiguration(configuration: StrictModeConfiguration): Boolean {
         val durationValid = when (configuration.durationType) {
             StrictModeDurationType.Timed -> (configuration.timedDurationMillis ?: 0L) > 0L
@@ -123,11 +177,29 @@ internal class StrictModeStore(
                 )
             }
         }
-        if (state.lifecycleState == StrictModeLifecycleState.Active &&
+        if (state.isProtectionLifecycle() &&
             state.configuration.durationType == StrictModeDurationType.Timed &&
             (state.expiresAtMillis ?: Long.MAX_VALUE) <= now
         ) {
             return StrictModeState(configuration = state.configuration)
+        }
+        if (state.lifecycleState == StrictModeLifecycleState.DeactivationCounting) {
+            val availableAt = state.deactivationAvailableAtMillis
+            if (availableAt == null || state.deactivationStartedAtMillis == null) {
+                return state.copy(
+                    lifecycleState = StrictModeLifecycleState.Active,
+                    deactivationStartedAtMillis = null,
+                    deactivationAvailableAtMillis = null
+                )
+            }
+            if (now >= availableAt) {
+                return state.copy(lifecycleState = StrictModeLifecycleState.DeactivationReady)
+            }
+        }
+        if (state.lifecycleState == StrictModeLifecycleState.DeactivationReady &&
+            state.deactivationAvailableAtMillis == null
+        ) {
+            return state.copy(lifecycleState = StrictModeLifecycleState.Active)
         }
         return state
     }
@@ -145,7 +217,9 @@ internal class StrictModeStore(
             activationGraceStartedAtMillis = persistence.read(KEY_GRACE_STARTED_AT)?.toLongOrNull(),
             activationGraceEndsAtMillis = persistence.read(KEY_GRACE_ENDS_AT)?.toLongOrNull(),
             activatedAtMillis = persistence.read(KEY_ACTIVATED_AT)?.toLongOrNull(),
-            expiresAtMillis = persistence.read(KEY_EXPIRES_AT)?.toLongOrNull()
+            expiresAtMillis = persistence.read(KEY_EXPIRES_AT)?.toLongOrNull(),
+            deactivationStartedAtMillis = persistence.read(KEY_DEACTIVATION_STARTED_AT)?.toLongOrNull(),
+            deactivationAvailableAtMillis = persistence.read(KEY_DEACTIVATION_AVAILABLE_AT)?.toLongOrNull()
         )
     }
 
@@ -160,9 +234,17 @@ internal class StrictModeStore(
                 KEY_GRACE_STARTED_AT to state.activationGraceStartedAtMillis?.toString(),
                 KEY_GRACE_ENDS_AT to state.activationGraceEndsAtMillis?.toString(),
                 KEY_ACTIVATED_AT to state.activatedAtMillis?.toString(),
-                KEY_EXPIRES_AT to state.expiresAtMillis?.toString()
+                KEY_EXPIRES_AT to state.expiresAtMillis?.toString(),
+                KEY_DEACTIVATION_STARTED_AT to state.deactivationStartedAtMillis?.toString(),
+                KEY_DEACTIVATION_AVAILABLE_AT to state.deactivationAvailableAtMillis?.toString()
             )
         )
+    }
+
+    private fun StrictModeState.isProtectionLifecycle(): Boolean {
+        return lifecycleState == StrictModeLifecycleState.Active ||
+            lifecycleState == StrictModeLifecycleState.DeactivationCounting ||
+            lifecycleState == StrictModeLifecycleState.DeactivationReady
     }
 
     private fun String.toLifecycleState(): StrictModeLifecycleState? {
@@ -184,5 +266,7 @@ internal class StrictModeStore(
         private const val KEY_GRACE_ENDS_AT = "grace_ends_at"
         private const val KEY_ACTIVATED_AT = "activated_at"
         private const val KEY_EXPIRES_AT = "expires_at"
+        private const val KEY_DEACTIVATION_STARTED_AT = "deactivation_started_at"
+        private const val KEY_DEACTIVATION_AVAILABLE_AT = "deactivation_available_at"
     }
 }

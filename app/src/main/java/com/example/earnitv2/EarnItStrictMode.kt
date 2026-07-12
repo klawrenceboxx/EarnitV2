@@ -44,6 +44,10 @@ internal fun EarnItStrictModeScreen(
     onSaveConfiguration: (StrictModeConfiguration) -> Unit,
     onBeginActivation: (StrictModeConfiguration) -> Unit,
     onCancelActivation: () -> Unit,
+    onBeginDeactivation: () -> Unit,
+    onCancelDeactivation: () -> Unit,
+    onConfirmDeactivation: () -> Unit,
+    onKeepStrictModeActive: () -> Unit,
     onTick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -52,7 +56,8 @@ internal fun EarnItStrictModeScreen(
 
     LaunchedEffect(state.lifecycleState, state.activationGraceEndsAtMillis, state.expiresAtMillis) {
         while (state.lifecycleState == StrictModeLifecycleState.Activating ||
-            (state.lifecycleState == StrictModeLifecycleState.Active && state.expiresAtMillis != null)
+            (state.lifecycleState.isStrictModeProtecting() && state.expiresAtMillis != null) ||
+            state.lifecycleState == StrictModeLifecycleState.DeactivationCounting
         ) {
             delay(1_000)
             onTick()
@@ -89,7 +94,16 @@ internal fun EarnItStrictModeScreen(
                 state = state,
                 enabledRuleCount = enabledRuleCount,
                 disabledRuleCount = disabledRuleCount,
-                protectionSummary = protectionSummary
+                protectionSummary = protectionSummary,
+                onBeginDeactivation = onBeginDeactivation
+            )
+            StrictModeLifecycleState.DeactivationCounting -> StrictModeDeactivationCountdown(
+                state = state,
+                onCancelDeactivation = onCancelDeactivation
+            )
+            StrictModeLifecycleState.DeactivationReady -> StrictModeDeactivateConfirmation(
+                onConfirmDeactivation = onConfirmDeactivation,
+                onKeepStrictModeActive = onKeepStrictModeActive
             )
         }
     }
@@ -250,8 +264,10 @@ private fun StrictModeActive(
     state: StrictModeState,
     enabledRuleCount: Int,
     disabledRuleCount: Int,
-    protectionSummary: StrictModeRuleProtectionSummary
+    protectionSummary: StrictModeRuleProtectionSummary,
+    onBeginDeactivation: () -> Unit
 ) {
+    var beginDeactivationDialogOpen by remember { mutableStateOf(false) }
     StrictModeCard {
         Text(text = "Strict Mode Active", style = MaterialTheme.typography.titleLarge)
         Text(
@@ -266,6 +282,19 @@ private fun StrictModeActive(
         Text(text = "Enabled Rules: $enabledRuleCount")
         Text(text = "Disabled or paused Rules: $disabledRuleCount")
         Text(text = "Rule protection will apply to enabled Rules.")
+        Button(onClick = { beginDeactivationDialogOpen = true }, modifier = Modifier.fillMaxWidth()) {
+            Text(text = "Begin Deactivation")
+        }
+    }
+    if (beginDeactivationDialogOpen) {
+        BeginDeactivationDialog(
+            countdownLabel = durationLabel(state.configuration.deactivationCountdownMillis),
+            onStartCountdown = {
+                beginDeactivationDialogOpen = false
+                onBeginDeactivation()
+            },
+            onCancel = { beginDeactivationDialogOpen = false }
+        )
     }
     StrictModeRuleListCard(
         title = "Protected Rules",
@@ -282,6 +311,76 @@ private fun StrictModeActive(
         )
         StrictModeCard {
             Text(text = "Disabled and paused Rules become protected automatically when enabled or resumed.")
+        }
+    }
+}
+
+@Composable
+private fun BeginDeactivationDialog(
+    countdownLabel: String,
+    onStartCountdown: () -> Unit,
+    onCancel: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onCancel,
+        title = { Text(text = "Begin deactivation?") },
+        text = {
+            Text(
+                text = "Strict Mode will remain active for the next $countdownLabel. Your protected Rules cannot be changed during this time."
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = onStartCountdown) {
+                Text(text = "Start Countdown")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onCancel) {
+                Text(text = "Cancel")
+            }
+        }
+    )
+}
+
+@Composable
+private fun StrictModeDeactivationCountdown(
+    state: StrictModeState,
+    onCancelDeactivation: () -> Unit
+) {
+    StrictModeCard {
+        Text(text = "Strict Mode Active", style = MaterialTheme.typography.titleLarge)
+        Text(text = "Deactivation in progress", style = MaterialTheme.typography.titleSmall)
+        Text(
+            text = "${durationLabel(strictModeRemainingMillis(state.deactivationAvailableAtMillis))} remaining",
+            style = MaterialTheme.typography.headlineSmall
+        )
+        Text(text = "Deactivate with: Countdown")
+        Text(
+            text = "Your Rules are still protected. Strict Mode will not turn off automatically when this timer reaches zero. You will need to confirm deactivation.",
+            style = MaterialTheme.typography.bodyMedium
+        )
+        OutlinedButton(onClick = onCancelDeactivation, modifier = Modifier.fillMaxWidth()) {
+            Text(text = "Cancel Deactivation")
+        }
+    }
+}
+
+@Composable
+private fun StrictModeDeactivateConfirmation(
+    onConfirmDeactivation: () -> Unit,
+    onKeepStrictModeActive: () -> Unit
+) {
+    StrictModeCard {
+        Text(text = "Deactivate Strict Mode?", style = MaterialTheme.typography.titleLarge)
+        Text(
+            text = "The waiting period is complete. Deactivating Strict Mode will allow your Rules to be edited, paused, disabled, or deleted again.",
+            style = MaterialTheme.typography.bodyMedium
+        )
+        Button(onClick = onConfirmDeactivation, modifier = Modifier.fillMaxWidth()) {
+            Text(text = "Deactivate Strict Mode")
+        }
+        OutlinedButton(onClick = onKeepStrictModeActive, modifier = Modifier.fillMaxWidth()) {
+            Text(text = "Keep Strict Mode Active")
         }
     }
 }
