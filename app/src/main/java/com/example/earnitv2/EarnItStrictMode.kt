@@ -13,6 +13,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -38,6 +39,7 @@ internal fun EarnItStrictModeScreen(
     state: StrictModeState,
     enabledRuleCount: Int,
     disabledRuleCount: Int,
+    protectionSummary: StrictModeRuleProtectionSummary,
     onBack: () -> Unit,
     onSaveConfiguration: (StrictModeConfiguration) -> Unit,
     onBeginActivation: (StrictModeConfiguration) -> Unit,
@@ -86,7 +88,8 @@ internal fun EarnItStrictModeScreen(
             StrictModeLifecycleState.Active -> StrictModeActive(
                 state = state,
                 enabledRuleCount = enabledRuleCount,
-                disabledRuleCount = disabledRuleCount
+                disabledRuleCount = disabledRuleCount,
+                protectionSummary = protectionSummary
             )
         }
     }
@@ -246,7 +249,8 @@ private fun StrictModeActivationCountdown(remainingSeconds: Long, onCancel: () -
 private fun StrictModeActive(
     state: StrictModeState,
     enabledRuleCount: Int,
-    disabledRuleCount: Int
+    disabledRuleCount: Int,
+    protectionSummary: StrictModeRuleProtectionSummary
 ) {
     StrictModeCard {
         Text(text = "Strict Mode Active", style = MaterialTheme.typography.titleLarge)
@@ -263,6 +267,72 @@ private fun StrictModeActive(
         Text(text = "Disabled or paused Rules: $disabledRuleCount")
         Text(text = "Rule protection will apply to enabled Rules.")
     }
+    StrictModeRuleListCard(
+        title = "Protected Rules",
+        emptyText = "No Rules are currently protected.",
+        rules = protectionSummary.protectedRules
+    )
+    if (protectionSummary.unprotectedRules.isNotEmpty()) {
+        StrictModeRuleListCard(
+            title = "Not currently protected",
+            emptyText = "",
+            rules = protectionSummary.unprotectedRules,
+            pausedRuleIds = protectionSummary.pausedRuleIds,
+            includeState = true
+        )
+        StrictModeCard {
+            Text(text = "Disabled and paused Rules become protected automatically when enabled or resumed.")
+        }
+    }
+}
+
+@Composable
+private fun StrictModeRuleListCard(
+    title: String,
+    emptyText: String,
+    rules: List<EarnItRuleStore.Rule>,
+    pausedRuleIds: Set<String> = emptySet(),
+    includeState: Boolean = false
+) {
+    StrictModeCard {
+        Text(text = title, style = MaterialTheme.typography.titleSmall)
+        if (rules.isEmpty()) {
+            Text(text = emptyText, style = MaterialTheme.typography.bodyMedium)
+        } else {
+            rules.forEach { rule ->
+                Text(
+                    text = if (includeState) {
+                        "${strictModeRuleLabel(rule)} - ${strictModeRuleStateLabel(rule, pausedRuleIds)}"
+                    } else {
+                        strictModeRuleLabel(rule)
+                    },
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            }
+        }
+    }
+}
+
+@Composable
+internal fun StrictModeProtectedActionDialog(
+    onViewStrictMode: () -> Unit,
+    onClose: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text(text = "Protected by Strict Mode") },
+        text = { Text(text = "This Rule cannot be changed while Strict Mode is active.") },
+        confirmButton = {
+            TextButton(onClick = onViewStrictMode) {
+                Text(text = "View Strict Mode")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onClose) {
+                Text(text = "Close")
+            }
+        }
+    )
 }
 
 @Composable
@@ -352,3 +422,19 @@ private val StrictModeDurationType.label: String
         StrictModeDurationType.Timed -> "Timed"
         StrictModeDurationType.Indefinite -> "Indefinite"
     }
+
+internal fun strictModeRuleLabel(rule: EarnItRuleStore.Rule): String {
+    return when (rule.type) {
+        EarnItRuleStore.RuleType.EarnRewardTime -> "${rule.earnApps.joinToString(", ") { it.name }} -> ${rule.blockedSummary}"
+        EarnItRuleStore.RuleType.CompleteToUnlock -> "Complete to Unlock -> ${rule.blockedSummary}"
+        EarnItRuleStore.RuleType.ScheduledBlock -> "Scheduled Block -> ${rule.blockedSummary}"
+    }
+}
+
+internal fun strictModeRuleStateLabel(rule: EarnItRuleStore.Rule, pausedRuleIds: Set<String>): String {
+    return when {
+        rule.id in pausedRuleIds -> "Paused"
+        rule.enabled -> "Enabled"
+        else -> "Disabled"
+    }
+}

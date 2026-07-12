@@ -96,6 +96,8 @@ fun EarnItRuleDetail(
     onEditRule: (EarnItRuleStore.Rule) -> Unit,
     onPauseRuleFor: (EarnItRuleStore.Rule, Long, String?) -> Unit,
     onResumeRule: (EarnItRuleStore.Rule) -> Unit,
+    isProtectedByStrictMode: Boolean,
+    onProtectedActionBlocked: () -> Unit,
     onDeleteRule: (EarnItRuleStore.Rule) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -205,9 +207,15 @@ fun EarnItRuleDetail(
         RuleDetailTopBar(
             rule = rule,
             onBack = onBack,
-            onEditRule = { editGateState = EditGateState.Confirm },
-            onQuickPause = { onPauseRuleFor(rule, FIVE_MINUTES_MILLIS, null) },
-            onMorePauseOptions = { pauseSheetState = PauseSheetState.Options },
+            onEditRule = {
+                if (isProtectedByStrictMode) onProtectedActionBlocked() else editGateState = EditGateState.Confirm
+            },
+            onQuickPause = {
+                if (isProtectedByStrictMode) onProtectedActionBlocked() else onPauseRuleFor(rule, FIVE_MINUTES_MILLIS, null)
+            },
+            onMorePauseOptions = {
+                if (isProtectedByStrictMode) onProtectedActionBlocked() else pauseSheetState = PauseSheetState.Options
+            },
             onDeleteRule = onDeleteRule
         )
 
@@ -217,6 +225,10 @@ fun EarnItRuleDetail(
                 onOpenUsageAccessSettings = onOpenUsageAccessSettings,
                 onOpenAccessibilitySettings = onOpenAccessibilitySettings
             )
+        }
+
+        if (isProtectedByStrictMode) {
+            RuleStrictModeStatusRow()
         }
 
         RuleStatusCard(
@@ -251,6 +263,18 @@ fun EarnItRuleDetail(
                 tone = statusState.tone
             )
         }
+    }
+}
+
+@Composable
+private fun RuleStrictModeStatusRow() {
+    SectionContainer {
+        Text(text = "Protected by Strict Mode", style = MaterialTheme.typography.titleSmall)
+        Text(
+            text = "This Rule cannot be edited, paused, disabled, or deleted while Strict Mode is active.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }
 

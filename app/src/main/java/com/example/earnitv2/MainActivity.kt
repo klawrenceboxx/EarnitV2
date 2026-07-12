@@ -119,6 +119,7 @@ class MainActivity : ComponentActivity() {
     private var selectedRuleDetailId by mutableStateOf<String?>(null)
     private var settingsOpen by mutableStateOf(false)
     private var strictModeOpen by mutableStateOf(false)
+    private var strictModeBlockedActionOpen by mutableStateOf(false)
     private var ruleTypeSelectionOpen by mutableStateOf(false)
     private var unavailableRuleType by mutableStateOf<RuleTypeOption?>(null)
     private var firstLaunchComplete by mutableStateOf(false)
@@ -203,6 +204,7 @@ class MainActivity : ComponentActivity() {
                             onBeginStrictModeActivation = ::beginStrictModeActivation,
                             onCancelStrictModeActivation = ::cancelStrictModeActivation,
                             onStrictModeTick = ::refreshStrictModeState,
+                            onStrictModeBlockedAction = ::showStrictModeBlockedAction,
                             onOpenEarnApp = ::openEarnApp,
                             onAddRule = ::startAddingRule,
                             onBackFromRuleTypeSelection = ::closeRuleTypeSelection,
@@ -257,6 +259,17 @@ class MainActivity : ComponentActivity() {
                             onSaveRule = ::saveRule,
                             modifier = Modifier.padding(innerPadding)
                         )
+                        if (strictModeBlockedActionOpen) {
+                            StrictModeProtectedActionDialog(
+                                onViewStrictMode = {
+                                    strictModeBlockedActionOpen = false
+                                    selectedRuleDetailId = null
+                                    settingsOpen = false
+                                    strictModeOpen = true
+                                },
+                                onClose = { strictModeBlockedActionOpen = false }
+                            )
+                        }
                     }
                 }
             }
@@ -383,10 +396,23 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun startEditingRule(rule: EarnItRuleStore.Rule) {
+        refreshStrictModeState()
+        if (!StrictModePolicy.canEditRule(strictModeState, rule, pauseExpirations)) {
+            showStrictModeBlockedAction()
+            return
+        }
         startBuilder(rule = rule, entryContext = RuleBuilderEntryContext.Edit)
     }
 
     private fun startBuilder(rule: EarnItRuleStore.Rule, entryContext: RuleBuilderEntryContext) {
+        if (entryContext == RuleBuilderEntryContext.Edit) refreshStrictModeState()
+        if (entryContext == RuleBuilderEntryContext.Edit &&
+            !StrictModePolicy.canEditRule(strictModeState, rule, pauseExpirations)
+        ) {
+            showStrictModeBlockedAction()
+            selectedRuleDetailId = rule.id
+            return
+        }
         settingsOpen = false
         selectedRuleDetailId = null
         ruleTypeSelectionOpen = false
@@ -558,6 +584,11 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun toggleRuleEnabled(rule: EarnItRuleStore.Rule) {
+        refreshStrictModeState()
+        if (rule.enabled && !StrictModePolicy.canDisableRule(strictModeState, rule, pauseExpirations)) {
+            showStrictModeBlockedAction()
+            return
+        }
         if (!rule.enabled) {
             EarnItPauseStore.clearPause(this, rule.id)
         }
@@ -566,6 +597,11 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun pauseRuleFor(rule: EarnItRuleStore.Rule, durationMillis: Long, reason: String? = null) {
+        refreshStrictModeState()
+        if (!StrictModePolicy.canPauseRule(strictModeState, rule, pauseExpirations)) {
+            showStrictModeBlockedAction()
+            return
+        }
         val expiresAt = System.currentTimeMillis() + durationMillis.coerceAtLeast(1L)
         EarnItPauseStore.pauseUntil(this, rule.id, expiresAt, reason)
         EarnItRuleStore.setRuleEnabled(this, rule.id, false)
@@ -590,6 +626,11 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun deleteRule(rule: EarnItRuleStore.Rule) {
+        refreshStrictModeState()
+        if (!StrictModePolicy.canDeleteRule(strictModeState, rule, pauseExpirations)) {
+            showStrictModeBlockedAction()
+            return
+        }
         if (selectedRuleDetailId == rule.id) {
             selectedRuleDetailId = null
         }
@@ -599,6 +640,11 @@ class MainActivity : ComponentActivity() {
             cancelEditingRule()
         }
         refreshDashboardState()
+    }
+
+    private fun showStrictModeBlockedAction() {
+        refreshStrictModeState()
+        strictModeBlockedActionOpen = true
     }
 
     private fun selectAllDaySchedule() {
@@ -848,6 +894,7 @@ internal fun Dashboard(
     onBeginStrictModeActivation: (StrictModeConfiguration) -> Unit,
     onCancelStrictModeActivation: () -> Unit,
     onStrictModeTick: () -> Unit,
+    onStrictModeBlockedAction: () -> Unit,
     onOpenEarnApp: (String) -> Unit,
     onAddRule: () -> Unit,
     onBackFromRuleTypeSelection: () -> Unit,
@@ -938,6 +985,11 @@ internal fun Dashboard(
                 state = strictModeState,
                 enabledRuleCount = ruleStates.count { it.rule.enabled },
                 disabledRuleCount = ruleStates.count { !it.rule.enabled },
+                protectionSummary = strictModeRuleProtectionSummary(
+                    strictModeState = strictModeState,
+                    rules = ruleStates.map { it.rule },
+                    pauseExpirations = pauseExpirations
+                ),
                 onBack = onCloseStrictMode,
                 onSaveConfiguration = onSaveStrictModeConfiguration,
                 onBeginActivation = onBeginStrictModeActivation,
@@ -973,6 +1025,12 @@ internal fun Dashboard(
                 onEditRule = onEditRule,
                 onPauseRuleFor = onPauseRuleFor,
                 onResumeRule = onResumeRule,
+                isProtectedByStrictMode = StrictModePolicy.isRuleProtected(
+                    strictModeState = strictModeState,
+                    rule = selectedHomeRule.rule,
+                    pauseExpirations = pauseExpirations
+                ),
+                onProtectedActionBlocked = onStrictModeBlockedAction,
                 onDeleteRule = { rule ->
                     onBackFromRuleDetail()
                     onDeleteRule(rule)
@@ -1448,6 +1506,7 @@ fun DashboardPreview() {
             onBeginStrictModeActivation = {},
             onCancelStrictModeActivation = {},
             onStrictModeTick = {},
+            onStrictModeBlockedAction = {},
             onOpenEarnApp = {},
             onAddRule = {},
             onBackFromRuleTypeSelection = {},
