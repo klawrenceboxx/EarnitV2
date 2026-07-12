@@ -80,6 +80,8 @@ class MainActivity : ComponentActivity() {
     private var rules by mutableStateOf(emptyList<EarnItRuleStore.Rule>())
     private var ruleStates by mutableStateOf(emptyList<RuleDashboardState>())
     private var pauseExpirations by mutableStateOf(emptyMap<String, Long>())
+    private lateinit var strictModeStore: StrictModeStore
+    private var strictModeState by mutableStateOf(StrictModeState())
     private var editingRuleTemplate by mutableStateOf<EarnItRuleStore.Rule?>(null)
     private var builderEntryContext by mutableStateOf<RuleBuilderEntryContext?>(null)
     private var builderReturnRuleDetailId by mutableStateOf<String?>(null)
@@ -116,6 +118,7 @@ class MainActivity : ComponentActivity() {
     private var manageRulesOpen by mutableStateOf(false)
     private var selectedRuleDetailId by mutableStateOf<String?>(null)
     private var settingsOpen by mutableStateOf(false)
+    private var strictModeOpen by mutableStateOf(false)
     private var ruleTypeSelectionOpen by mutableStateOf(false)
     private var unavailableRuleType by mutableStateOf<RuleTypeOption?>(null)
     private var firstLaunchComplete by mutableStateOf(false)
@@ -125,6 +128,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        strictModeStore = StrictModeStore(SharedPreferencesStrictModePersistence(this))
         firstLaunchComplete = isFirstLaunchComplete() || EarnItRuleStore.getRules(this).isNotEmpty()
         refreshDashboardState()
         setContent {
@@ -179,12 +183,26 @@ class MainActivity : ComponentActivity() {
                             pauseExpirations = pauseExpirations,
                             selectedRuleDetailId = selectedRuleDetailId,
                             settingsOpen = settingsOpen,
+                            strictModeOpen = strictModeOpen,
+                            strictModeState = strictModeState,
                             ruleTypeSelectionOpen = ruleTypeSelectionOpen,
                             unavailableRuleType = unavailableRuleType,
                             onOpenUsageAccessSettings = ::openUsageAccessSettings,
                             onOpenAccessibilitySettings = ::openAccessibilitySettings,
                             onOpenSettings = { settingsOpen = true },
                             onCloseSettings = { settingsOpen = false },
+                            onOpenStrictMode = {
+                                settingsOpen = false
+                                strictModeOpen = true
+                            },
+                            onCloseStrictMode = {
+                                strictModeOpen = false
+                                settingsOpen = true
+                            },
+                            onSaveStrictModeConfiguration = ::saveStrictModeConfiguration,
+                            onBeginStrictModeActivation = ::beginStrictModeActivation,
+                            onCancelStrictModeActivation = ::cancelStrictModeActivation,
+                            onStrictModeTick = ::refreshStrictModeState,
                             onOpenEarnApp = ::openEarnApp,
                             onAddRule = ::startAddingRule,
                             onBackFromRuleTypeSelection = ::closeRuleTypeSelection,
@@ -252,12 +270,31 @@ class MainActivity : ComponentActivity() {
 
     private fun refreshDashboardState() {
         resumeExpiredPauses()
+        refreshStrictModeState()
         val savedRules = EarnItRuleStore.getRules(this)
         pauseExpirations = EarnItPauseStore.pauseExpirations(this)
         rules = savedRules
         refreshLaunchableApps()
         refreshUsageStats(savedRules)
         accessibilityServiceEnabled = isAccessibilityServiceEnabled()
+    }
+
+    private fun refreshStrictModeState() {
+        if (::strictModeStore.isInitialized) {
+            strictModeState = strictModeStore.state()
+        }
+    }
+
+    private fun saveStrictModeConfiguration(configuration: StrictModeConfiguration) {
+        strictModeState = strictModeStore.saveConfiguration(configuration)
+    }
+
+    private fun beginStrictModeActivation(configuration: StrictModeConfiguration) {
+        strictModeState = strictModeStore.beginActivation(configuration)
+    }
+
+    private fun cancelStrictModeActivation() {
+        strictModeState = strictModeStore.cancelActivation()
     }
 
     private fun refreshLaunchableApps(force: Boolean = false) {
@@ -762,7 +799,7 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun Dashboard(
+internal fun Dashboard(
     ruleStates: List<RuleDashboardState>,
     editingRule: EarnItRuleStore.Rule?,
     apps: List<EarnItRuleStore.LaunchableApp>,
@@ -795,6 +832,8 @@ fun Dashboard(
     accessibilityServiceEnabled: Boolean,
     manageRulesOpen: Boolean,
     pauseExpirations: Map<String, Long>,
+    strictModeOpen: Boolean,
+    strictModeState: StrictModeState,
     selectedRuleDetailId: String?,
     settingsOpen: Boolean,
     ruleTypeSelectionOpen: Boolean,
@@ -803,6 +842,12 @@ fun Dashboard(
     onOpenAccessibilitySettings: () -> Unit,
     onOpenSettings: () -> Unit,
     onCloseSettings: () -> Unit,
+    onOpenStrictMode: () -> Unit,
+    onCloseStrictMode: () -> Unit,
+    onSaveStrictModeConfiguration: (StrictModeConfiguration) -> Unit,
+    onBeginStrictModeActivation: (StrictModeConfiguration) -> Unit,
+    onCancelStrictModeActivation: () -> Unit,
+    onStrictModeTick: () -> Unit,
     onOpenEarnApp: (String) -> Unit,
     onAddRule: () -> Unit,
     onBackFromRuleTypeSelection: () -> Unit,
@@ -857,6 +902,14 @@ fun Dashboard(
             onPauseTimerTick()
         }
     }
+    LaunchedEffect(strictModeState.lifecycleState, strictModeState.activationGraceEndsAtMillis, strictModeState.expiresAtMillis) {
+        while (strictModeState.lifecycleState == StrictModeLifecycleState.Activating ||
+            (strictModeState.lifecycleState == StrictModeLifecycleState.Active && strictModeState.expiresAtMillis != null)
+        ) {
+            delay(1_000)
+            onStrictModeTick()
+        }
+    }
 
     if (editingRule == null) {
         val homeRules = ruleStates.map { state ->
@@ -880,11 +933,25 @@ fun Dashboard(
                 onSelectRuleType = onSelectRuleType,
                 modifier = modifier
             )
+        } else if (strictModeOpen) {
+            EarnItStrictModeScreen(
+                state = strictModeState,
+                enabledRuleCount = ruleStates.count { it.rule.enabled },
+                disabledRuleCount = ruleStates.count { !it.rule.enabled },
+                onBack = onCloseStrictMode,
+                onSaveConfiguration = onSaveStrictModeConfiguration,
+                onBeginActivation = onBeginStrictModeActivation,
+                onCancelActivation = onCancelStrictModeActivation,
+                onTick = onStrictModeTick,
+                modifier = modifier
+            )
         } else if (settingsOpen) {
             EarnItSettings(
                 permissionState = permissionState,
                 hasRules = homeRules.isNotEmpty(),
+                strictModeState = strictModeState,
                 onBack = onCloseSettings,
+                onOpenStrictMode = onOpenStrictMode,
                 onOpenUsageAccessSettings = onOpenUsageAccessSettings,
                 onOpenAccessibilitySettings = onOpenAccessibilitySettings,
                 onCreateFirstRule = onAddRule,
@@ -1365,6 +1432,8 @@ fun DashboardPreview() {
             accessibilityServiceEnabled = true,
             manageRulesOpen = false,
             pauseExpirations = emptyMap(),
+            strictModeOpen = false,
+            strictModeState = StrictModeState(),
             selectedRuleDetailId = null,
             settingsOpen = false,
             ruleTypeSelectionOpen = false,
@@ -1373,6 +1442,12 @@ fun DashboardPreview() {
             onOpenAccessibilitySettings = {},
             onOpenSettings = {},
             onCloseSettings = {},
+            onOpenStrictMode = {},
+            onCloseStrictMode = {},
+            onSaveStrictModeConfiguration = {},
+            onBeginStrictModeActivation = {},
+            onCancelStrictModeActivation = {},
+            onStrictModeTick = {},
             onOpenEarnApp = {},
             onAddRule = {},
             onBackFromRuleTypeSelection = {},

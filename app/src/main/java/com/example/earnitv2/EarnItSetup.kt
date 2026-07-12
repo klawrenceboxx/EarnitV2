@@ -226,10 +226,12 @@ private fun SetupReadyStep(
 }
 
 @Composable
-fun EarnItSettings(
+internal fun EarnItSettings(
     permissionState: PermissionSetupUiState,
     hasRules: Boolean,
+    strictModeState: StrictModeState,
     onBack: () -> Unit,
+    onOpenStrictMode: () -> Unit,
     onOpenUsageAccessSettings: () -> Unit,
     onOpenAccessibilitySettings: () -> Unit,
     onCreateFirstRule: () -> Unit,
@@ -246,6 +248,26 @@ fun EarnItSettings(
             Text(text = "Settings", style = MaterialTheme.typography.headlineMedium)
             TextButton(onClick = onBack) {
                 Text(text = "Done")
+            }
+        }
+
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+        ) {
+            Column(
+                modifier = Modifier.padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(text = "Strict Mode", style = MaterialTheme.typography.titleSmall)
+                Text(
+                    text = "Status: ${strictModeSettingsStatus(strictModeState.lifecycleState)}",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                OutlinedButton(onClick = onOpenStrictMode, modifier = Modifier.fillMaxWidth()) {
+                    Text(text = "Open Strict Mode")
+                }
             }
         }
 
@@ -298,6 +320,14 @@ fun EarnItSettings(
                 )
             }
         }
+    }
+}
+
+private fun strictModeSettingsStatus(state: StrictModeLifecycleState): String {
+    return when (state) {
+        StrictModeLifecycleState.Inactive -> "Off"
+        StrictModeLifecycleState.Activating -> "Activating"
+        StrictModeLifecycleState.Active -> "Active"
     }
 }
 
