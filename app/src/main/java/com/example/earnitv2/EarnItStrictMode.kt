@@ -140,12 +140,15 @@ private fun StrictModeSetup(
     onReview: () -> Unit
 ) {
     StrictModeCard {
-        Text(text = "Protect your Rules from impulsive changes.", style = MaterialTheme.typography.bodyLarge)
         Text(text = "Status: Off", style = MaterialTheme.typography.titleSmall)
+        Text(
+            text = "Strict Mode protects changes made inside EarnIt. Android system settings can still affect protection.",
+            style = MaterialTheme.typography.bodyMedium
+        )
     }
     StrictModeCard {
-        Text(text = "Duration type", style = MaterialTheme.typography.titleSmall)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(text = "Duration", style = MaterialTheme.typography.titleSmall)
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = { onSetupChange(setup.copy(durationType = StrictModeDurationType.Timed)) }) {
                 Text(text = if (setup.durationType == StrictModeDurationType.Timed) "Timed selected" else "Timed")
             }
@@ -158,26 +161,85 @@ private fun StrictModeSetup(
                 selectedMillis = setup.timedDurationMillis,
                 customValue = setup.customTimedHours,
                 onCustomValueChange = { onSetupChange(setup.copy(customTimedHours = it.filter(Char::isDigit).take(4))) },
-                onSelect = { onSetupChange(setup.copy(timedDurationMillis = it)) },
-                customLabel = "Custom hours"
+                onSelect = { onSetupChange(setup.copy(timedDurationMillis = it, timedCustomVisible = false)) },
+                onUseCustom = { millis, value ->
+                    onSetupChange(
+                        setup.copy(
+                            timedDurationMillis = millis,
+                            customTimedHours = value,
+                            timedCustomVisible = true
+                        )
+                    )
+                },
+                onShowCustom = { onSetupChange(setup.copy(timedCustomVisible = true)) },
+                customVisible = setup.timedCustomVisible,
+                customLabel = "Custom hours",
+                maxValue = StrictModeStore.MAX_TIMED_DURATION_MILLIS / (60L * 60_000L)
             )
+            if (!setup.timedDurationValid) {
+                Text(text = "Choose a duration from 1 hour to 30 days.", style = MaterialTheme.typography.bodySmall)
+            }
         }
     }
     StrictModeCard {
         Text(text = "Deactivation method", style = MaterialTheme.typography.titleSmall)
-        Text(text = "Countdown", style = MaterialTheme.typography.bodyLarge)
+        DeactivationMethodRow(
+            title = "Countdown selected",
+            description = "Wait for a chosen period before Strict Mode can be deactivated.",
+            enabled = true
+        )
         DurationPresetRows(
             selectedMillis = setup.deactivationCountdownMillis,
             customValue = setup.customCountdownMinutes,
             onCustomValueChange = { onSetupChange(setup.copy(customCountdownMinutes = it.filter(Char::isDigit).take(4))) },
-            onSelect = { onSetupChange(setup.copy(deactivationCountdownMillis = it)) },
+            onSelect = { onSetupChange(setup.copy(deactivationCountdownMillis = it, countdownCustomVisible = false)) },
+            onUseCustom = { millis, value ->
+                onSetupChange(
+                    setup.copy(
+                        deactivationCountdownMillis = millis,
+                        customCountdownMinutes = value,
+                        countdownCustomVisible = true
+                    )
+                )
+            },
+            onShowCustom = { onSetupChange(setup.copy(countdownCustomVisible = true)) },
+            customVisible = setup.countdownCustomVisible,
             customLabel = "Custom minutes",
-            presets = countdownPresets()
+            presets = countdownPresets(),
+            maxValue = StrictModeStore.MAX_DEACTIVATION_COUNTDOWN_MILLIS / 60_000L
+        )
+        if (!setup.countdownDurationValid) {
+            Text(text = "Choose a countdown from 1 minute to 24 hours.", style = MaterialTheme.typography.bodySmall)
+        }
+        DeactivationMethodRow(
+            title = "Charger + wait",
+            description = "Connect your charger and complete a waiting period.",
+            enabled = false
+        )
+        DeactivationMethodRow(
+            title = "PIN",
+            description = "Require a PIN before deactivation.",
+            enabled = false
+        )
+        DeactivationMethodRow(
+            title = "Email Approval",
+            description = "Approve deactivation through a secure email link.",
+            enabled = false
+        )
+        DeactivationMethodRow(
+            title = "NFC Tag or Security Fob",
+            description = "Require a physical tag or compatible security device.",
+            enabled = false
         )
     }
     StrictModeCard {
+        Text(text = "What Strict Mode Protects", style = MaterialTheme.typography.titleSmall)
         Text(
             text = "When active, Strict Mode prevents protected Rules from being edited, paused, disabled, or deleted.",
+            style = MaterialTheme.typography.bodyMedium
+        )
+        Text(
+            text = "Disabled and paused Rules stay unchanged. If enabled or resumed later, they become protected immediately.",
             style = MaterialTheme.typography.bodyMedium
         )
         Button(onClick = onReview, enabled = setup.isValid, modifier = Modifier.fillMaxWidth()) {
@@ -192,28 +254,60 @@ private fun DurationPresetRows(
     customValue: String,
     onCustomValueChange: (String) -> Unit,
     onSelect: (Long) -> Unit,
+    onUseCustom: (Long, String) -> Unit,
+    onShowCustom: () -> Unit,
+    customVisible: Boolean,
     customLabel: String,
-    presets: List<Pair<String, Long>> = timedDurationPresets()
+    presets: List<Pair<String, Long>> = timedDurationPresets(),
+    maxValue: Long
 ) {
     presets.forEach { (label, millis) ->
         OutlinedButton(onClick = { onSelect(millis) }, modifier = Modifier.fillMaxWidth()) {
             Text(text = if (selectedMillis == millis) "$label selected" else label)
         }
     }
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        OutlinedTextField(
-            value = customValue,
-            onValueChange = onCustomValueChange,
-            label = { Text(text = customLabel) },
-            modifier = Modifier.weight(1f)
-        )
-        OutlinedButton(onClick = {
-            customValue.toLongOrNull()?.takeIf { it > 0L }?.let { value ->
-                val millis = if (customLabel.contains("hours")) value * 60 * 60_000L else value * 60_000L
-                onSelect(millis)
+    OutlinedButton(onClick = onShowCustom, modifier = Modifier.fillMaxWidth()) {
+        Text(text = if (customVisible) "Custom selected" else "Custom")
+    }
+    if (customVisible) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedTextField(
+                value = customValue,
+                onValueChange = onCustomValueChange,
+                label = { Text(text = customLabel) },
+                supportingText = { Text(text = "1 to $maxValue") },
+                isError = customValue.toLongOrNull()?.let { it !in 1L..maxValue } == true,
+                modifier = Modifier.weight(1f)
+            )
+            OutlinedButton(onClick = {
+                customValue.toLongOrNull()?.takeIf { it in 1L..maxValue }?.let { value ->
+                    val millis = if (customLabel.contains("hours")) value * 60L * 60_000L else value * 60_000L
+                    onUseCustom(millis, value.toString())
+                }
+            }) {
+                Text(text = "Use")
             }
-        }) {
-            Text(text = "Use")
+        }
+    }
+}
+
+@Composable
+private fun DeactivationMethodRow(
+    title: String,
+    description: String,
+    enabled: Boolean
+) {
+    OutlinedButton(
+        onClick = {},
+        enabled = enabled,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(text = title)
+            Text(text = description, style = MaterialTheme.typography.bodySmall)
+            if (!enabled) {
+                Text(text = "Coming Soon", style = MaterialTheme.typography.labelMedium)
+            }
         }
     }
 }
@@ -237,7 +331,8 @@ private fun StrictModeReview(
         Text(text = "Enabled Rules: $enabledRuleCount")
         Text(text = "Disabled or paused Rules: $disabledRuleCount")
         Text(text = "Enabled Rules will be protected while Strict Mode is active.")
-        Text(text = "Disabled and paused Rules will become protected if they are enabled or resumed.")
+        Text(text = "Disabled and paused Rules will remain unchanged. If enabled or resumed while Strict Mode is active, they become protected immediately.")
+        Text(text = "Strict Mode activates after a 30-second review period.")
         Button(onClick = onActivate, modifier = Modifier.fillMaxWidth()) {
             Text(text = "Activate Strict Mode")
         }
@@ -252,7 +347,7 @@ private fun StrictModeActivationCountdown(remainingSeconds: Long, onCancel: () -
     StrictModeCard {
         Text(text = "Strict Mode activates in", style = MaterialTheme.typography.titleLarge)
         Text(text = remainingSeconds.coerceAtLeast(0L).toString(), style = MaterialTheme.typography.displaySmall)
-        Text(text = "After activation, Strict Mode cannot be normally changed until a deactivation flow succeeds.")
+        Text(text = "This is your final opportunity to cancel before Strict Mode becomes active.")
         OutlinedButton(onClick = onCancel, modifier = Modifier.fillMaxWidth()) {
             Text(text = "Cancel")
         }
@@ -281,7 +376,7 @@ private fun StrictModeActive(
         Text(text = "Configured countdown: ${durationLabel(state.configuration.deactivationCountdownMillis)}")
         Text(text = "Enabled Rules: $enabledRuleCount")
         Text(text = "Disabled or paused Rules: $disabledRuleCount")
-        Text(text = "Rule protection will apply to enabled Rules.")
+        Text(text = "Protected Rules cannot be edited, paused, disabled, or deleted. Enable and Resume stay available.")
         Button(onClick = { beginDeactivationDialogOpen = true }, modifier = Modifier.fillMaxWidth()) {
             Text(text = "Begin Deactivation")
         }
@@ -452,12 +547,20 @@ internal data class StrictModeSetupState(
     val timedDurationMillis: Long?,
     val deactivationCountdownMillis: Long?,
     val customTimedHours: String = "",
-    val customCountdownMinutes: String = ""
+    val customCountdownMinutes: String = "",
+    val timedCustomVisible: Boolean = false,
+    val countdownCustomVisible: Boolean = false
 ) {
+    val timedDurationValid: Boolean
+        get() = durationType == StrictModeDurationType.Indefinite ||
+            (timedDurationMillis ?: 0L) in 1L..StrictModeStore.MAX_TIMED_DURATION_MILLIS
+
+    val countdownDurationValid: Boolean
+        get() = (deactivationCountdownMillis ?: 0L) in 1L..StrictModeStore.MAX_DEACTIVATION_COUNTDOWN_MILLIS
+
     val isValid: Boolean
         get() {
-            val durationValid = durationType == StrictModeDurationType.Indefinite || (timedDurationMillis ?: 0L) > 0L
-            return durationValid && (deactivationCountdownMillis ?: 0L) > 0L
+            return timedDurationValid && countdownDurationValid
         }
 
     fun toConfiguration(): StrictModeConfiguration {
@@ -470,10 +573,24 @@ internal data class StrictModeSetupState(
 
     companion object {
         fun from(configuration: StrictModeConfiguration): StrictModeSetupState {
+            val timedCustom = configuration.timedDurationMillis != null &&
+                timedDurationPresets().none { it.second == configuration.timedDurationMillis }
+            val countdownCustom = configuration.deactivationCountdownMillis != null &&
+                countdownPresets().none { it.second == configuration.deactivationCountdownMillis }
             return StrictModeSetupState(
                 durationType = configuration.durationType,
                 timedDurationMillis = configuration.timedDurationMillis,
-                deactivationCountdownMillis = configuration.deactivationCountdownMillis
+                deactivationCountdownMillis = configuration.deactivationCountdownMillis,
+                customTimedHours = configuration.timedDurationMillis
+                    ?.takeIf { timedCustom }
+                    ?.let { (it / (60L * 60_000L)).toString() }
+                    .orEmpty(),
+                customCountdownMinutes = configuration.deactivationCountdownMillis
+                    ?.takeIf { countdownCustom }
+                    ?.let { (it / 60_000L).toString() }
+                    .orEmpty(),
+                timedCustomVisible = timedCustom,
+                countdownCustomVisible = countdownCustom
             )
         }
     }
@@ -508,12 +625,23 @@ internal fun strictModeRemainingMillis(targetMillis: Long?, nowMillis: Long = Sy
 
 internal fun durationLabel(durationMillis: Long?): String {
     val millis = durationMillis ?: return "Indefinite"
+    if (millis in 1L until 60_000L) return "Less than 1 minute"
     val minutes = millis / 60_000L
+    if (minutes <= 0L) return "0 minutes"
+    val days = minutes / 1_440L
+    val hours = (minutes % 1_440L) / 60L
+    val remainingMinutes = minutes % 60L
     return when {
-        minutes >= 1_440L && minutes % 1_440L == 0L -> "${minutes / 1_440L} day${if (minutes == 1_440L) "" else "s"}"
-        minutes >= 60L && minutes % 60L == 0L -> "${minutes / 60L} hour${if (minutes == 60L) "" else "s"}"
+        days > 0L && hours > 0L -> "${plural(days, "day")} ${plural(hours, "hour")}"
+        days > 0L -> plural(days, "day")
+        hours > 0L && remainingMinutes > 0L -> "${plural(hours, "hour")} ${plural(remainingMinutes, "minute")}"
+        hours > 0L -> plural(hours, "hour")
         else -> "$minutes minute${if (minutes == 1L) "" else "s"}"
     }
+}
+
+private fun plural(value: Long, unit: String): String {
+    return "$value $unit${if (value == 1L) "" else "s"}"
 }
 
 private val StrictModeDurationType.label: String

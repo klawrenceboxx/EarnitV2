@@ -16,7 +16,11 @@ internal enum class StrictModeDurationType {
 }
 
 internal enum class StrictModeDeactivationMethod {
-    Countdown
+    Countdown,
+    ChargerWait,
+    Pin,
+    EmailApproval,
+    NfcTagOrSecurityFob
 }
 
 internal data class StrictModeConfiguration(
@@ -81,11 +85,12 @@ internal class StrictModeStore(
     fun beginActivation(configuration: StrictModeConfiguration): StrictModeState {
         require(isValidConfiguration(configuration)) { "Invalid Strict Mode configuration" }
         val now = nowMillis()
+        val graceEndsAt = safeAdd(now, ACTIVATION_GRACE_MILLIS) ?: now
         val updated = StrictModeState(
             lifecycleState = StrictModeLifecycleState.Activating,
             configuration = configuration,
             activationGraceStartedAtMillis = now,
-            activationGraceEndsAtMillis = now + ACTIVATION_GRACE_MILLIS
+            activationGraceEndsAtMillis = graceEndsAt
         )
         saveState(updated)
         return updated
@@ -108,10 +113,11 @@ internal class StrictModeStore(
         val countdownMillis = current.configuration.deactivationCountdownMillis ?: return current
         if (countdownMillis <= 0L) return current
         val now = nowMillis()
+        val availableAt = safeAdd(now, countdownMillis) ?: return current
         val updated = current.copy(
             lifecycleState = StrictModeLifecycleState.DeactivationCounting,
             deactivationStartedAtMillis = now,
-            deactivationAvailableAtMillis = now + countdownMillis
+            deactivationAvailableAtMillis = availableAt
         )
         saveState(updated)
         return updated
@@ -149,20 +155,51 @@ internal class StrictModeStore(
 
     fun isValidConfiguration(configuration: StrictModeConfiguration): Boolean {
         val durationValid = when (configuration.durationType) {
-            StrictModeDurationType.Timed -> (configuration.timedDurationMillis ?: 0L) > 0L
+            StrictModeDurationType.Timed -> (configuration.timedDurationMillis ?: 0L) in 1L..MAX_TIMED_DURATION_MILLIS
             StrictModeDurationType.Indefinite -> true
         }
         val countdownValid = configuration.deactivationMethod == StrictModeDeactivationMethod.Countdown &&
-            (configuration.deactivationCountdownMillis ?: 0L) > 0L
+            (configuration.deactivationCountdownMillis ?: 0L) in 1L..MAX_DEACTIVATION_COUNTDOWN_MILLIS
         return durationValid && countdownValid
     }
 
     private fun normalize(state: StrictModeState, now: Long): StrictModeState {
+        if (!isValidConfiguration(state.configuration)) {
+            return StrictModeState(configuration = StrictModeConfiguration())
+        }
+        if (state.activationGraceStartedAtMillis != null && state.activationGraceStartedAtMillis < 0L) {
+            return StrictModeState(configuration = state.configuration)
+        }
+        if (state.activatedAtMillis != null && state.activatedAtMillis < 0L) {
+            return StrictModeState(configuration = state.configuration)
+        }
+        if (state.expiresAtMillis != null && state.expiresAtMillis < 0L) {
+            return StrictModeState(configuration = state.configuration)
+        }
+        if (state.deactivationStartedAtMillis != null && state.deactivationStartedAtMillis < 0L) {
+            return state.copy(
+                lifecycleState = if (state.isProtectionLifecycle()) StrictModeLifecycleState.Active else state.lifecycleState,
+                deactivationStartedAtMillis = null,
+                deactivationAvailableAtMillis = null
+            )
+        }
+        if (state.deactivationAvailableAtMillis != null && state.deactivationAvailableAtMillis < 0L) {
+            return state.copy(
+                lifecycleState = if (state.isProtectionLifecycle()) StrictModeLifecycleState.Active else state.lifecycleState,
+                deactivationStartedAtMillis = null,
+                deactivationAvailableAtMillis = null
+            )
+        }
         if (state.lifecycleState == StrictModeLifecycleState.Activating) {
             val graceEndsAt = state.activationGraceEndsAtMillis ?: return StrictModeState(configuration = state.configuration)
+            val graceStartedAt = state.activationGraceStartedAtMillis ?: return StrictModeState(configuration = state.configuration)
+            if (graceEndsAt < graceStartedAt) return StrictModeState(configuration = state.configuration)
             if (now >= graceEndsAt) {
                 val expiresAt = if (state.configuration.durationType == StrictModeDurationType.Timed) {
-                    graceEndsAt + (state.configuration.timedDurationMillis ?: return StrictModeState(configuration = state.configuration))
+                    safeAdd(
+                        graceEndsAt,
+                        state.configuration.timedDurationMillis ?: return StrictModeState(configuration = state.configuration)
+                    ) ?: return StrictModeState(configuration = state.configuration)
                 } else {
                     null
                 }
@@ -183,9 +220,17 @@ internal class StrictModeStore(
         ) {
             return StrictModeState(configuration = state.configuration)
         }
+        if (state.isProtectionLifecycle() &&
+            state.configuration.durationType == StrictModeDurationType.Timed &&
+            (state.expiresAtMillis == null ||
+                (state.activatedAtMillis != null && state.expiresAtMillis < state.activatedAtMillis))
+        ) {
+            return StrictModeState(configuration = state.configuration)
+        }
         if (state.lifecycleState == StrictModeLifecycleState.DeactivationCounting) {
             val availableAt = state.deactivationAvailableAtMillis
-            if (availableAt == null || state.deactivationStartedAtMillis == null) {
+            val startedAt = state.deactivationStartedAtMillis
+            if (availableAt == null || startedAt == null || availableAt < startedAt) {
                 return state.copy(
                     lifecycleState = StrictModeLifecycleState.Active,
                     deactivationStartedAtMillis = null,
@@ -205,10 +250,14 @@ internal class StrictModeStore(
     }
 
     private fun readState(): StrictModeState {
+        val deactivationMethod = persistence.read(KEY_DEACTIVATION_METHOD)
+            ?.toDeactivationMethod()
+            ?.takeIf { it == StrictModeDeactivationMethod.Countdown }
+            ?: StrictModeDeactivationMethod.Countdown
         val configuration = StrictModeConfiguration(
             durationType = persistence.read(KEY_DURATION_TYPE)?.toDurationType() ?: StrictModeDurationType.Timed,
             timedDurationMillis = persistence.read(KEY_TIMED_DURATION_MILLIS)?.toLongOrNull() ?: 60 * 60_000L,
-            deactivationMethod = StrictModeDeactivationMethod.Countdown,
+            deactivationMethod = deactivationMethod,
             deactivationCountdownMillis = persistence.read(KEY_DEACTIVATION_COUNTDOWN_MILLIS)?.toLongOrNull() ?: 10 * 60_000L
         )
         return StrictModeState(
@@ -255,8 +304,19 @@ internal class StrictModeStore(
         return StrictModeDurationType.entries.firstOrNull { it.name == this }
     }
 
+    private fun String.toDeactivationMethod(): StrictModeDeactivationMethod? {
+        return StrictModeDeactivationMethod.entries.firstOrNull { it.name == this }
+    }
+
+    private fun safeAdd(left: Long, right: Long): Long? {
+        if (right < 0L) return null
+        return if (left > Long.MAX_VALUE - right) null else left + right
+    }
+
     companion object {
         const val ACTIVATION_GRACE_MILLIS = 30_000L
+        const val MAX_TIMED_DURATION_MILLIS = 30L * 24L * 60L * 60_000L
+        const val MAX_DEACTIVATION_COUNTDOWN_MILLIS = 24L * 60L * 60_000L
         private const val KEY_LIFECYCLE = "lifecycle"
         private const val KEY_DURATION_TYPE = "duration_type"
         private const val KEY_TIMED_DURATION_MILLIS = "timed_duration_millis"

@@ -135,6 +135,90 @@ class StrictModeStoreTest {
     }
 
     @Test
+    fun excessiveDurationsAreRejected() {
+        val store = store()
+        val tooLongTimed = StrictModeConfiguration(
+            durationType = StrictModeDurationType.Timed,
+            timedDurationMillis = StrictModeStore.MAX_TIMED_DURATION_MILLIS + 1L,
+            deactivationCountdownMillis = 10 * 60_000L
+        )
+        val tooLongCountdown = StrictModeConfiguration(
+            durationType = StrictModeDurationType.Indefinite,
+            timedDurationMillis = null,
+            deactivationCountdownMillis = StrictModeStore.MAX_DEACTIVATION_COUNTDOWN_MILLIS + 1L
+        )
+
+        assertFalse(store.isValidConfiguration(tooLongTimed))
+        assertFalse(store.isValidConfiguration(tooLongCountdown))
+    }
+
+    @Test
+    fun unsupportedPersistedDeactivationMethodFallsBackToCountdown() {
+        val persistence = MemoryStrictModePersistence()
+        persistence.write(
+            mapOf(
+                "deactivation_method" to StrictModeDeactivationMethod.Pin.name,
+                "deactivation_countdown_millis" to (10 * 60_000L).toString()
+            )
+        )
+
+        val configuration = store(persistence = persistence).state().configuration
+
+        assertEquals(StrictModeDeactivationMethod.Countdown, configuration.deactivationMethod)
+        assertTrue(store(persistence = persistence).isValidConfiguration(configuration))
+    }
+
+    @Test
+    fun invalidPersistedLifecycleRecoversToInactive() {
+        val persistence = MemoryStrictModePersistence()
+        persistence.write(mapOf("lifecycle" to "RemovedLifecycle"))
+
+        assertEquals(StrictModeLifecycleState.Inactive, store(persistence = persistence).state().lifecycleState)
+    }
+
+    @Test
+    fun invalidPersistedConfigurationClearsTransientState() {
+        val persistence = MemoryStrictModePersistence()
+        persistence.write(
+            mapOf(
+                "lifecycle" to StrictModeLifecycleState.Active.name,
+                "duration_type" to StrictModeDurationType.Timed.name,
+                "timed_duration_millis" to "0",
+                "deactivation_countdown_millis" to (10 * 60_000L).toString(),
+                "activated_at" to "31",
+                "expires_at" to "91"
+            )
+        )
+
+        val state = store(persistence = persistence).state()
+
+        assertEquals(StrictModeLifecycleState.Inactive, state.lifecycleState)
+        assertEquals(null, state.activatedAtMillis)
+        assertEquals(null, state.expiresAtMillis)
+    }
+
+    @Test
+    fun invalidPersistedTimestampsDoNotCrashAndFailSafely() {
+        val persistence = MemoryStrictModePersistence()
+        persistence.write(
+            mapOf(
+                "lifecycle" to StrictModeLifecycleState.DeactivationCounting.name,
+                "duration_type" to StrictModeDurationType.Indefinite.name,
+                "timed_duration_millis" to null,
+                "deactivation_countdown_millis" to (10 * 60_000L).toString(),
+                "deactivation_started_at" to "600000",
+                "deactivation_available_at" to "1000"
+            )
+        )
+
+        val state = store(persistence = persistence).state()
+
+        assertEquals(StrictModeLifecycleState.Active, state.lifecycleState)
+        assertEquals(null, state.deactivationStartedAtMillis)
+        assertEquals(null, state.deactivationAvailableAtMillis)
+    }
+
+    @Test
     fun beginDeactivationEntersPendingCountdownStateAndPersistsTimestamps() {
         var now = 1_000L
         val persistence = MemoryStrictModePersistence()
@@ -283,6 +367,30 @@ class StrictModeStoreTest {
 
         assertEquals(first.deactivationStartedAtMillis, second.deactivationStartedAtMillis)
         assertEquals(first.deactivationAvailableAtMillis, second.deactivationAvailableAtMillis)
+    }
+
+    @Test
+    fun repeatedCancelAndConfirmOperationsAreIdempotent() {
+        var now = 1_000L
+        val store = store(nowProvider = { now })
+        store.beginActivation(validTimedConfiguration())
+
+        val firstCancel = store.cancelActivation()
+        val secondCancel = store.cancelActivation()
+
+        assertEquals(firstCancel, secondCancel)
+
+        store.beginActivation(validTimedConfiguration())
+        now = 31_000L
+        store.state()
+        store.beginDeactivation()
+        now = 700_000L
+        store.state()
+
+        val firstConfirm = store.confirmDeactivation()
+        val secondConfirm = store.confirmDeactivation()
+
+        assertEquals(firstConfirm, secondConfirm)
     }
 
     private fun validTimedConfiguration(durationMillis: Long = 60 * 60_000L): StrictModeConfiguration {
