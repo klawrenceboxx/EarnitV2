@@ -528,9 +528,9 @@ class MainActivity : ComponentActivity() {
         refreshDashboardState()
     }
 
-    private fun pauseRuleFor(rule: EarnItRuleStore.Rule, durationMillis: Long) {
+    private fun pauseRuleFor(rule: EarnItRuleStore.Rule, durationMillis: Long, reason: String? = null) {
         val expiresAt = System.currentTimeMillis() + durationMillis.coerceAtLeast(1L)
-        EarnItPauseStore.pauseUntil(this, rule.id, expiresAt)
+        EarnItPauseStore.pauseUntil(this, rule.id, expiresAt, reason)
         EarnItRuleStore.setRuleEnabled(this, rule.id, false)
         refreshDashboardState()
     }
@@ -810,7 +810,7 @@ fun Dashboard(
     onSelectRuleType: (EarnItRuleStore.RuleType) -> Unit,
     onEditRule: (EarnItRuleStore.Rule) -> Unit,
     onToggleRuleEnabled: (EarnItRuleStore.Rule) -> Unit,
-    onPauseRuleFor: (EarnItRuleStore.Rule, Long) -> Unit,
+    onPauseRuleFor: (EarnItRuleStore.Rule, Long, String?) -> Unit,
     onResumeRule: (EarnItRuleStore.Rule) -> Unit,
     onPauseTimerTick: () -> Unit,
     onDeleteRule: (EarnItRuleStore.Rule) -> Unit,
@@ -1380,7 +1380,7 @@ fun DashboardPreview() {
             onSelectRuleType = {},
             onEditRule = {},
             onToggleRuleEnabled = {},
-            onPauseRuleFor = { _, _ -> },
+            onPauseRuleFor = { _, _, _ -> },
             onResumeRule = {},
             onPauseTimerTick = {},
             onDeleteRule = {},

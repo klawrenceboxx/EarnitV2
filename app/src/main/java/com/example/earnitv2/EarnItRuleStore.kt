@@ -123,7 +123,18 @@ object EarnItRuleStore {
 
     fun getRules(context: Context): List<Rule> {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val savedRules = decodeRules(prefs.getString(KEY_RULES, null))
+        val decodedRules = decodeRules(prefs.getString(KEY_RULES, null))
+        val expiredPauseRuleIds = EarnItPauseStore.expiredRuleIds(context)
+        val savedRules = if (expiredPauseRuleIds.isEmpty()) {
+            decodedRules
+        } else {
+            val resumedRules = decodedRules.map { rule ->
+                if (rule.id in expiredPauseRuleIds) rule.copy(enabled = true) else rule
+            }
+            expiredPauseRuleIds.forEach { EarnItPauseStore.clearPause(context, it) }
+            saveRules(context, resumedRules)
+            resumedRules
+        }
         if (savedRules.isNotEmpty() || prefs.getBoolean(KEY_RULES_INITIALIZED, false)) return savedRules
 
         val migratedRule = migratedSingleRule(context)

@@ -36,6 +36,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import java.util.Calendar
@@ -48,6 +50,8 @@ internal enum class RuleDetailTone {
 
 internal enum class RuleDetailOverflowAction {
     Edit,
+    QuickPause,
+    MorePauseOptions,
     Delete
 }
 
@@ -61,8 +65,8 @@ private enum class EditGateState {
 private enum class PauseSheetState {
     Hidden,
     Options,
-    Reason,
-    Counting
+    Counting,
+    Reason
 }
 
 internal data class PauseOption(
@@ -90,7 +94,7 @@ fun EarnItRuleDetail(
     onOpenUsageAccessSettings: () -> Unit,
     onOpenAccessibilitySettings: () -> Unit,
     onEditRule: (EarnItRuleStore.Rule) -> Unit,
-    onPauseRuleFor: (EarnItRuleStore.Rule, Long) -> Unit,
+    onPauseRuleFor: (EarnItRuleStore.Rule, Long, String?) -> Unit,
     onResumeRule: (EarnItRuleStore.Rule) -> Unit,
     onDeleteRule: (EarnItRuleStore.Rule) -> Unit,
     modifier: Modifier = Modifier
@@ -102,6 +106,7 @@ fun EarnItRuleDetail(
     var pauseSheetState by remember(rule.id) { mutableStateOf(PauseSheetState.Hidden) }
     var selectedPauseOption by remember(rule.id) { mutableStateOf<PauseOption?>(null) }
     var pauseReason by remember(rule.id) { mutableStateOf<String?>(null) }
+    var otherPauseReason by remember(rule.id) { mutableStateOf("") }
     var pauseCountdownSeconds by remember(rule.id) { mutableStateOf(10) }
     var customPauseMinutes by remember(rule.id) { mutableStateOf("45") }
 
@@ -129,6 +134,7 @@ fun EarnItRuleDetail(
                 delay(1_000)
                 pauseCountdownSeconds -= 1
             }
+            if (pauseSheetState == PauseSheetState.Counting) pauseSheetState = PauseSheetState.Reason
         }
     }
 
@@ -138,6 +144,57 @@ fun EarnItRuleDetail(
         isActiveNow = rule.enabled && rule.isActiveNow(),
         pauseCountdownLabel = pausedUntilMillis?.let { pauseCountdownLabel(it, nowMillis) }
     )
+
+    if (editGateState != EditGateState.Hidden) {
+        RuleManagementSurface(
+            title = "Edit Rule",
+            onBack = { editGateState = EditGateState.Hidden },
+            modifier = modifier
+        ) {
+            EditRuleGateCard(
+                state = editGateState,
+                countdownSeconds = editCountdownSeconds,
+                onStartCountdown = { editGateState = EditGateState.Counting },
+                onContinue = { onEditRule(rule) },
+                onCancel = { editGateState = EditGateState.Hidden }
+            )
+        }
+        return
+    }
+
+    if (pauseSheetState != PauseSheetState.Hidden) {
+        RuleManagementSurface(
+            title = "Pause this Rule?",
+            onBack = { pauseSheetState = PauseSheetState.Hidden },
+            modifier = modifier
+        ) {
+            PauseOptionsCard(
+                rule = rule,
+                state = pauseSheetState,
+                selectedOption = selectedPauseOption,
+                reason = pauseReason,
+                otherReason = otherPauseReason,
+                countdownSeconds = pauseCountdownSeconds,
+                customPauseMinutes = customPauseMinutes,
+                onCustomPauseMinutesChange = { customPauseMinutes = it.filter(Char::isDigit).take(4) },
+                onSelectOption = { option -> selectedPauseOption = option },
+                onContinueFromDuration = { pauseSheetState = PauseSheetState.Counting },
+                onUseCustomOption = {
+                    val minutes = customPauseMinutes.toLongOrNull()?.coerceAtLeast(1L) ?: 0L
+                    if (minutes > 0L) selectedPauseOption = PauseOption("Custom duration", minutes * 60_000L)
+                },
+                onSelectReason = { pauseReason = it },
+                onOtherReasonChange = { otherPauseReason = it.take(120) },
+                onConfirmPause = {
+                    selectedPauseOption?.let { onPauseRuleFor(rule, it.durationMillis, pauseReasonValue(pauseReason, otherPauseReason)) }
+                    pauseSheetState = PauseSheetState.Hidden
+                },
+                onCancel = { pauseSheetState = PauseSheetState.Hidden }
+            )
+        }
+        return
+    }
+
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -149,50 +206,10 @@ fun EarnItRuleDetail(
             rule = rule,
             onBack = onBack,
             onEditRule = { editGateState = EditGateState.Confirm },
+            onQuickPause = { onPauseRuleFor(rule, FIVE_MINUTES_MILLIS, null) },
+            onMorePauseOptions = { pauseSheetState = PauseSheetState.Options },
             onDeleteRule = onDeleteRule
         )
-
-        if (editGateState != EditGateState.Hidden) {
-            EditRuleGateCard(
-                state = editGateState,
-                countdownSeconds = editCountdownSeconds,
-                onStartCountdown = { editGateState = EditGateState.Counting },
-                onContinue = { onEditRule(rule) },
-                onCancel = { editGateState = EditGateState.Hidden }
-            )
-        }
-
-        if (pauseSheetState != PauseSheetState.Hidden) {
-            PauseOptionsCard(
-                rule = rule,
-                state = pauseSheetState,
-                selectedOption = selectedPauseOption,
-                reason = pauseReason,
-                countdownSeconds = pauseCountdownSeconds,
-                customPauseMinutes = customPauseMinutes,
-                onCustomPauseMinutesChange = { customPauseMinutes = it.filter(Char::isDigit).take(4) },
-                onSelectOption = { option ->
-                    selectedPauseOption = option
-                    pauseReason = null
-                    pauseSheetState = PauseSheetState.Reason
-                },
-                onUseCustomOption = {
-                    val minutes = customPauseMinutes.toLongOrNull()?.coerceAtLeast(1L) ?: 45L
-                    selectedPauseOption = PauseOption("Custom duration", minutes * 60_000L)
-                    pauseReason = null
-                    pauseSheetState = PauseSheetState.Reason
-                },
-                onSelectReason = {
-                    pauseReason = it
-                    pauseSheetState = PauseSheetState.Counting
-                },
-                onConfirmPause = {
-                    selectedPauseOption?.let { onPauseRuleFor(rule, it.durationMillis) }
-                    pauseSheetState = PauseSheetState.Hidden
-                },
-                onCancel = { pauseSheetState = PauseSheetState.Hidden }
-            )
-        }
 
         if (permissionState.needsAttention) {
             RuleDetailAttention(
@@ -205,9 +222,7 @@ fun EarnItRuleDetail(
         RuleStatusCard(
             ruleType = rule.type,
             state = statusState,
-            onResume = { onResumeRule(rule) },
-            onQuickPause = { onPauseRuleFor(rule, FIVE_MINUTES_MILLIS) },
-            onMorePauseOptions = { pauseSheetState = PauseSheetState.Options }
+            onResume = { onResumeRule(rule) }
         )
 
         when (rule.type) {
@@ -244,6 +259,8 @@ private fun RuleDetailTopBar(
     rule: EarnItRuleStore.Rule,
     onBack: () -> Unit,
     onEditRule: (EarnItRuleStore.Rule) -> Unit,
+    onQuickPause: () -> Unit,
+    onMorePauseOptions: () -> Unit,
     onDeleteRule: (EarnItRuleStore.Rule) -> Unit
 ) {
     Row(
@@ -258,6 +275,8 @@ private fun RuleDetailTopBar(
         RuleDetailOverflowMenu(
             actions = ruleDetailOverflowActions(rule),
             onEdit = { onEditRule(rule) },
+            onQuickPause = onQuickPause,
+            onMorePauseOptions = onMorePauseOptions,
             onDelete = { onDeleteRule(rule) }
         )
     }
@@ -267,12 +286,17 @@ private fun RuleDetailTopBar(
 private fun RuleDetailOverflowMenu(
     actions: List<RuleDetailOverflowAction>,
     onEdit: () -> Unit,
+    onQuickPause: () -> Unit,
+    onMorePauseOptions: () -> Unit,
     onDelete: () -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
     Box {
-        TextButton(onClick = { expanded = true }) {
-            Text(text = "...")
+        TextButton(
+            onClick = { expanded = true },
+            modifier = Modifier.semantics { contentDescription = "More options" }
+        ) {
+            Text(text = "⋮")
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             actions.forEach { action ->
@@ -288,6 +312,8 @@ private fun RuleDetailOverflowMenu(
                         expanded = false
                         when (action) {
                             RuleDetailOverflowAction.Edit -> onEdit()
+                            RuleDetailOverflowAction.QuickPause -> onQuickPause()
+                            RuleDetailOverflowAction.MorePauseOptions -> onMorePauseOptions()
                             RuleDetailOverflowAction.Delete -> onDelete()
                         }
                     }
@@ -328,9 +354,7 @@ private fun RuleDetailAttention(
 private fun RuleStatusCard(
     ruleType: EarnItRuleStore.RuleType,
     state: RuleDetailStatusCardState,
-    onResume: () -> Unit,
-    onQuickPause: () -> Unit,
-    onMorePauseOptions: () -> Unit
+    onResume: () -> Unit
 ) {
     val accent = ruleDetailAccentColor(state.tone)
     SectionContainer(borderColor = accent) {
@@ -351,17 +375,44 @@ private fun RuleStatusCard(
             }
         }
         if (state.showResume) {
-            Button(onClick = onResume, modifier = Modifier.fillMaxWidth()) {
+            Button(
+                onClick = onResume,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .semantics { contentDescription = "Resume Rule" }
+            ) {
                 Text(text = "Resume now")
             }
-        } else {
-            Button(onClick = onQuickPause, modifier = Modifier.fillMaxWidth()) {
-                Text(text = "Pause for 5 minutes")
-            }
-            TextButton(onClick = onMorePauseOptions, modifier = Modifier.fillMaxWidth()) {
-                Text(text = "More pause options")
-            }
         }
+    }
+}
+
+@Composable
+private fun RuleManagementSurface(
+    title: String,
+    onBack: () -> Unit,
+    modifier: Modifier = Modifier,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            TextButton(onClick = onBack) {
+                Text(text = "< Back")
+            }
+            Text(text = title, style = MaterialTheme.typography.headlineSmall)
+            Box(modifier = Modifier.size(64.dp))
+        }
+        content()
     }
 }
 
@@ -418,22 +469,30 @@ private fun PauseOptionsCard(
     state: PauseSheetState,
     selectedOption: PauseOption?,
     reason: String?,
+    otherReason: String,
     countdownSeconds: Int,
     customPauseMinutes: String,
     onCustomPauseMinutesChange: (String) -> Unit,
     onSelectOption: (PauseOption) -> Unit,
+    onContinueFromDuration: () -> Unit,
     onUseCustomOption: () -> Unit,
     onSelectReason: (String) -> Unit,
+    onOtherReasonChange: (String) -> Unit,
     onConfirmPause: () -> Unit,
     onCancel: () -> Unit
 ) {
     SectionContainer {
         when (state) {
             PauseSheetState.Options -> {
-                Text(text = "More pause options", style = MaterialTheme.typography.titleLarge)
+                Text(text = "Pause this Rule?", style = MaterialTheme.typography.titleLarge)
+                Text(
+                    text = "Longer pauses require a short wait and a reason.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
                 pauseOptionsForRule(rule).forEach { option ->
                     OutlinedButton(onClick = { onSelectOption(option) }, modifier = Modifier.fillMaxWidth()) {
-                        Text(text = option.label)
+                        Text(text = if (selectedOption == option) "${option.label} selected" else option.label)
                     }
                 }
                 Text(text = "Custom duration", style = MaterialTheme.typography.titleSmall)
@@ -445,33 +504,50 @@ private fun PauseOptionsCard(
                         modifier = Modifier.weight(1f)
                     )
                     OutlinedButton(onClick = onUseCustomOption) {
-                        Text(text = "Use")
+                        Text(text = "Select")
                     }
+                }
+                Button(
+                    onClick = onContinueFromDuration,
+                    enabled = selectedOption != null,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(text = "Continue")
+                }
+            }
+            PauseSheetState.Counting -> {
+                Text(text = finalPauseActionLabel(selectedOption), style = MaterialTheme.typography.titleLarge)
+                CountdownBlock(title = "Pause available in", seconds = countdownSeconds)
+                Text(
+                    text = "You can still cancel if you change your mind.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Button(onClick = {}, enabled = false, modifier = Modifier.fillMaxWidth()) {
+                    Text(text = finalPauseActionLabel(selectedOption))
                 }
             }
             PauseSheetState.Reason -> {
                 Text(text = "Why are you pausing this Rule?", style = MaterialTheme.typography.titleLarge)
                 pauseReasonOptions().forEach { option ->
                     OutlinedButton(onClick = { onSelectReason(option) }, modifier = Modifier.fillMaxWidth()) {
-                        Text(text = option)
+                        Text(text = if (reason == option) "$option selected" else option)
                     }
                 }
-            }
-            PauseSheetState.Counting -> {
-                Text(text = "Pause Rule?", style = MaterialTheme.typography.titleLarge)
-                Text(text = selectedOption?.label.orEmpty(), style = MaterialTheme.typography.bodyLarge)
-                Text(
-                    text = "Reason: ${reason.orEmpty()}",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                CountdownBlock(title = "Pause available in", seconds = countdownSeconds)
+                if (reason == "Other") {
+                    OutlinedTextField(
+                        value = otherReason,
+                        onValueChange = onOtherReasonChange,
+                        label = { Text(text = "Optional note") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
                 Button(
                     onClick = onConfirmPause,
-                    enabled = countdownSeconds <= 0,
+                    enabled = reason != null,
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text(text = "Pause Rule")
+                    Text(text = finalPauseActionLabel(selectedOption))
                 }
             }
             PauseSheetState.Hidden -> Unit
@@ -757,6 +833,10 @@ private fun ruleDetailAccentColor(tone: RuleDetailTone): Color {
 internal fun ruleDetailOverflowActions(rule: EarnItRuleStore.Rule): List<RuleDetailOverflowAction> {
     return buildList {
         add(RuleDetailOverflowAction.Edit)
+        if (rule.enabled) {
+            add(RuleDetailOverflowAction.QuickPause)
+            add(RuleDetailOverflowAction.MorePauseOptions)
+        }
         add(RuleDetailOverflowAction.Delete)
     }
 }
@@ -764,6 +844,8 @@ internal fun ruleDetailOverflowActions(rule: EarnItRuleStore.Rule): List<RuleDet
 internal fun ruleDetailOverflowActionLabel(action: RuleDetailOverflowAction): String {
     return when (action) {
         RuleDetailOverflowAction.Edit -> "Edit Rule"
+        RuleDetailOverflowAction.QuickPause -> "Pause for 5 minutes"
+        RuleDetailOverflowAction.MorePauseOptions -> "More pause options"
         RuleDetailOverflowAction.Delete -> "Delete Rule"
     }
 }
@@ -864,14 +946,33 @@ internal fun pauseOptionsForRule(rule: EarnItRuleStore.Rule, nowMillis: Long = S
     )
 }
 
-private fun pauseReasonOptions(): List<String> {
+internal fun pauseReasonOptions(): List<String> {
     return listOf(
-        "I need a short break",
-        "I have important work to do",
-        "Family / personal time",
-        "Unexpected situation",
+        "My plans changed unexpectedly",
+        "I need to handle something important right now",
+        "This Rule does not fit what I need to do today",
+        "The Rule may be too strict",
+        "Something is not working correctly",
         "Other"
     )
+}
+
+internal fun finalPauseActionLabel(option: PauseOption?): String {
+    return when (option?.label) {
+        null -> "Pause Rule"
+        "Until tomorrow" -> "Pause until tomorrow"
+        "Until next scheduled period" -> "Pause until next scheduled period"
+        "Custom duration" -> "Pause for custom duration"
+        else -> "Pause for ${option.label.lowercase()}"
+    }
+}
+
+internal fun pauseReasonValue(reason: String?, otherReason: String): String? {
+    return if (reason == "Other" && otherReason.isNotBlank()) {
+        "Other: ${otherReason.trim()}"
+    } else {
+        reason
+    }
 }
 
 internal fun earnAppProgressLabel(productiveUsageSeconds: Long?, earnAppCount: Int): String {

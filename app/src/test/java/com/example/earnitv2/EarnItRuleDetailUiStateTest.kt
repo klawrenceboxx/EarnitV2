@@ -8,14 +8,24 @@ import org.junit.Test
 
 class EarnItRuleDetailUiStateTest {
     @Test
-    fun activeOverflowMenu_keepsEditAndDeleteOnly() {
+    fun activeOverflowMenu_containsSharedManagementActions() {
         assertEquals(
             listOf(
                 RuleDetailOverflowAction.Edit,
+                RuleDetailOverflowAction.QuickPause,
+                RuleDetailOverflowAction.MorePauseOptions,
                 RuleDetailOverflowAction.Delete
             ),
             ruleDetailOverflowActions(earnRule(enabled = true))
         )
+    }
+
+    @Test
+    fun overflowActionLabelsUseFinalCopy() {
+        assertEquals("Edit Rule", ruleDetailOverflowActionLabel(RuleDetailOverflowAction.Edit))
+        assertEquals("Pause for 5 minutes", ruleDetailOverflowActionLabel(RuleDetailOverflowAction.QuickPause))
+        assertEquals("More pause options", ruleDetailOverflowActionLabel(RuleDetailOverflowAction.MorePauseOptions))
+        assertEquals("Delete Rule", ruleDetailOverflowActionLabel(RuleDetailOverflowAction.Delete))
     }
 
     @Test
@@ -56,6 +66,30 @@ class EarnItRuleDetailUiStateTest {
             labels
         )
         assertFalse(labels.contains("Pause until manually resumed"))
+    }
+
+    @Test
+    fun finalPauseActionLabelReflectsDuration() {
+        assertEquals("Pause for 30 minutes", finalPauseActionLabel(PauseOption("30 minutes", 30 * 60_000L)))
+        assertEquals("Pause until tomorrow", finalPauseActionLabel(PauseOption("Until tomorrow", 60_000L)))
+        assertEquals("Pause until next scheduled period", finalPauseActionLabel(PauseOption("Until next scheduled period", 60_000L)))
+    }
+
+    @Test
+    fun pauseReasonsUseReflectiveCopyAndOptionalOtherText() {
+        assertEquals(
+            listOf(
+                "My plans changed unexpectedly",
+                "I need to handle something important right now",
+                "This Rule does not fit what I need to do today",
+                "The Rule may be too strict",
+                "Something is not working correctly",
+                "Other"
+            ),
+            pauseReasonOptions()
+        )
+        assertEquals("Other: app bug", pauseReasonValue("Other", " app bug "))
+        assertEquals("Other", pauseReasonValue("Other", ""))
     }
 
     @Test
