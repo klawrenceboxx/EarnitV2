@@ -33,7 +33,7 @@ class BlockedRequirementUiStateTest {
 
         assertEquals(listOf("duo", "headspace"), rows.map { it.packageName })
         assertEquals(listOf("Open Duolingo", "Open Headspace"), rows.map { "Open ${it.name}" })
-        assertEquals(listOf("0 / 10 min", "4 min / 10 min"), rows.map { it.progressLabel })
+        assertEquals(listOf("0 / 10 min", "4 / 10 min"), rows.map { it.progressLabel })
     }
 
     @Test

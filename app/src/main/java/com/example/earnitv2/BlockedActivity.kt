@@ -259,48 +259,6 @@ fun blockedDescription(reason: RuleAccessEvaluator.DenialReason, blockedAppName:
     }
 }
 
-data class BlockedRequirementUiState(
-    val packageName: String,
-    val name: String,
-    val progressSeconds: Long?,
-    val requiredSeconds: Long
-) {
-    val complete: Boolean = progressSeconds?.let { it >= requiredSeconds } ?: false
-    val progressLabel: String = progressSeconds?.let { progress ->
-        "${formatProgressMinutes(progress)} / ${formatWholeMinutes(requiredSeconds)}"
-    } ?: "${formatWholeMinutes(requiredSeconds)} required"
-}
-
-fun blockedRequirementUiStates(
-    rule: EarnItRuleStore.Rule,
-    progressSeconds: Map<String, Long>
-): List<BlockedRequirementUiState> {
-    if (rule.type != EarnItRuleStore.RuleType.CompleteToUnlock) return emptyList()
-    return rule.requirements.map { requirement ->
-        val packageName = requirement.app.packageName
-        BlockedRequirementUiState(
-            packageName = packageName,
-            name = requirement.app.name,
-            progressSeconds = progressSeconds[packageName]?.coerceAtLeast(0L),
-            requiredSeconds = requirement.requiredSeconds.coerceAtLeast(0L)
-        )
-    }.filterNot { it.complete }
-}
-
-private fun formatWholeMinutes(totalSeconds: Long): String {
-    val minutes = totalSeconds.coerceAtLeast(0L) / 60L
-    return when {
-        totalSeconds <= 0L -> "0 min"
-        minutes > 0L -> "${minutes} min"
-        else -> "<1 min"
-    }
-}
-
-private fun formatProgressMinutes(totalSeconds: Long): String {
-    val minutes = totalSeconds.coerceAtLeast(0L) / 60L
-    return if (minutes == 0L) "0" else "${minutes} min"
-}
-
 @Composable
 private fun RequirementsRemaining(
     requirements: List<BlockedRequirementUiState>,

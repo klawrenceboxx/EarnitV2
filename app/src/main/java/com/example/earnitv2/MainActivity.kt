@@ -45,7 +45,8 @@ import kotlinx.coroutines.delay
 data class RuleDashboardState(
     val rule: EarnItRuleStore.Rule,
     val productiveUsageSeconds: Long,
-    val remainingRewardSeconds: Long
+    val remainingRewardSeconds: Long,
+    val requirementProgressSeconds: Map<String, Long> = emptyMap()
 )
 
 internal enum class RuleBuilderEntryContext {
@@ -364,7 +365,12 @@ class MainActivity : ComponentActivity() {
                 RuleDashboardState(
                     rule = rule,
                     productiveUsageSeconds = 0L,
-                    remainingRewardSeconds = RewardLedger.snapshot(this, rule).remainingRewardSeconds
+                    remainingRewardSeconds = RewardLedger.snapshot(this, rule).remainingRewardSeconds,
+                    requirementProgressSeconds = if (rule.type == EarnItRuleStore.RuleType.CompleteToUnlock) {
+                        RewardLedger.completionProgress(this, rule)
+                    } else {
+                        emptyMap()
+                    }
                 )
             }
             usageStatusMessage = "Usage Access is off."
@@ -373,6 +379,18 @@ class MainActivity : ComponentActivity() {
 
         ruleStates = savedRules.map { rule ->
             val productiveSeconds = if (rule.enabled) getTodayActiveProductiveUsageSeconds(rule) else 0L
+            val requirementProgress = if (rule.enabled && rule.type == EarnItRuleStore.RuleType.CompleteToUnlock) {
+                RewardLedger.creditCompletionProgress(
+                    context = this,
+                    rule = rule,
+                    usageStatsManager = getSystemService(UsageStatsManager::class.java),
+                    includeTrackedHandoffs = true
+                )
+            } else if (rule.type == EarnItRuleStore.RuleType.CompleteToUnlock) {
+                RewardLedger.completionProgress(this, rule)
+            } else {
+                emptyMap()
+            }
             val snapshot = if (rule.enabled) {
                 RewardLedger.creditProductiveUsage(this, rule, productiveSeconds)
             } else {
@@ -381,7 +399,8 @@ class MainActivity : ComponentActivity() {
             RuleDashboardState(
                 rule = rule,
                 productiveUsageSeconds = productiveSeconds,
-                remainingRewardSeconds = snapshot.remainingRewardSeconds
+                remainingRewardSeconds = snapshot.remainingRewardSeconds,
+                requirementProgressSeconds = requirementProgress
             )
         }
         usageStatusMessage = if (savedRules.any { it.enabled }) {
