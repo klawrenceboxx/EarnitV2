@@ -3,6 +3,7 @@ package com.example.earnitv2
 import android.app.AppOpsManager
 import android.app.TimePickerDialog
 import android.app.usage.UsageStatsManager
+import android.content.ActivityNotFoundException
 import android.content.ComponentName
 import android.content.Intent
 import android.os.Bundle
@@ -805,7 +806,7 @@ class MainActivity : ComponentActivity() {
 
     private fun getTodayActiveProductiveUsageSeconds(rule: EarnItRuleStore.Rule): Long {
         val usageStatsManager = getSystemService(UsageStatsManager::class.java)
-        return RewardLedger.activeProductiveUsageSecondsToday(usageStatsManager, rule)
+        return RewardLedger.activeProductiveUsageSecondsToday(this, usageStatsManager, rule)
     }
 
     private fun isAccessibilityServiceEnabled(): Boolean {
@@ -836,7 +837,16 @@ class MainActivity : ComponentActivity() {
 
     private fun openEarnApp(packageName: String) {
         val launchIntent = packageManager.getLaunchIntentForPackage(packageName) ?: return
-        startActivity(launchIntent)
+        TrackedAppLaunchStore.registerPendingLaunch(
+            context = this,
+            logicalPackageName = packageName,
+            launchedPackageName = launchIntent.targetPackageName(packageName)
+        )
+        try {
+            startActivity(launchIntent)
+        } catch (_: ActivityNotFoundException) {
+            TrackedAppLaunchStore.savePendingLaunch(this, null)
+        }
     }
 
     private fun completeFirstLaunchAndCreateRule() {

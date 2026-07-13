@@ -4,9 +4,11 @@ import android.accessibilityservice.AccessibilityService
 import android.app.AppOpsManager
 import android.app.usage.UsageStatsManager
 import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import java.util.Calendar
 
@@ -17,6 +19,7 @@ class EarnItAccessibilityService : AccessibilityService() {
     private var activeBlockedAppName: String? = null
     private var activeRule: EarnItRuleStore.Rule? = null
     private var lastConsumptionAt = 0L
+    private var handoffTracker: TrackedAppHandoffTracker? = null
 
     private val consumeRunnable = object : Runnable {
         override fun run() {
@@ -45,12 +48,22 @@ class EarnItAccessibilityService : AccessibilityService() {
         if (event?.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
 
         val foregroundPackage = event.packageName?.toString() ?: return
+        val foregroundClass = event.className?.toString()
+        val eventAtMillis = System.currentTimeMillis()
+        val rules = EarnItRuleStore.getRules(this)
+        handleTrackedAppForeground(
+            rules = rules,
+            foregroundPackage = foregroundPackage,
+            className = foregroundClass,
+            eventType = event.eventType,
+            eventAtMillis = eventAtMillis
+        )
+
         if (foregroundPackage == packageName) {
             stopActiveBlockedUsage()
             return
         }
 
-        val rules = EarnItRuleStore.getRules(this)
         creditLatestProgress(rules)
 
         val result = evaluateAccess(rules, foregroundPackage)
@@ -75,9 +88,12 @@ class EarnItAccessibilityService : AccessibilityService() {
         launchBlockedActivity(primaryDenial.rule, blockedApp.name, blockedApp.packageName, primaryDenial.reason)
     }
 
-    override fun onInterrupt() = Unit
+    override fun onInterrupt() {
+        stopTrackedAppHandoffSession()
+    }
 
     override fun onDestroy() {
+        stopTrackedAppHandoffSession()
         stopActiveBlockedUsage()
         super.onDestroy()
     }
@@ -145,15 +161,95 @@ class EarnItAccessibilityService : AccessibilityService() {
         rules.filter { it.enabled }.forEach { rule ->
             when (rule.type) {
                 EarnItRuleStore.RuleType.EarnRewardTime -> {
-                    val productiveSecondsToday = RewardLedger.activeProductiveUsageSecondsToday(usageStatsManager, rule)
+                    val productiveSecondsToday = RewardLedger.activeProductiveUsageSecondsToday(this, usageStatsManager, rule)
                     RewardLedger.creditProductiveUsage(this, rule, productiveSecondsToday)
                 }
                 EarnItRuleStore.RuleType.CompleteToUnlock -> {
-                    RewardLedger.creditCompletionProgress(this, rule, usageStatsManager)
+                    RewardLedger.creditCompletionProgress(this, rule, usageStatsManager, includeTrackedHandoffs = true)
                 }
                 EarnItRuleStore.RuleType.ScheduledBlock -> Unit
             }
         }
+    }
+
+    private fun handleTrackedAppForeground(
+        rules: List<EarnItRuleStore.Rule>,
+        foregroundPackage: String,
+        className: String?,
+        eventType: Int,
+        eventAtMillis: Long
+    ) {
+        val tracker = handoffTracker ?: TrackedAppHandoffTracker(
+            pendingLaunch = TrackedAppLaunchStore.readPendingLaunch(this),
+            activeSession = TrackedAppLaunchStore.readActiveSession(this)
+        ).also { handoffTracker = it }
+        val result = tracker.onForegroundPackage(foregroundPackage, eventAtMillis)
+
+        result.endedSession?.let { session ->
+            RewardLedger.creditTrackedAppHandoff(
+                context = this,
+                rules = rules,
+                logicalPackageName = session.logicalPackageName,
+                startedAtMillis = session.startedAtMillis,
+                endedAtMillis = result.endedAtMillis ?: eventAtMillis
+            )
+        }
+
+        if (result.resolvedPending != null || result.clearedExpiredPending != null) {
+            TrackedAppLaunchStore.savePendingLaunch(this, tracker.pendingLaunch())
+        }
+        if (result.startedSession != null || result.endedSession != null) {
+            TrackedAppLaunchStore.saveActiveSession(this, tracker.activeSession())
+        }
+
+        logTrackedAppForeground(
+            timestamp = eventAtMillis,
+            packageName = foregroundPackage,
+            className = className,
+            eventType = eventType,
+            pendingLogicalPackage = tracker.pendingLaunch()?.logicalPackageName,
+            activeLogicalPackage = tracker.activeSession()?.logicalPackageName,
+            activeActualPackage = tracker.activeSession()?.actualForegroundPackageName,
+            startedHandoff = result.startedSession != null,
+            endedHandoff = result.endedSession != null
+        )
+    }
+
+    private fun stopTrackedAppHandoffSession() {
+        val tracker = handoffTracker ?: TrackedAppHandoffTracker(
+            pendingLaunch = TrackedAppLaunchStore.readPendingLaunch(this),
+            activeSession = TrackedAppLaunchStore.readActiveSession(this)
+        ).also { handoffTracker = it }
+        val result = tracker.stopActiveSession(System.currentTimeMillis())
+        val session = result.endedSession ?: return
+        RewardLedger.creditTrackedAppHandoff(
+            context = this,
+            rules = EarnItRuleStore.getRules(this),
+            logicalPackageName = session.logicalPackageName,
+            startedAtMillis = session.startedAtMillis,
+            endedAtMillis = result.endedAtMillis ?: System.currentTimeMillis()
+        )
+        TrackedAppLaunchStore.saveActiveSession(this, null)
+    }
+
+    private fun logTrackedAppForeground(
+        timestamp: Long,
+        packageName: String,
+        className: String?,
+        eventType: Int,
+        pendingLogicalPackage: String?,
+        activeLogicalPackage: String?,
+        activeActualPackage: String?,
+        startedHandoff: Boolean,
+        endedHandoff: Boolean
+    ) {
+        if (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE == 0) return
+        Log.d(
+            TAG,
+            "foreground timestamp=$timestamp package=$packageName class=$className eventType=$eventType " +
+                "pendingLogical=$pendingLogicalPackage activeLogical=$activeLogicalPackage " +
+                "activeActual=$activeActualPackage startedHandoff=$startedHandoff endedHandoff=$endedHandoff"
+        )
     }
 
     private fun hasUsageAccess(): Boolean {
@@ -213,6 +309,7 @@ class EarnItAccessibilityService : AccessibilityService() {
     }
 
     private companion object {
+        const val TAG = "EarnItAccessibility"
         const val CONSUMPTION_TICK_MILLIS = 1_000L
         const val BLOCKED_ACTIVITY_DEBOUNCE_MILLIS = 2_000L
     }

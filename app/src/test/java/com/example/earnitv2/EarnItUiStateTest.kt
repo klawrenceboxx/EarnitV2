@@ -5,6 +5,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.Calendar
 
 class EarnItUiStateTest {
     @Test
@@ -218,10 +219,11 @@ class EarnItUiStateTest {
 
     @Test
     fun homeRuleUiState_scheduledBlockInactiveUsesClearState() {
+        val inactiveDay = if (todayEarnItDay() == 1) 2 else 1
         val state = homeRuleUiState(
             state = RuleDashboardState(
                 rule = scheduledBlockRule().copy(
-                    activeDays = setOf(1),
+                    activeDays = setOf(inactiveDay),
                     startMinute = 9 * 60,
                     endMinute = 10 * 60,
                     timeWindows = listOf(EarnItRuleStore.TimeWindow(9 * 60, 10 * 60))
@@ -234,9 +236,34 @@ class EarnItUiStateTest {
         )
 
         assertEquals("Not blocking now", state.primaryText)
-        assertEquals("Mon · 9:00 AM-10:00 AM", state.secondaryText)
+        assertTrue(state.secondaryText.orEmpty().startsWith(earnItDayLabel(inactiveDay)))
+        assertTrue(state.secondaryText.orEmpty().endsWith("9:00 AM-10:00 AM"))
         assertEquals("Outside block schedule", state.statusText)
         assertNull(state.earnContextText)
+    }
+
+    private fun todayEarnItDay(): Int {
+        return when (Calendar.getInstance().get(Calendar.DAY_OF_WEEK)) {
+            Calendar.MONDAY -> 1
+            Calendar.TUESDAY -> 2
+            Calendar.WEDNESDAY -> 3
+            Calendar.THURSDAY -> 4
+            Calendar.FRIDAY -> 5
+            Calendar.SATURDAY -> 6
+            else -> 7
+        }
+    }
+
+    private fun earnItDayLabel(day: Int): String {
+        return when (day) {
+            1 -> "Mon"
+            2 -> "Tue"
+            3 -> "Wed"
+            4 -> "Thu"
+            5 -> "Fri"
+            6 -> "Sat"
+            else -> "Sun"
+        }
     }
 
     private fun sampleRule(): EarnItRuleStore.Rule {

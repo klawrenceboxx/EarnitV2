@@ -118,9 +118,15 @@ class BlockedActivity : ComponentActivity() {
 
         fallbackMessage = null
         launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        TrackedAppLaunchStore.registerPendingLaunch(
+            context = this,
+            logicalPackageName = packageName,
+            launchedPackageName = launchIntent.targetPackageName(packageName)
+        )
         try {
             startActivity(launchIntent)
         } catch (_: ActivityNotFoundException) {
+            TrackedAppLaunchStore.savePendingLaunch(this, null)
             fallbackMessage = "$appName could not be opened on this device."
         }
     }

@@ -17,6 +17,7 @@ object RewardLedger {
     private const val KEY_REWARD_ISSUED_SECONDS = "reward_issued_seconds"
     private const val KEY_REWARD_CONSUMED_SECONDS = "reward_consumed_seconds"
     private const val KEY_REQUIREMENT_PROGRESS_SECONDS = "requirement_progress_seconds"
+    private const val KEY_TRACKED_HANDOFF_SECONDS = "tracked_handoff_seconds"
 
     data class Snapshot(
         val productiveCreditedSeconds: Long,
@@ -140,6 +141,26 @@ object RewardLedger {
         return totalMillis / 1_000L
     }
 
+    fun activeProductiveUsageSecondsToday(
+        context: Context,
+        usageStatsManager: UsageStatsManager,
+        rule: EarnItRuleStore.Rule
+    ): Long {
+        return rule.earnAppPackages.sumOf { packageName ->
+            activeAppUsageSecondsToday(context, usageStatsManager, rule, packageName)
+        }
+    }
+
+    fun activeAppUsageSecondsToday(
+        context: Context,
+        usageStatsManager: UsageStatsManager,
+        rule: EarnItRuleStore.Rule,
+        packageName: String
+    ): Long {
+        return activeAppUsageSecondsToday(usageStatsManager, rule, packageName) +
+            trackedHandoffSeconds(context, rule, packageName)
+    }
+
     @Synchronized
     fun creditCompletionProgress(
         context: Context,
@@ -158,6 +179,60 @@ object RewardLedger {
         }
         editor.commit()
         return updates
+    }
+
+    @Synchronized
+    fun creditCompletionProgress(
+        context: Context,
+        rule: EarnItRuleStore.Rule,
+        usageStatsManager: UsageStatsManager,
+        includeTrackedHandoffs: Boolean
+    ): Map<String, Long> {
+        if (!includeTrackedHandoffs) {
+            return creditCompletionProgress(context, rule, usageStatsManager)
+        }
+
+        val prefs = currentPrefs(context, rule)
+        val updates = rule.requirements.associate { requirement ->
+            val progress = activeAppUsageSecondsToday(context, usageStatsManager, rule, requirement.app.packageName)
+                .coerceAtLeast(0L)
+            requirement.app.packageName to progress
+        }
+        val editor = prefs.edit()
+        updates.forEach { (packageName, progress) ->
+            editor.putLong(requirementKey(rule, packageName), progress)
+        }
+        editor.commit()
+        return updates
+    }
+
+    @Synchronized
+    fun creditTrackedAppHandoff(
+        context: Context,
+        rules: List<EarnItRuleStore.Rule>,
+        logicalPackageName: String,
+        startedAtMillis: Long,
+        endedAtMillis: Long
+    ) {
+        if (endedAtMillis <= startedAtMillis) return
+        rules.filter { it.enabled }.forEach { rule ->
+            val shouldCredit = when (rule.type) {
+                EarnItRuleStore.RuleType.EarnRewardTime -> logicalPackageName in rule.earnAppPackages
+                EarnItRuleStore.RuleType.CompleteToUnlock -> rule.requirements.any {
+                    it.app.packageName == logicalPackageName
+                }
+                EarnItRuleStore.RuleType.ScheduledBlock -> false
+            }
+            if (!shouldCredit) return@forEach
+
+            val activeSeconds = activeOverlapMillis(startedAtMillis, endedAtMillis, rule) / 1_000L
+            if (activeSeconds <= 0L) return@forEach
+
+            val prefs = currentPrefs(context, rule)
+            val key = trackedHandoffKey(rule, logicalPackageName)
+            val updated = prefs.getLong(key, 0L) + activeSeconds
+            prefs.edit().putLong(key, updated).commit()
+        }
     }
 
     @Synchronized
@@ -208,7 +283,10 @@ object RewardLedger {
             migrateLegacyLedgerIfPresent(prefs, rule, today, ruleSignature)
         }
         if (prefs.getString(dayKey, null) != today || prefs.getString(signatureKey, null) != ruleSignature) {
-            prefs.edit()
+            val editor = prefs.edit()
+            clearRulePackageKeys(prefs, editor, rule, KEY_REQUIREMENT_PROGRESS_SECONDS)
+            clearRulePackageKeys(prefs, editor, rule, KEY_TRACKED_HANDOFF_SECONDS)
+            editor
                 .putString(dayKey, today)
                 .putString(signatureKey, ruleSignature)
                 .putLong(ruleKey(rule, KEY_PRODUCTIVE_CREDITED_SECONDS), 0L)
@@ -256,6 +334,24 @@ object RewardLedger {
 
     private fun requirementKey(rule: EarnItRuleStore.Rule, packageName: String): String {
         return "${rule.id}_${KEY_REQUIREMENT_PROGRESS_SECONDS}_$packageName"
+    }
+
+    private fun trackedHandoffSeconds(context: Context, rule: EarnItRuleStore.Rule, packageName: String): Long {
+        return currentPrefs(context, rule).getLong(trackedHandoffKey(rule, packageName), 0L)
+    }
+
+    private fun trackedHandoffKey(rule: EarnItRuleStore.Rule, packageName: String): String {
+        return "${rule.id}_${KEY_TRACKED_HANDOFF_SECONDS}_$packageName"
+    }
+
+    private fun clearRulePackageKeys(
+        prefs: SharedPreferences,
+        editor: SharedPreferences.Editor,
+        rule: EarnItRuleStore.Rule,
+        key: String
+    ) {
+        val prefix = "${rule.id}_${key}_"
+        prefs.all.keys.filter { it.startsWith(prefix) }.forEach { editor.remove(it) }
     }
 
     private fun EarnItRuleStore.Rule.signature(): String {
