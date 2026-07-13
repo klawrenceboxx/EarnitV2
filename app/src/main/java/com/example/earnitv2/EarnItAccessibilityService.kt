@@ -49,6 +49,12 @@ class EarnItAccessibilityService : AccessibilityService() {
 
         val foregroundPackage = event.packageName?.toString() ?: return
         val foregroundClass = event.className?.toString()
+
+        Log.d(
+            "EarnItForeground",
+            "package=$foregroundPackage class=$foregroundClass event=${event.eventType}"
+        )
+
         val eventAtMillis = System.currentTimeMillis()
         val rules = EarnItRuleStore.getRules(this)
         handleTrackedAppForeground(

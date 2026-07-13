@@ -280,11 +280,12 @@ class EarnItUiStateTest {
         assertEquals(2, rows.size)
         assertEquals(listOf("Duolingo", "AnkiDroid"), rows.map { it.name })
         assertEquals(listOf("com.duolingo", "com.ichi2.anki"), rows.map { it.packageName })
+        assertEquals(listOf(true, true), rows.map { it.showAction })
         assertFalse(rows.any { it.name.contains(",") || it.name.contains("‼") || it.name.contains("!!") })
     }
 
     @Test
-    fun earnRewardTimeRewardAppsBuildSeparateRowsWithoutConcatenatedNames() {
+    fun rewardAppsBuildCompactSummaryWithoutActions() {
         val card = EarnItUiStateAdapters.ruleCard(
             rule = sampleRule(),
             productiveUsageSeconds = 0,
@@ -294,18 +295,17 @@ class EarnItUiStateTest {
             isActiveNow = true
         )
 
-        val rows = earnRewardTimeRewardAppRows(card)
+        val summary = rewardAppsSummaryState(card.rewardApps)
 
-        assertEquals(2, rows.size)
-        assertEquals(listOf("Instagram", "YouTube"), rows.map { it.name })
-        assertFalse(rows.any { it.name.contains(",") })
+        assertEquals(listOf("com.instagram.android", "com.youtube.android"), summary.packageNames)
+        assertEquals("Instagram, YouTube", summary.namesLabel)
     }
 
     @Test
     fun ruleAppActionRowsPreservePackageSpecificOpenTargets() {
         val rows = listOf(
-            HomeRuleAppActionRowState("com.duolingo", "Duolingo", null),
-            HomeRuleAppActionRowState("com.ichi2.anki", "AnkiDroid", null)
+            HomeRuleAppActionRowState("com.duolingo", "Duolingo", null, true),
+            HomeRuleAppActionRowState("com.ichi2.anki", "AnkiDroid", null, true)
         )
 
         val openedPackages = rows.map { it.packageName }
@@ -335,6 +335,24 @@ class EarnItUiStateTest {
         assertEquals(longName, rows.first().name)
         assertEquals("com.example.long", rows.first().packageName)
         assertEquals("com.ichi2.anki", rows[1].packageName)
+    }
+
+    @Test
+    fun homeRuleAppRowsRemoveStrayWarningPunctuationFromDisplayNames() {
+        val card = EarnItUiStateAdapters.ruleCard(
+            rule = sampleRule().copy(
+                productiveApps = listOf(EarnItRuleStore.RuleApp("com.duolingo", "Duolingo ‼")),
+                blockedApps = listOf(EarnItRuleStore.RuleApp("com.instagram.android", "Instagram!!"))
+            ),
+            productiveUsageSeconds = 0,
+            remainingRewardSeconds = 0,
+            usageAccessGranted = true,
+            appBlockingEnabled = true,
+            isActiveNow = true
+        )
+
+        assertEquals("Duolingo", earnRewardTimeEarnAppRows(card, supportingText = null).single().name)
+        assertEquals("Instagram", rewardAppsSummaryState(card.rewardApps).namesLabel)
     }
 
     @Test

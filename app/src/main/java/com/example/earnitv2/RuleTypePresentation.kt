@@ -16,6 +16,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.semantics.contentDescription
@@ -145,28 +146,29 @@ private fun RuleTypeIcon(
 }
 
 private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawSproutIcon(color: Color) {
-    val stroke = Stroke(width = size.minDimension * 0.12f, cap = StrokeCap.Round)
-    val stemStart = Offset(size.width * 0.5f, size.height * 0.9f)
-    val stemEnd = Offset(size.width * 0.5f, size.height * 0.42f)
-    drawLine(color = color, start = stemStart, end = stemEnd, strokeWidth = stroke.width, cap = StrokeCap.Round)
-    drawArc(
+    val strokeWidth = size.minDimension * 0.11f
+    drawLine(
         color = color,
-        startAngle = 205f,
-        sweepAngle = 210f,
-        useCenter = false,
-        topLeft = Offset(size.width * 0.08f, size.height * 0.18f),
-        size = Size(size.width * 0.48f, size.height * 0.42f),
-        style = stroke
+        start = Offset(size.width * 0.5f, size.height * 0.9f),
+        end = Offset(size.width * 0.5f, size.height * 0.46f),
+        strokeWidth = strokeWidth,
+        cap = StrokeCap.Round
     )
-    drawArc(
-        color = color,
-        startAngle = 125f,
-        sweepAngle = -210f,
-        useCenter = false,
-        topLeft = Offset(size.width * 0.45f, size.height * 0.18f),
-        size = Size(size.width * 0.48f, size.height * 0.42f),
-        style = stroke
-    )
+
+    val leftLeaf = Path().apply {
+        moveTo(size.width * 0.5f, size.height * 0.5f)
+        quadraticTo(size.width * 0.18f, size.height * 0.16f, size.width * 0.12f, size.height * 0.44f)
+        quadraticTo(size.width * 0.26f, size.height * 0.62f, size.width * 0.5f, size.height * 0.5f)
+        close()
+    }
+    val rightLeaf = Path().apply {
+        moveTo(size.width * 0.5f, size.height * 0.5f)
+        quadraticTo(size.width * 0.82f, size.height * 0.16f, size.width * 0.88f, size.height * 0.44f)
+        quadraticTo(size.width * 0.74f, size.height * 0.62f, size.width * 0.5f, size.height * 0.5f)
+        close()
+    }
+    drawPath(path = leftLeaf, color = color)
+    drawPath(path = rightLeaf, color = color)
 }
 
 private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawLockIcon(color: Color) {

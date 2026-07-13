@@ -1,6 +1,7 @@
 package com.example.earnitv2
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -9,8 +10,10 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -23,6 +26,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -239,27 +243,35 @@ internal fun earnRewardTimeHomeCardSemanticOrder(): List<String> {
 data class HomeRuleAppActionRowState(
     val packageName: String,
     val name: String,
-    val supportingText: String?
+    val supportingText: String?,
+    val showAction: Boolean
 )
 
 fun earnRewardTimeEarnAppRows(card: RuleCardUiState, supportingText: String?): List<HomeRuleAppActionRowState> {
     return card.earnApps.map { app ->
         HomeRuleAppActionRowState(
             packageName = app.packageName,
-            name = app.name,
-            supportingText = supportingText
+            name = app.name.withoutStrayWarningIndicator(),
+            supportingText = supportingText,
+            showAction = true
         )
     }
 }
 
-fun earnRewardTimeRewardAppRows(card: RuleCardUiState): List<HomeRuleAppActionRowState> {
-    return card.rewardApps.map { app ->
-        HomeRuleAppActionRowState(
-            packageName = app.packageName,
-            name = app.name,
-            supportingText = null
-        )
-    }
+data class HomeRewardAppsSummaryState(
+    val packageNames: List<String>,
+    val namesLabel: String
+)
+
+fun rewardAppsSummaryState(apps: List<EarnItAppUiState>): HomeRewardAppsSummaryState {
+    return HomeRewardAppsSummaryState(
+        packageNames = apps.map { it.packageName },
+        namesLabel = apps.joinToString(", ") { it.name.withoutStrayWarningIndicator() }
+    )
+}
+
+private fun String.withoutStrayWarningIndicator(): String {
+    return trim().trimEnd('!', '‼').trimEnd()
 }
 
 @Composable
@@ -365,7 +377,7 @@ private fun LiveRuleCard(
                             rows = earnRewardTimeEarnAppRows(card, supportingText = null),
                             onOpenEarnApp = onOpenEarnApp
                         )
-                        RuleAppSection(label = "Unlocks", rows = earnRewardTimeRewardAppRows(card), onOpenApp = onOpenEarnApp)
+                        RewardAppsSummarySection(label = "Unlocks", apps = card.rewardApps)
                         if (homeRule.earnContextText != null) {
                             Text(
                                 text = homeRule.earnContextText,
@@ -379,18 +391,10 @@ private fun LiveRuleCard(
                             requirements = homeRule.completeToUnlockProgress?.incompleteRequirements.orEmpty(),
                             onOpenEarnApp = onOpenEarnApp
                         )
-                        RuleAppSection(
-                            label = "Unlocks",
-                            rows = card.rewardApps.map { HomeRuleAppActionRowState(it.packageName, it.name, null) },
-                            onOpenApp = onOpenEarnApp
-                        )
+                        RewardAppsSummarySection(label = "Unlocks", apps = card.rewardApps)
                     }
                     EarnItRuleStore.RuleType.ScheduledBlock -> {
-                        RuleAppSection(
-                            label = "Blocked Apps",
-                            rows = card.rewardApps.map { HomeRuleAppActionRowState(it.packageName, it.name, null) },
-                            onOpenApp = onOpenEarnApp
-                        )
+                        RewardAppsSummarySection(label = "Blocked Apps", apps = card.rewardApps)
                     }
                 }
             }
@@ -454,7 +458,12 @@ private fun RequirementsRows(
         SectionLabel(text = "Requirements")
         requirements.take(2).forEach { requirement ->
             RuleAppActionRow(
-                row = HomeRuleAppActionRowState(requirement.packageName, requirement.name, requirement.progressLabel),
+                row = HomeRuleAppActionRowState(
+                    packageName = requirement.packageName,
+                    name = requirement.name.withoutStrayWarningIndicator(),
+                    supportingText = requirement.progressLabel,
+                    showAction = true
+                ),
                 onOpenApp = onOpenEarnApp
             )
         }
@@ -498,6 +507,46 @@ private fun RuleAppSection(
 }
 
 @Composable
+private fun RewardAppsSummarySection(label: String, apps: List<EarnItAppUiState>) {
+    val summary = rewardAppsSummaryState(apps)
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        SectionLabel(text = label)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            apps.take(5).forEach { app ->
+                EarnItAppIcon(
+                    packageName = app.packageName,
+                    appName = app.name.withoutStrayWarningIndicator(),
+                    size = 30.dp
+                )
+            }
+            if (apps.size > 5) {
+                Box(
+                    modifier = Modifier
+                        .size(30.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(text = "+${apps.size - 5}", style = MaterialTheme.typography.labelSmall)
+                }
+            }
+            Text(
+                text = summary.namesLabel,
+                modifier = Modifier.weight(1f, fill = false),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+@Composable
 private fun RuleAppActionRow(
     row: HomeRuleAppActionRowState,
     onOpenApp: (String) -> Unit
@@ -525,11 +574,13 @@ private fun RuleAppActionRow(
                 )
             }
         }
-        TextButton(
-            onClick = { onOpenApp(row.packageName) },
-            modifier = Modifier.widthIn(min = 64.dp)
-        ) {
-            Text(text = "Open")
+        if (row.showAction) {
+            TextButton(
+                onClick = { onOpenApp(row.packageName) },
+                modifier = Modifier.widthIn(min = 64.dp)
+            ) {
+                Text(text = "Open")
+            }
         }
     }
 }
