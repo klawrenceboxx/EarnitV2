@@ -3,11 +3,13 @@ package com.example.earnitv2
 import android.accessibilityservice.AccessibilityService
 import android.app.AppOpsManager
 import android.app.usage.UsageStatsManager
+import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.provider.Settings
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import java.util.Calendar
@@ -49,11 +51,6 @@ class EarnItAccessibilityService : AccessibilityService() {
 
         val foregroundPackage = event.packageName?.toString() ?: return
         val foregroundClass = event.className?.toString()
-
-        Log.d(
-            "EarnItForeground",
-            "package=$foregroundPackage class=$foregroundClass event=${event.eventType}"
-        )
 
         val eventAtMillis = System.currentTimeMillis()
         val rules = EarnItRuleStore.getRules(this)
@@ -189,7 +186,13 @@ class EarnItAccessibilityService : AccessibilityService() {
             pendingLaunch = TrackedAppLaunchStore.readPendingLaunch(this),
             activeSession = TrackedAppLaunchStore.readActiveSession(this)
         ).also { handoffTracker = it }
-        val result = tracker.onForegroundPackage(foregroundPackage, eventAtMillis)
+        val result = tracker.onForegroundPackage(
+            actualPackageName = foregroundPackage,
+            actualClassName = className,
+            nowMillis = eventAtMillis,
+            relevantLogicalPackageNames = trackedLogicalPackages(rules),
+            ignoredForegroundPackageNames = setOfNotNull(defaultInputMethodPackageName())
+        )
 
         result.endedSession?.let { session ->
             RewardLedger.creditTrackedAppHandoff(
@@ -236,6 +239,24 @@ class EarnItAccessibilityService : AccessibilityService() {
             endedAtMillis = result.endedAtMillis ?: System.currentTimeMillis()
         )
         TrackedAppLaunchStore.saveActiveSession(this, null)
+    }
+
+    private fun trackedLogicalPackages(rules: List<EarnItRuleStore.Rule>): Set<String> {
+        return rules.filter { it.enabled }.flatMap { rule ->
+            when (rule.type) {
+                EarnItRuleStore.RuleType.EarnRewardTime -> rule.earnAppPackages
+                EarnItRuleStore.RuleType.CompleteToUnlock -> rule.requirements.map { it.app.packageName }
+                EarnItRuleStore.RuleType.ScheduledBlock -> emptyList()
+            }
+        }.filter { it.isNotBlank() }.toSet()
+    }
+
+    private fun defaultInputMethodPackageName(): String? {
+        val component = Settings.Secure.getString(
+            contentResolver,
+            Settings.Secure.DEFAULT_INPUT_METHOD
+        ) ?: return null
+        return ComponentName.unflattenFromString(component)?.packageName
     }
 
     private fun logTrackedAppForeground(
