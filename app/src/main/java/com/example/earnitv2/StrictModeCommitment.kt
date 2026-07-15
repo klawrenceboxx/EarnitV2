@@ -32,7 +32,8 @@ internal fun StrictModeSetupState.selectCommitmentPreset(
     preset: StrictModeCommitmentPreset
 ): StrictModeSetupState {
     return if (preset == StrictModeCommitmentPreset.Custom) {
-        val preserveExistingCustom = durationType == StrictModeDurationType.Timed && timedCustomVisible
+        val preserveExistingCustom = durationType == StrictModeDurationType.Timed &&
+            (timedCustomVisible || selectedCommitmentPreset == StrictModeCommitmentPreset.Custom)
         copy(
             durationType = StrictModeDurationType.Timed,
             timedDurationMillis = if (preserveExistingCustom) timedDurationMillis else null,

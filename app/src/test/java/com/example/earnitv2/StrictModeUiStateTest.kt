@@ -104,6 +104,32 @@ class StrictModeUiStateTest {
     }
 
     @Test
+    fun activationCountdownUsesCeilingSecondsUntilThePersistedDeadline() {
+        val deadline = 31_000L
+
+        assertEquals(30L, strictModeRemainingSeconds(deadline, nowMillis = 1_000L))
+        assertEquals(1L, strictModeRemainingSeconds(deadline, nowMillis = 30_999L))
+        assertEquals(0L, strictModeRemainingSeconds(deadline, nowMillis = 31_000L))
+        assertEquals(0L, strictModeRemainingSeconds(deadline, nowMillis = 40_000L))
+    }
+
+    @Test
+    fun appliedCustomCommitmentHasPersistentChipConfirmationWhileInputIsCollapsed() {
+        val setup = StrictModeSetupState(
+            durationType = StrictModeDurationType.Timed,
+            timedDurationMillis = 3L * 60L * 60_000L,
+            deactivationCountdownMillis = 10L * 60_000L,
+            customTimedHours = "3",
+            timedCustomVisible = false
+        )
+
+        assertEquals(StrictModeCommitmentPreset.Custom, setup.selectedCommitmentPreset)
+        assertEquals("Custom (3 hours)", customCommitmentChipLabel(setup))
+        assertEquals("\u2713 Custom duration set to 3 hours", customDurationConfirmationMessage(setup.timedDurationMillis!!))
+        assertFalse(setup.timedCustomVisible)
+    }
+
+    @Test
     fun settingsBadgeDistinguishesActivationGraceFromActive() {
         assertEquals("Off", strictModeSettingsBadge(StrictModeLifecycleState.Inactive))
         assertEquals("Activating", strictModeSettingsBadge(StrictModeLifecycleState.Activating))

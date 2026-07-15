@@ -29,6 +29,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -37,6 +40,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -49,6 +53,7 @@ import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 internal enum class StrictModeScreenStep {
     Setup,
@@ -74,6 +79,11 @@ internal fun EarnItStrictModeScreen(
 ) {
     var setup by remember(state.lifecycleState) { mutableStateOf(StrictModeSetupState.from(state.configuration)) }
     var step by remember(state.lifecycleState) { mutableStateOf(StrictModeScreenStep.Setup) }
+    var activationCountdownNowMillis by remember(state.activationGraceEndsAtMillis) {
+        mutableStateOf(System.currentTimeMillis())
+    }
+    val snackbarHostState = remember { SnackbarHostState() }
+    val coroutineScope = rememberCoroutineScope()
     val logicalBack = {
         if (state.lifecycleState == StrictModeLifecycleState.Inactive && step == StrictModeScreenStep.Review) {
             step = StrictModeScreenStep.Setup
@@ -83,17 +93,28 @@ internal fun EarnItStrictModeScreen(
     }
     BackHandler(onBack = logicalBack)
 
-    LaunchedEffect(state.lifecycleState, state.activationGraceEndsAtMillis, state.expiresAtMillis) {
-        while (state.lifecycleState == StrictModeLifecycleState.Activating ||
-            (state.lifecycleState.isStrictModeProtecting() && state.expiresAtMillis != null) ||
-            state.lifecycleState == StrictModeLifecycleState.DeactivationCounting
-        ) {
-            delay(1_000)
-            onTick()
+    LaunchedEffect(state.lifecycleState, state.activationGraceEndsAtMillis) {
+        if (state.lifecycleState == StrictModeLifecycleState.Activating) {
+            val deadline = state.activationGraceEndsAtMillis
+            while (deadline != null) {
+                val now = System.currentTimeMillis()
+                activationCountdownNowMillis = now
+                val remainingMillis = strictModeRemainingMillis(deadline, now)
+                if (remainingMillis == 0L) {
+                    onTick()
+                    break
+                }
+                delay(remainingMillis.coerceAtMost(COUNTDOWN_REFRESH_MILLIS))
+            }
         }
     }
 
-    StrictModeScaffold(title = "Strict Mode", onBack = logicalBack, modifier = modifier) {
+    StrictModeScaffold(
+        title = "Strict Mode",
+        onBack = logicalBack,
+        snackbarHostState = snackbarHostState,
+        modifier = modifier
+    ) {
         when (state.lifecycleState) {
             StrictModeLifecycleState.Inactive -> {
                 if (step == StrictModeScreenStep.Review) {
@@ -111,12 +132,23 @@ internal fun EarnItStrictModeScreen(
                             setup = it
                             if (it.isValid) onSaveConfiguration(it.toConfiguration())
                         },
+                        onCustomDurationAccepted = { durationMillis ->
+                            coroutineScope.launch {
+                                snackbarHostState.showSnackbar(
+                                    message = customDurationConfirmationMessage(durationMillis),
+                                    duration = SnackbarDuration.Short
+                                )
+                            }
+                        },
                         onReview = { if (setup.isValid) step = StrictModeScreenStep.Review }
                     )
                 }
             }
             StrictModeLifecycleState.Activating -> StrictModeActivationCountdown(
-                remainingSeconds = strictModeRemainingSeconds(state.activationGraceEndsAtMillis),
+                remainingSeconds = strictModeRemainingSeconds(
+                    targetMillis = state.activationGraceEndsAtMillis,
+                    nowMillis = activationCountdownNowMillis
+                ),
                 onCancel = onCancelActivation
             )
             StrictModeLifecycleState.Active -> StrictModeActive(
@@ -142,25 +174,32 @@ internal fun EarnItStrictModeScreen(
 private fun StrictModeScaffold(
     title: String,
     onBack: () -> Unit,
+    snackbarHostState: SnackbarHostState,
     modifier: Modifier = Modifier,
     content: @Composable ColumnScope.() -> Unit
 ) {
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
-    ) {
-        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = onBack) {
-                Text(text = "\u2039", modifier = Modifier.clearAndSetSemantics { })
-                Text(text = "Back")
+    Box(modifier = modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = onBack) {
+                    Text(text = "\u2039", modifier = Modifier.clearAndSetSemantics { })
+                    Text(text = "Back")
+                }
+                Spacer(modifier = Modifier.width(4.dp))
+                Text(text = title, style = MaterialTheme.typography.headlineMedium)
             }
-            Spacer(modifier = Modifier.width(4.dp))
-            Text(text = title, style = MaterialTheme.typography.headlineMedium)
+            content()
         }
-        content()
+        SnackbarHost(
+            hostState = snackbarHostState,
+            modifier = Modifier.align(Alignment.BottomCenter).padding(16.dp)
+        )
     }
 }
 
@@ -168,6 +207,7 @@ private fun StrictModeScaffold(
 private fun StrictModeSetup(
     setup: StrictModeSetupState,
     onSetupChange: (StrictModeSetupState) -> Unit,
+    onCustomDurationAccepted: (Long) -> Unit,
     onReview: () -> Unit
 ) {
     StrictModeCard {
@@ -216,7 +256,11 @@ private fun StrictModeSetup(
                 style = MaterialTheme.typography.labelLarge,
                 fontWeight = FontWeight.SemiBold
             )
-            CommitmentQuickPicks(setup = setup, onSetupChange = onSetupChange)
+            CommitmentQuickPicks(
+                setup = setup,
+                onSetupChange = onSetupChange,
+                onCustomDurationAccepted = onCustomDurationAccepted
+            )
             if (!setup.timedDurationValid) {
                 Text(
                     text = "Choose a duration from 1 hour to 30 days.",
@@ -380,13 +424,14 @@ private fun SymbolBadge(symbol: String, selected: Boolean = false) {
 @Composable
 private fun CommitmentQuickPicks(
     setup: StrictModeSetupState,
-    onSetupChange: (StrictModeSetupState) -> Unit
+    onSetupChange: (StrictModeSetupState) -> Unit,
+    onCustomDurationAccepted: (Long) -> Unit
 ) {
     val picks = listOf(
         StrictModeCommitmentPreset.OneHour to "1 hour",
         StrictModeCommitmentPreset.TwentyFourHours to "24 hours",
         StrictModeCommitmentPreset.SevenDays to "7 days",
-        StrictModeCommitmentPreset.Custom to "Custom"
+        StrictModeCommitmentPreset.Custom to customCommitmentChipLabel(setup)
     )
     Column(modifier = Modifier.selectableGroup(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         picks.chunked(2).forEach { rowPicks ->
@@ -402,20 +447,22 @@ private fun CommitmentQuickPicks(
             }
         }
     }
-    if (setup.selectedCommitmentPreset == StrictModeCommitmentPreset.Custom) {
+    if (setup.timedCustomVisible) {
         CustomDurationInput(
             value = setup.customTimedHours,
             label = "Custom hours",
             maxValue = StrictModeStore.MAX_TIMED_DURATION_MILLIS / (60L * 60_000L),
             onValueChange = { onSetupChange(setup.editCustomCommitmentDraft(it)) },
             onUse = { hours ->
+                val durationMillis = hours * 60L * 60_000L
                 onSetupChange(
                     setup.copy(
-                        timedDurationMillis = hours * 60L * 60_000L,
+                        timedDurationMillis = durationMillis,
                         customTimedHours = hours.toString(),
-                        timedCustomVisible = true
+                        timedCustomVisible = false
                     )
                 )
+                onCustomDurationAccepted(durationMillis)
             }
         )
     }
@@ -1056,6 +1103,23 @@ internal fun durationLabel(durationMillis: Long?): String {
         else -> "$minutes minute${if (minutes == 1L) "" else "s"}"
     }
 }
+
+internal fun customCommitmentChipLabel(setup: StrictModeSetupState): String {
+    val durationMillis = setup.timedDurationMillis
+    return if (setup.selectedCommitmentPreset == StrictModeCommitmentPreset.Custom &&
+        durationMillis != null && durationMillis > 0L
+    ) {
+        "Custom (${durationLabel(durationMillis)})"
+    } else {
+        "Custom"
+    }
+}
+
+internal fun customDurationConfirmationMessage(durationMillis: Long): String {
+    return "\u2713 Custom duration set to ${durationLabel(durationMillis)}"
+}
+
+private const val COUNTDOWN_REFRESH_MILLIS = 250L
 
 private fun plural(value: Long, unit: String): String {
     return "$value $unit${if (value == 1L) "" else "s"}"

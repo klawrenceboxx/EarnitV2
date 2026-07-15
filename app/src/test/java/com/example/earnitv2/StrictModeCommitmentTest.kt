@@ -44,6 +44,23 @@ class StrictModeCommitmentTest {
     }
 
     @Test
+    fun reopeningAnAppliedCustomCommitmentPreservesItsAcceptedValue() {
+        val applied = setup()
+            .selectCommitmentPreset(StrictModeCommitmentPreset.Custom)
+            .copy(
+                timedDurationMillis = 3L * 60L * 60_000L,
+                customTimedHours = "3",
+                timedCustomVisible = false
+            )
+
+        val reopened = applied.selectCommitmentPreset(StrictModeCommitmentPreset.Custom)
+
+        assertEquals(3L * 60L * 60_000L, reopened.timedDurationMillis)
+        assertEquals("3", reopened.customTimedHours)
+        assertTrue(reopened.timedCustomVisible)
+    }
+
+    @Test
     fun indefiniteToFixedAndCustomHaveDistinctSelections() {
         val setup = StrictModeSetupState(
             durationType = StrictModeDurationType.Indefinite,

@@ -81,6 +81,20 @@ class StrictModeStoreTest {
     }
 
     @Test
+    fun delayedRefreshActivatesFromPersistedDeadlineWithoutResettingOrExtendingDuration() {
+        var now = 1_000L
+        val store = store(nowProvider = { now })
+        store.beginActivation(validTimedConfiguration(durationMillis = 60_000L))
+
+        now = 36_000L
+        val active = store.state()
+
+        assertEquals(StrictModeLifecycleState.Active, active.lifecycleState)
+        assertEquals(31_000L, active.activatedAtMillis)
+        assertEquals(91_000L, active.expiresAtMillis)
+    }
+
+    @Test
     fun timedModeExpiresAutomatically() {
         var now = 1_000L
         val store = store(nowProvider = { now })
