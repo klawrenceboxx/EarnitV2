@@ -18,6 +18,7 @@ object RewardLedger {
     private const val KEY_REWARD_CONSUMED_SECONDS = "reward_consumed_seconds"
     private const val KEY_REQUIREMENT_PROGRESS_SECONDS = "requirement_progress_seconds"
     private const val KEY_TRACKED_HANDOFF_SECONDS = "tracked_handoff_seconds"
+    private const val KEY_DEEP_WORK_CREDITED_SECONDS = "deep_work_credited_seconds"
 
     data class Snapshot(
         val productiveCreditedSeconds: Long,
@@ -96,6 +97,21 @@ object RewardLedger {
         return rule.earnAppPackages.sumOf { packageName ->
             activeAppUsageSecondsToday(usageStatsManager, rule, packageName)
         }
+    }
+
+    @Synchronized
+    fun creditDeepWork(context: Context, rule: EarnItRuleStore.Rule, elapsedSeconds: Long): Snapshot {
+        val prefs = currentPrefs(context, rule)
+        val key = ruleKey(rule, KEY_DEEP_WORK_CREDITED_SECONDS)
+        val credited = prefs.getLong(key, 0L)
+        val completed = (elapsedSeconds.coerceAtLeast(0L) / 600L) * 600L
+        val newlyCredited = (completed - credited).coerceAtLeast(0L)
+        val current = snapshot(context, rule)
+        if (newlyCredited == 0L) return current
+        val issued = current.rewardIssuedSeconds + issueRewardSeconds(newlyCredited, rule)
+        prefs.edit().putLong(key, completed)
+            .putLong(ruleKey(rule, KEY_REWARD_ISSUED_SECONDS), issued).commit()
+        return Snapshot(current.productiveCreditedSeconds, issued, current.rewardConsumedSeconds)
     }
 
     fun activeAppUsageSecondsToday(
@@ -292,6 +308,7 @@ object RewardLedger {
                 .putLong(ruleKey(rule, KEY_PRODUCTIVE_CREDITED_SECONDS), 0L)
                 .putLong(ruleKey(rule, KEY_REWARD_ISSUED_SECONDS), 0L)
                 .putLong(ruleKey(rule, KEY_REWARD_CONSUMED_SECONDS), 0L)
+                .putLong(ruleKey(rule, KEY_DEEP_WORK_CREDITED_SECONDS), 0L)
                 .commit()
         }
         return prefs

@@ -46,6 +46,8 @@ fun EarnItHome(
     rules: List<HomeRuleUiState>,
     permissionState: PermissionSetupUiState,
     manageRulesOpen: Boolean,
+    deepWorkActive: Boolean,
+    onOpenDeepWork: () -> Unit,
     onAddRule: () -> Unit,
     onOpenEarnApp: (String) -> Unit,
     onOpenUsageAccessSettings: () -> Unit,
@@ -70,6 +72,7 @@ fun EarnItHome(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
+            DeepWorkHomeCard(active = deepWorkActive, onClick = onOpenDeepWork)
             if (permissionState.needsAttention) {
                 HomeAttentionBanner(
                     permissionState = permissionState,

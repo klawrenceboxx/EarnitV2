@@ -127,11 +127,14 @@ class MainActivity : ComponentActivity() {
     private var firstLaunchComplete by mutableStateOf(false)
     private var firstLaunchStep by mutableStateOf(FirstLaunchStep.ValueIntroduction)
     private var builderStep by mutableStateOf(RuleBuilderStep.Earn)
+    private var deepWorkSession by mutableStateOf(DeepWorkSession())
+    private var deepWorkSetupOpen by mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         strictModeStore = StrictModeStore(SharedPreferencesStrictModePersistence(this))
+        deepWorkSession = DeepWorkStore.load(this)
         firstLaunchComplete = isFirstLaunchComplete() || EarnItRuleStore.getRules(this).isNotEmpty()
         refreshDashboardState()
         setContent {
@@ -190,6 +193,14 @@ class MainActivity : ComponentActivity() {
                             strictModeState = strictModeState,
                             ruleTypeSelectionOpen = ruleTypeSelectionOpen,
                             unavailableRuleType = unavailableRuleType,
+                            deepWorkSession = deepWorkSession,
+                            deepWorkSetupOpen = deepWorkSetupOpen,
+                            onOpenDeepWork = { if (deepWorkSession.phase == DeepWorkPhase.Inactive) deepWorkSetupOpen = true },
+                            onDismissDeepWorkSetup = { deepWorkSetupOpen = false },
+                            onStartDeepWork = { goal -> deepWorkSetupOpen = false; deepWorkSession = DeepWorkStore.begin(this, goal) },
+                            onActivateDeepWork = { deepWorkSession = DeepWorkStore.activate(this, deepWorkSession) },
+                            onContinueDeepWork = { elapsed -> deepWorkSession = DeepWorkStore.continueOpenEnded(this, deepWorkSession, elapsed) },
+                            onFinishDeepWork = { elapsed -> DeepWorkStore.finish(this, deepWorkSession, elapsed); deepWorkSession = DeepWorkSession(); refreshDashboardState() },
                             onOpenUsageAccessSettings = ::openUsageAccessSettings,
                             onOpenAccessibilitySettings = ::openAccessibilitySettings,
                             onOpenSettings = { settingsOpen = true },
@@ -933,6 +944,14 @@ internal fun Dashboard(
     settingsOpen: Boolean,
     ruleTypeSelectionOpen: Boolean,
     unavailableRuleType: RuleTypeOption?,
+    deepWorkSession: DeepWorkSession,
+    deepWorkSetupOpen: Boolean,
+    onOpenDeepWork: () -> Unit,
+    onDismissDeepWorkSetup: () -> Unit,
+    onStartDeepWork: (Long?) -> Unit,
+    onActivateDeepWork: () -> Unit,
+    onContinueDeepWork: (Long) -> Unit,
+    onFinishDeepWork: (Long) -> Unit,
     onOpenUsageAccessSettings: () -> Unit,
     onOpenAccessibilitySettings: () -> Unit,
     onOpenSettings: () -> Unit,
@@ -1028,7 +1047,9 @@ internal fun Dashboard(
             homeRules.firstOrNull { it.rule.id == selectedRuleId }
         }
 
-        if (ruleTypeSelectionOpen) {
+        if (deepWorkSession.phase != DeepWorkPhase.Inactive) {
+            DeepWorkScreen(deepWorkSession, onActivateDeepWork, onContinueDeepWork, onFinishDeepWork)
+        } else if (ruleTypeSelectionOpen) {
             EarnItRuleTypeSelection(
                 onBack = onBackFromRuleTypeSelection,
                 onSelectRuleType = onSelectRuleType,
@@ -1100,6 +1121,8 @@ internal fun Dashboard(
                 rules = homeRules,
                 permissionState = permissionState,
                 manageRulesOpen = manageRulesOpen,
+                deepWorkActive = deepWorkSession.phase != DeepWorkPhase.Inactive,
+                onOpenDeepWork = onOpenDeepWork,
                 onAddRule = onAddRule,
                 onOpenEarnApp = onOpenEarnApp,
                 onOpenUsageAccessSettings = onOpenUsageAccessSettings,
@@ -1112,6 +1135,10 @@ internal fun Dashboard(
                 onDeleteRule = onDeleteRule,
                 modifier = modifier
             )
+            if (deepWorkSetupOpen) {
+                val linked = DeepWorkStore.linkedRuleId(androidx.compose.ui.platform.LocalContext.current)?.let { id -> ruleStates.firstOrNull { it.rule.id == id }?.rule }
+                DeepWorkSetupSheet(linked, onDismissDeepWorkSetup, onStartDeepWork)
+            }
         }
     } else {
         Column(
@@ -1554,6 +1581,14 @@ fun DashboardPreview() {
             settingsOpen = false,
             ruleTypeSelectionOpen = false,
             unavailableRuleType = null,
+            deepWorkSession = DeepWorkSession(),
+            deepWorkSetupOpen = false,
+            onOpenDeepWork = {},
+            onDismissDeepWorkSetup = {},
+            onStartDeepWork = {},
+            onActivateDeepWork = {},
+            onContinueDeepWork = {},
+            onFinishDeepWork = {},
             onOpenUsageAccessSettings = {},
             onOpenAccessibilitySettings = {},
             onOpenSettings = {},
