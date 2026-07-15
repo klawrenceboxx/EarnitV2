@@ -56,6 +56,109 @@ class TrackedAppHandoffTest {
     }
 
     @Test
+    fun currentGeminiGatewayStartsFromPendingGeminiLaunch() {
+        val tracker = TrackedAppHandoffTracker(
+            pendingLaunch = pendingGeminiLaunch(launchedAtMillis = 1_000L)
+        )
+
+        val result = tracker.onForegroundPackage(
+            actualPackageName = TrackedAppMatchPolicy.GOOGLE_PACKAGE,
+            actualClassName = TrackedAppMatchPolicy.GOOGLE_ANIMATED_GATEWAY_ACTIVITY,
+            nowMillis = 2_000L,
+            relevantLogicalPackageNames = setOf(TrackedAppMatchPolicy.GEMINI_PACKAGE)
+        )
+
+        assertEquals(TrackedAppMatchPolicy.GEMINI_PACKAGE, result.startedSession?.logicalPackageName)
+        assertEquals(TrackedAppMatchPolicy.GOOGLE_PACKAGE, result.startedSession?.actualForegroundPackageName)
+        assertNull(tracker.pendingLaunch())
+    }
+
+    @Test
+    fun currentGeminiGatewayStartsDirectlyOnlyWithRecentGeminiEntryEvidence() {
+        val tracker = TrackedAppHandoffTracker()
+
+        val result = tracker.onForegroundPackage(
+            actualPackageName = TrackedAppMatchPolicy.GOOGLE_PACKAGE,
+            actualClassName = TrackedAppMatchPolicy.GOOGLE_ANIMATED_GATEWAY_ACTIVITY,
+            nowMillis = 2_000L,
+            relevantLogicalPackageNames = setOf(TrackedAppMatchPolicy.GEMINI_PACKAGE),
+            recentlyForegroundLogicalPackageNames = setOf(TrackedAppMatchPolicy.GEMINI_PACKAGE)
+        )
+
+        assertEquals(TrackedAppMatchPolicy.GEMINI_PACKAGE, result.startedSession?.logicalPackageName)
+    }
+
+    @Test
+    fun gatewayThenRobinActivityKeepsOneContinuousGeminiSession() {
+        val tracker = TrackedAppHandoffTracker()
+        tracker.onForegroundPackage(
+            actualPackageName = TrackedAppMatchPolicy.GOOGLE_PACKAGE,
+            actualClassName = TrackedAppMatchPolicy.GOOGLE_ANIMATED_GATEWAY_ACTIVITY,
+            nowMillis = 2_000L,
+            relevantLogicalPackageNames = setOf(TrackedAppMatchPolicy.GEMINI_PACKAGE),
+            recentlyForegroundLogicalPackageNames = setOf(TrackedAppMatchPolicy.GEMINI_PACKAGE)
+        )
+
+        val robinResult = tracker.onForegroundPackage(
+            actualPackageName = TrackedAppMatchPolicy.GOOGLE_PACKAGE,
+            actualClassName = GEMINI_ROBIN_ACTIVITY,
+            nowMillis = 2_500L,
+            relevantLogicalPackageNames = setOf(TrackedAppMatchPolicy.GEMINI_PACKAGE)
+        )
+
+        assertNull(robinResult.endedSession)
+        assertNull(robinResult.startedSession)
+        assertEquals(2_000L, tracker.activeSession()?.startedAtMillis)
+    }
+
+    @Test
+    fun genericGoogleGatewayDoesNotStartGeminiWithoutLaunchEvidence() {
+        val tracker = TrackedAppHandoffTracker()
+
+        val result = tracker.onForegroundPackage(
+            actualPackageName = TrackedAppMatchPolicy.GOOGLE_PACKAGE,
+            actualClassName = TrackedAppMatchPolicy.GOOGLE_ANIMATED_GATEWAY_ACTIVITY,
+            nowMillis = 2_000L,
+            relevantLogicalPackageNames = setOf(TrackedAppMatchPolicy.GEMINI_PACKAGE)
+        )
+
+        assertNull(result.startedSession)
+        assertNull(tracker.activeSession())
+    }
+
+    @Test
+    fun restoredGeminiSessionSurvivesGatewayDuringConfirmedGeminiRelaunch() {
+        val tracker = activeGeminiTracker(startedAtMillis = 1_000L)
+
+        val result = tracker.onForegroundPackage(
+            actualPackageName = TrackedAppMatchPolicy.GOOGLE_PACKAGE,
+            actualClassName = TrackedAppMatchPolicy.GOOGLE_ANIMATED_GATEWAY_ACTIVITY,
+            nowMillis = 2_000L,
+            relevantLogicalPackageNames = setOf(TrackedAppMatchPolicy.GEMINI_PACKAGE),
+            recentlyForegroundLogicalPackageNames = setOf(TrackedAppMatchPolicy.GEMINI_PACKAGE)
+        )
+
+        assertNull(result.endedSession)
+        assertNull(result.startedSession)
+        assertEquals(1_000L, tracker.activeSession()?.startedAtMillis)
+    }
+
+    @Test
+    fun staleGeminiSessionStillEndsOnUnconfirmedGenericGoogleGateway() {
+        val tracker = activeGeminiTracker(startedAtMillis = 1_000L)
+
+        val result = tracker.onForegroundPackage(
+            actualPackageName = TrackedAppMatchPolicy.GOOGLE_PACKAGE,
+            actualClassName = TrackedAppMatchPolicy.GOOGLE_ANIMATED_GATEWAY_ACTIVITY,
+            nowMillis = 2_000L,
+            relevantLogicalPackageNames = setOf(TrackedAppMatchPolicy.GEMINI_PACKAGE)
+        )
+
+        assertEquals(TrackedAppMatchPolicy.GEMINI_PACKAGE, result.endedSession?.logicalPackageName)
+        assertNull(tracker.activeSession())
+    }
+
+    @Test
     fun regularGoogleActivityDoesNotResolveAsGemini() {
         val tracker = TrackedAppHandoffTracker(
             pendingLaunch = pendingGeminiLaunch(launchedAtMillis = 1_000L)
@@ -286,6 +389,39 @@ class TrackedAppHandoffTest {
                 actualPackageName = TrackedAppMatchPolicy.GOOGLE_PACKAGE,
                 actualClassName = GEMINI_ROBIN_ACTIVITY
             ) != null
+        )
+    }
+
+    @Test
+    fun recentGeminiEntryEvidenceRequiresExactPackageClassTypeAndTimeWindow() {
+        val now = 10_000L
+
+        assertTrue(
+            TrackedAppMatchPolicy.isRecentGeminiLaunchEvidence(
+                packageName = TrackedAppMatchPolicy.GEMINI_PACKAGE,
+                className = TrackedAppMatchPolicy.GEMINI_ENTRY_POINT_ACTIVITY,
+                eventType = android.app.usage.UsageEvents.Event.ACTIVITY_RESUMED,
+                eventAtMillis = now - 1_000L,
+                nowMillis = now
+            )
+        )
+        assertFalse(
+            TrackedAppMatchPolicy.isRecentGeminiLaunchEvidence(
+                packageName = TrackedAppMatchPolicy.GEMINI_PACKAGE,
+                className = TrackedAppMatchPolicy.GEMINI_ENTRY_POINT_ACTIVITY,
+                eventType = android.app.usage.UsageEvents.Event.ACTIVITY_RESUMED,
+                eventAtMillis = now - TrackedAppMatchPolicy.RECENT_LAUNCH_EVIDENCE_WINDOW_MILLIS - 1L,
+                nowMillis = now
+            )
+        )
+        assertFalse(
+            TrackedAppMatchPolicy.isRecentGeminiLaunchEvidence(
+                packageName = TrackedAppMatchPolicy.GOOGLE_PACKAGE,
+                className = TrackedAppMatchPolicy.GEMINI_ENTRY_POINT_ACTIVITY,
+                eventType = android.app.usage.UsageEvents.Event.ACTIVITY_RESUMED,
+                eventAtMillis = now,
+                nowMillis = now
+            )
         )
     }
 

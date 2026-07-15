@@ -30,14 +30,26 @@ data class TrackedAppMatchRule(
 object TrackedAppMatchPolicy {
     const val GEMINI_PACKAGE = "com.google.android.apps.bard"
     const val GOOGLE_PACKAGE = "com.google.android.googlequicksearchbox"
+    const val GEMINI_ENTRY_POINT_ACTIVITY = "com.google.android.apps.bard.shellapp.BardEntryPointActivity"
+    const val GOOGLE_ANIMATED_GATEWAY_ACTIVITY = "com.google.apps.tiktok.nav.gateway.AnimatedGatewayActivity"
+    const val GOOGLE_GATEWAY_ACTIVITY = "com.google.apps.tiktok.nav.gateway.GatewayActivity"
     const val PENDING_LAUNCH_WINDOW_MILLIS = 5_000L
+    const val RECENT_LAUNCH_EVIDENCE_WINDOW_MILLIS = 5_000L
 
-    fun matchRulesFor(logicalPackageName: String): List<TrackedAppMatchRule> {
+    fun matchRulesFor(
+        logicalPackageName: String,
+        allowGeminiGateway: Boolean = false
+    ): List<TrackedAppMatchRule> {
         return when (logicalPackageName) {
-            GEMINI_PACKAGE -> listOf(
-                TrackedAppMatchRule(GEMINI_PACKAGE),
-                TrackedAppMatchRule(GOOGLE_PACKAGE) { className -> className?.contains(".robin.") == true }
-            )
+            GEMINI_PACKAGE -> buildList {
+                add(TrackedAppMatchRule(GEMINI_PACKAGE))
+                add(TrackedAppMatchRule(GOOGLE_PACKAGE) { className -> className?.contains(".robin.") == true })
+                if (allowGeminiGateway) add(
+                    TrackedAppMatchRule(GOOGLE_PACKAGE) { className ->
+                        className == GOOGLE_ANIMATED_GATEWAY_ACTIVITY || className == GOOGLE_GATEWAY_ACTIVITY
+                    }
+                )
+            }
             else -> listOf(TrackedAppMatchRule(logicalPackageName))
         }
     }
@@ -45,9 +57,10 @@ object TrackedAppMatchPolicy {
     fun matchingRule(
         logicalPackageName: String,
         actualPackageName: String,
-        actualClassName: String?
+        actualClassName: String?,
+        allowGeminiGateway: Boolean = false
     ): TrackedAppMatchRule? {
-        return matchRulesFor(logicalPackageName).firstOrNull { rule ->
+        return matchRulesFor(logicalPackageName, allowGeminiGateway).firstOrNull { rule ->
             rule.matches(actualPackageName, actualClassName)
         }
     }
@@ -56,12 +69,32 @@ object TrackedAppMatchPolicy {
         logicalPackageName: String,
         activeActualPackageName: String,
         actualPackageName: String,
-        actualClassName: String?
+        actualClassName: String?,
+        allowGeminiGateway: Boolean = false
     ): Boolean {
         if (activeActualPackageName != actualPackageName) return false
         if (actualClassName == null) return true
-        return matchRulesFor(logicalPackageName).any { it.packageName == actualPackageName && it.classNameMatcher != null } &&
+        return matchRulesFor(logicalPackageName, allowGeminiGateway).any {
+            it.packageName == actualPackageName && it.classNameMatcher != null
+        } &&
             !actualClassName.contains("Activity")
+    }
+
+    fun isRecentGeminiLaunchEvidence(
+        packageName: String?,
+        className: String?,
+        eventType: Int,
+        eventAtMillis: Long,
+        nowMillis: Long
+    ): Boolean {
+        return packageName == GEMINI_PACKAGE &&
+            className == GEMINI_ENTRY_POINT_ACTIVITY &&
+            eventType == android.app.usage.UsageEvents.Event.ACTIVITY_RESUMED &&
+            eventAtMillis in (nowMillis - RECENT_LAUNCH_EVIDENCE_WINDOW_MILLIS)..nowMillis
+    }
+
+    fun isGeminiGatewayClass(className: String?): Boolean {
+        return className == GOOGLE_ANIMATED_GATEWAY_ACTIVITY || className == GOOGLE_GATEWAY_ACTIVITY
     }
 }
 
@@ -90,18 +123,26 @@ class TrackedAppHandoffTracker(
         actualClassName: String?,
         nowMillis: Long,
         relevantLogicalPackageNames: Set<String> = emptySet(),
-        ignoredForegroundPackageNames: Set<String> = emptySet()
+        ignoredForegroundPackageNames: Set<String> = emptySet(),
+        recentlyForegroundLogicalPackageNames: Set<String> = emptySet()
     ): TrackedAppForegroundResult {
         val active = activeSession
+        val activeHasRecentLaunchEvidence = active?.logicalPackageName in recentlyForegroundLogicalPackageNames
         val activeStillMatches = active?.let {
-            TrackedAppMatchPolicy.matchingRule(it.logicalPackageName, actualPackageName, actualClassName) != null
+            TrackedAppMatchPolicy.matchingRule(
+                it.logicalPackageName,
+                actualPackageName,
+                actualClassName,
+                allowGeminiGateway = activeHasRecentLaunchEvidence
+            ) != null
         } == true
         val ignoreClassNoise = active?.let {
             TrackedAppMatchPolicy.canIgnoreUnmatchedClassNoise(
                 logicalPackageName = it.logicalPackageName,
                 activeActualPackageName = it.actualForegroundPackageName,
                 actualPackageName = actualPackageName,
-                actualClassName = actualClassName
+                actualClassName = actualClassName,
+                allowGeminiGateway = activeHasRecentLaunchEvidence
             )
         } == true
         val ignoreForegroundPackage = active != null && actualPackageName in ignoredForegroundPackageNames
@@ -119,9 +160,10 @@ class TrackedAppHandoffTracker(
                 return TrackedAppForegroundResult(clearedExpiredPending = pending)
             }
             if (pending != null && TrackedAppMatchPolicy.matchingRule(
-                    logicalPackageName = pending.logicalPackageName,
-                    actualPackageName = actualPackageName,
-                    actualClassName = actualClassName
+                logicalPackageName = pending.logicalPackageName,
+                actualPackageName = actualPackageName,
+                actualClassName = actualClassName,
+                allowGeminiGateway = true
                 ) != null
             ) {
                 pendingLaunch = null
@@ -136,7 +178,8 @@ class TrackedAppHandoffTracker(
                 actualPackageName = actualPackageName,
                 actualClassName = actualClassName,
                 nowMillis = nowMillis,
-                relevantLogicalPackageNames = relevantLogicalPackageNames
+                relevantLogicalPackageNames = relevantLogicalPackageNames,
+                recentlyForegroundLogicalPackageNames = recentlyForegroundLogicalPackageNames
             )
             if (started != null) {
                 activeSession = started
@@ -154,7 +197,8 @@ class TrackedAppHandoffTracker(
                 actualPackageName = actualPackageName,
                 actualClassName = actualClassName,
                 nowMillis = nowMillis,
-                relevantLogicalPackageNames = relevantLogicalPackageNames
+                relevantLogicalPackageNames = relevantLogicalPackageNames,
+                recentlyForegroundLogicalPackageNames = recentlyForegroundLogicalPackageNames
             )
             if (started != null) {
                 activeSession = started
@@ -170,7 +214,8 @@ class TrackedAppHandoffTracker(
         val matchingRule = TrackedAppMatchPolicy.matchingRule(
             logicalPackageName = pending.logicalPackageName,
             actualPackageName = actualPackageName,
-            actualClassName = actualClassName
+            actualClassName = actualClassName,
+            allowGeminiGateway = true
         )
         if (matchingRule != null && matchingRule.packageName == pending.logicalPackageName) {
             pendingLaunch = null
@@ -208,10 +253,16 @@ class TrackedAppHandoffTracker(
         actualPackageName: String,
         actualClassName: String?,
         nowMillis: Long,
-        relevantLogicalPackageNames: Set<String>
+        relevantLogicalPackageNames: Set<String>,
+        recentlyForegroundLogicalPackageNames: Set<String>
     ): ActiveTrackedAppSession? {
         val logicalPackageName = relevantLogicalPackageNames.firstOrNull { candidate ->
-            val match = TrackedAppMatchPolicy.matchingRule(candidate, actualPackageName, actualClassName)
+            val match = TrackedAppMatchPolicy.matchingRule(
+                candidate,
+                actualPackageName,
+                actualClassName,
+                allowGeminiGateway = candidate in recentlyForegroundLogicalPackageNames
+            )
             match != null && match.packageName != candidate
         } ?: return null
         return ActiveTrackedAppSession(

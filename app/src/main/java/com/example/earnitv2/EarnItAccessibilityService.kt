@@ -54,12 +54,29 @@ class EarnItAccessibilityService : AccessibilityService() {
 
         val eventAtMillis = System.currentTimeMillis()
         val rules = EarnItRuleStore.getRules(this)
+        val relevantLogicalPackages = trackedLogicalPackages(rules)
+        val recentlyForegroundLogicalPackages = recentlyForegroundLogicalPackages(
+            relevantLogicalPackages = relevantLogicalPackages,
+            foregroundPackage = foregroundPackage,
+            foregroundClass = foregroundClass,
+            eventAtMillis = eventAtMillis
+        )
+        logRawTrackedAppForeground(
+            timestamp = eventAtMillis,
+            packageName = foregroundPackage,
+            className = foregroundClass,
+            event = event,
+            relevantLogicalPackages = relevantLogicalPackages,
+            recentlyForegroundLogicalPackages = recentlyForegroundLogicalPackages
+        )
         handleTrackedAppForeground(
             rules = rules,
             foregroundPackage = foregroundPackage,
             className = foregroundClass,
             eventType = event.eventType,
-            eventAtMillis = eventAtMillis
+            eventAtMillis = eventAtMillis,
+            relevantLogicalPackages = relevantLogicalPackages,
+            recentlyForegroundLogicalPackages = recentlyForegroundLogicalPackages
         )
 
         if (isEarnItPackage(foregroundPackage, packageName)) {
@@ -180,7 +197,9 @@ class EarnItAccessibilityService : AccessibilityService() {
         foregroundPackage: String,
         className: String?,
         eventType: Int,
-        eventAtMillis: Long
+        eventAtMillis: Long,
+        relevantLogicalPackages: Set<String>,
+        recentlyForegroundLogicalPackages: Set<String>
     ) {
         val tracker = handoffTracker ?: TrackedAppHandoffTracker(
             pendingLaunch = TrackedAppLaunchStore.readPendingLaunch(this),
@@ -190,8 +209,9 @@ class EarnItAccessibilityService : AccessibilityService() {
             actualPackageName = foregroundPackage,
             actualClassName = className,
             nowMillis = eventAtMillis,
-            relevantLogicalPackageNames = trackedLogicalPackages(rules),
-            ignoredForegroundPackageNames = setOfNotNull(defaultInputMethodPackageName())
+            relevantLogicalPackageNames = relevantLogicalPackages,
+            ignoredForegroundPackageNames = setOfNotNull(defaultInputMethodPackageName()),
+            recentlyForegroundLogicalPackageNames = recentlyForegroundLogicalPackages
         )
 
         result.endedSession?.let { session ->
@@ -220,7 +240,10 @@ class EarnItAccessibilityService : AccessibilityService() {
             activeLogicalPackage = tracker.activeSession()?.logicalPackageName,
             activeActualPackage = tracker.activeSession()?.actualForegroundPackageName,
             startedHandoff = result.startedSession != null,
-            endedHandoff = result.endedSession != null
+            endedHandoff = result.endedSession != null,
+            resolvedPending = result.resolvedPending != null,
+            clearedExpiredPending = result.clearedExpiredPending != null,
+            recentLaunchEvidence = recentlyForegroundLogicalPackages
         )
     }
 
@@ -259,6 +282,40 @@ class EarnItAccessibilityService : AccessibilityService() {
         return ComponentName.unflattenFromString(component)?.packageName
     }
 
+    private fun recentlyForegroundLogicalPackages(
+        relevantLogicalPackages: Set<String>,
+        foregroundPackage: String,
+        foregroundClass: String?,
+        eventAtMillis: Long
+    ): Set<String> {
+        if (TrackedAppMatchPolicy.GEMINI_PACKAGE !in relevantLogicalPackages ||
+            foregroundPackage != TrackedAppMatchPolicy.GOOGLE_PACKAGE ||
+            !TrackedAppMatchPolicy.isGeminiGatewayClass(foregroundClass) ||
+            !hasUsageAccess()
+        ) {
+            return emptySet()
+        }
+        val usageEvents = getSystemService(UsageStatsManager::class.java).queryEvents(
+            eventAtMillis - TrackedAppMatchPolicy.RECENT_LAUNCH_EVIDENCE_WINDOW_MILLIS,
+            eventAtMillis
+        )
+        val usageEvent = android.app.usage.UsageEvents.Event()
+        while (usageEvents.hasNextEvent()) {
+            usageEvents.getNextEvent(usageEvent)
+            if (TrackedAppMatchPolicy.isRecentGeminiLaunchEvidence(
+                    packageName = usageEvent.packageName,
+                    className = usageEvent.className,
+                    eventType = usageEvent.eventType,
+                    eventAtMillis = usageEvent.timeStamp,
+                    nowMillis = eventAtMillis
+                )
+            ) {
+                return setOf(TrackedAppMatchPolicy.GEMINI_PACKAGE)
+            }
+        }
+        return emptySet()
+    }
+
     private fun logTrackedAppForeground(
         timestamp: Long,
         packageName: String,
@@ -268,14 +325,37 @@ class EarnItAccessibilityService : AccessibilityService() {
         activeLogicalPackage: String?,
         activeActualPackage: String?,
         startedHandoff: Boolean,
-        endedHandoff: Boolean
+        endedHandoff: Boolean,
+        resolvedPending: Boolean,
+        clearedExpiredPending: Boolean,
+        recentLaunchEvidence: Set<String>
     ) {
         if (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE == 0) return
         Log.d(
             TAG,
             "foreground timestamp=$timestamp package=$packageName class=$className eventType=$eventType " +
                 "pendingLogical=$pendingLogicalPackage activeLogical=$activeLogicalPackage " +
-                "activeActual=$activeActualPackage startedHandoff=$startedHandoff endedHandoff=$endedHandoff"
+                "activeActual=$activeActualPackage startedHandoff=$startedHandoff endedHandoff=$endedHandoff " +
+                "resolvedPending=$resolvedPending clearedExpiredPending=$clearedExpiredPending " +
+                "recentLaunchEvidence=$recentLaunchEvidence"
+        )
+    }
+
+    private fun logRawTrackedAppForeground(
+        timestamp: Long,
+        packageName: String,
+        className: String?,
+        event: AccessibilityEvent,
+        relevantLogicalPackages: Set<String>,
+        recentlyForegroundLogicalPackages: Set<String>
+    ) {
+        if (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE == 0) return
+        Log.d(
+            TAG,
+            "foregroundRaw timestamp=$timestamp package=$packageName class=$className " +
+                "text=${event.text} description=${event.contentDescription} windowId=${event.windowId} " +
+                "relevantLogical=$relevantLogicalPackages recentLaunchEvidence=$recentlyForegroundLogicalPackages " +
+                "keyboard=${defaultInputMethodPackageName()}"
         )
     }
 
