@@ -254,7 +254,9 @@ fun EarnItRuleDetail(
                 rule = rule,
                 detail = detail,
                 productiveUsageSeconds = homeRulePrimaryUsageSeconds(homeRule),
-                onOpenEarnApp = onOpenEarnApp
+                onOpenEarnApp = onOpenEarnApp,
+                isProtectedByStrictMode = isProtectedByStrictMode,
+                onProtectedActionBlocked = onProtectedActionBlocked
             )
             EarnItRuleStore.RuleType.CompleteToUnlock -> CompleteToUnlockDetailCard(
                 rule = rule,
@@ -626,7 +628,9 @@ private fun EarnRewardTimeDetailCard(
     rule: EarnItRuleStore.Rule,
     detail: RuleDetailUiState,
     productiveUsageSeconds: Long?,
-    onOpenEarnApp: (String) -> Unit
+    onOpenEarnApp: (String) -> Unit,
+    isProtectedByStrictMode: Boolean,
+    onProtectedActionBlocked: () -> Unit
 ) {
     SectionContainer(title = "Earn Reward Time") {
         rule.earnApps.forEach { app ->
@@ -648,6 +652,8 @@ private fun EarnRewardTimeDetailCard(
             apps = detail.card.rewardApps,
             body = "Use Reward Time on these apps."
         )
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        DeepWorkRuleSetting(rule, isProtectedByStrictMode, onProtectedActionBlocked)
     }
 }
 

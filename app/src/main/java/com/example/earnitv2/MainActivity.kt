@@ -403,7 +403,12 @@ class MainActivity : ComponentActivity() {
                 emptyMap()
             }
             val snapshot = if (rule.enabled) {
-                RewardLedger.creditProductiveUsage(this, rule, productiveSeconds)
+                val deepWork = DeepWorkStore.load(this)
+                if (!(deepWork.phase == DeepWorkPhase.Active && deepWork.linkedRuleId == rule.id)) {
+                    RewardLedger.creditProductiveUsage(this, rule, productiveSeconds)
+                } else {
+                    RewardLedger.snapshot(this, rule)
+                }
             } else {
                 RewardLedger.snapshot(this, rule)
             }
@@ -1137,7 +1142,7 @@ internal fun Dashboard(
             )
             if (deepWorkSetupOpen) {
                 val linked = DeepWorkStore.linkedRuleId(androidx.compose.ui.platform.LocalContext.current)?.let { id -> ruleStates.firstOrNull { it.rule.id == id }?.rule }
-                DeepWorkSetupSheet(linked, onDismissDeepWorkSetup, onStartDeepWork)
+                DeepWorkSetupSheet(linked, apps, onDismissDeepWorkSetup, onStartDeepWork)
             }
         }
     } else if (productivePickerOpen) {

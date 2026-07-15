@@ -25,4 +25,15 @@ class DeepWorkSessionTest {
         val session = DeepWorkSession(phase = DeepWorkPhase.Active, goalSeconds = 300, startedElapsedRealtime = 50_000, startedWallClock = 100_000, baseElapsedSeconds = 10)
         assertEquals(40, session.elapsedSeconds(1_000, 130_000))
     }
+
+    @Test fun continuePreservesElapsedTime() {
+        val continued = DeepWorkSession(phase = DeepWorkPhase.Active, goalSeconds = null, baseElapsedSeconds = 1_800, startedElapsedRealtime = 10_000, startedWallClock = 10_000)
+        assertEquals(1_830, continued.elapsedSeconds(40_000, 40_000))
+    }
+
+    @Test fun deepWorkEarningIsVisibleOnlyForEarnRewardRules() {
+        assertEquals(true, supportsDeepWorkEarning(EarnItRuleStore.RuleType.EarnRewardTime))
+        assertEquals(false, supportsDeepWorkEarning(EarnItRuleStore.RuleType.CompleteToUnlock))
+        assertEquals(false, supportsDeepWorkEarning(EarnItRuleStore.RuleType.ScheduledBlock))
+    }
 }

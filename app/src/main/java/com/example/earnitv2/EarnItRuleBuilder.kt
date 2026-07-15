@@ -204,6 +204,7 @@ fun EarnItRuleBuilder(
                 ruleType = rule.type
             )
             RuleBuilderStep.Exchange -> ExchangeStep(
+                rule = rule,
                 selectedRatio = selectedRatio,
                 selectedEarnAppName = draft.selectedEarnApp?.name,
                 selectedRewardAppCount = draft.selectedRewardApps.size,
@@ -1277,6 +1278,7 @@ private fun BuilderAppRow(
 
 @Composable
 private fun ExchangeStep(
+    rule: EarnItRuleStore.Rule,
     selectedRatio: Int,
     selectedEarnAppName: String?,
     selectedRewardAppCount: Int,
@@ -1308,6 +1310,7 @@ private fun ExchangeStep(
             },
             style = MaterialTheme.typography.bodySmall
         )
+        DeepWorkRuleSetting(rule = rule.copy(rewardSecondsPerProductiveSecond = selectedRatio))
     }
 }
 

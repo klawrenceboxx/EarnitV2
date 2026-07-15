@@ -84,6 +84,24 @@ class EarnItAccessibilityService : AccessibilityService() {
             return
         }
 
+        val deepWork = DeepWorkStore.load(this)
+        if (deepWork.phase == DeepWorkPhase.Active || deepWork.displayPhase(SystemClock.elapsedRealtime(), eventAtMillis) == DeepWorkPhase.GoalComplete) {
+            val deepWorkRule = deepWork.linkedRuleId?.let { EarnItRuleStore.findRule(this, it) }
+            val deepWorkBlockedApp = deepWorkRule?.blockedAppForPackage(foregroundPackage)
+            if (deepWorkRule != null && deepWorkBlockedApp != null) {
+                stopActiveBlockedUsage()
+                launchBlockedActivity(deepWorkRule, deepWorkBlockedApp.name, deepWorkBlockedApp.packageName, RuleAccessEvaluator.DenialReason.OutOfRewardTime)
+                return
+            }
+            if (deepWorkRule == null && foregroundPackage in DeepWorkStore.standaloneBlockedPackages(this)) {
+                val appName = runCatching { packageManager.getApplicationLabel(packageManager.getApplicationInfo(foregroundPackage, 0)).toString() }.getOrDefault("Blocked app")
+                val standaloneRule = EarnItRuleStore.Rule(productivePackage = "", productiveName = "Deep Work", blockedApps = listOf(EarnItRuleStore.RuleApp(foregroundPackage, appName)), rewardSecondsPerProductiveSecond = 1, activeDays = EarnItRuleStore.allDays.toSet(), startMinute = 0, endMinute = 1_440, type = EarnItRuleStore.RuleType.ScheduledBlock)
+                stopActiveBlockedUsage()
+                launchBlockedActivity(standaloneRule, appName, foregroundPackage, RuleAccessEvaluator.DenialReason.ScheduledBlockActive)
+                return
+            }
+        }
+
         creditLatestProgress(rules)
 
         val result = evaluateAccess(rules, foregroundPackage)
@@ -181,6 +199,8 @@ class EarnItAccessibilityService : AccessibilityService() {
         rules.filter { it.enabled }.forEach { rule ->
             when (rule.type) {
                 EarnItRuleStore.RuleType.EarnRewardTime -> {
+                    val deepWork = DeepWorkStore.load(this)
+                    if (deepWork.phase == DeepWorkPhase.Active && deepWork.linkedRuleId == rule.id) return@forEach
                     val productiveSecondsToday = RewardLedger.activeProductiveUsageSecondsToday(this, usageStatsManager, rule)
                     RewardLedger.creditProductiveUsage(this, rule, productiveSecondsToday)
                 }
