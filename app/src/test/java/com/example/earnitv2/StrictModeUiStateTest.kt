@@ -3,6 +3,7 @@ package com.example.earnitv2
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 class StrictModeUiStateTest {
@@ -52,10 +53,62 @@ class StrictModeUiStateTest {
     }
 
     @Test
+    fun editingAppliedCustomCommitmentInvalidatesTheOldDurationUntilUse() {
+        val applied = StrictModeSetupState(
+            durationType = StrictModeDurationType.Timed,
+            timedDurationMillis = 5L * 60L * 60_000L,
+            deactivationCountdownMillis = 10L * 60_000L,
+            customTimedHours = "5",
+            timedCustomVisible = true
+        )
+
+        val draft = applied.editCustomCommitmentDraft("6")
+
+        assertEquals("6", draft.customTimedHours)
+        assertNull(draft.timedDurationMillis)
+        assertFalse(draft.isValid)
+        assertNull(draft.toConfiguration().timedDurationMillis)
+
+        val reapplied = draft.copy(timedDurationMillis = 6L * 60L * 60_000L)
+        assertTrue(reapplied.isValid)
+    }
+
+    @Test
+    fun choosingOrEditingCustomCountdownInvalidatesTheOldWaitUntilUse() {
+        val fixed = StrictModeSetupState(
+            durationType = StrictModeDurationType.Timed,
+            timedDurationMillis = 60L * 60_000L,
+            deactivationCountdownMillis = 10L * 60_000L
+        )
+
+        val custom = fixed.chooseCustomCountdown()
+        assertTrue(custom.countdownCustomVisible)
+        assertNull(custom.deactivationCountdownMillis)
+        assertFalse(custom.isValid)
+
+        val draft = custom.editCustomCountdownDraft("45")
+        assertEquals("45", draft.customCountdownMinutes)
+        assertNull(draft.deactivationCountdownMillis)
+        assertFalse(draft.isValid)
+
+        val reapplied = draft.copy(deactivationCountdownMillis = 45L * 60_000L)
+        assertTrue(reapplied.isValid)
+    }
+
+    @Test
     fun durationFormattingIsReadableForCountdownsAndMixedTime() {
         assertEquals("Less than 1 minute", durationLabel(30_000L))
         assertEquals("1 minute", durationLabel(60_000L))
         assertEquals("1 hour 30 minutes", durationLabel(90 * 60_000L))
         assertEquals("1 day 2 hours", durationLabel((24 * 60 + 120) * 60_000L))
+    }
+
+    @Test
+    fun settingsBadgeDistinguishesActivationGraceFromActive() {
+        assertEquals("Off", strictModeSettingsBadge(StrictModeLifecycleState.Inactive))
+        assertEquals("Activating", strictModeSettingsBadge(StrictModeLifecycleState.Activating))
+        assertEquals("Active", strictModeSettingsBadge(StrictModeLifecycleState.Active))
+        assertEquals("Active", strictModeSettingsBadge(StrictModeLifecycleState.DeactivationCounting))
+        assertEquals("Active", strictModeSettingsBadge(StrictModeLifecycleState.DeactivationReady))
     }
 }

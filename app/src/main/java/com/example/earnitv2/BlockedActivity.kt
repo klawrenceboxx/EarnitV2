@@ -4,6 +4,7 @@ import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.BorderStroke
@@ -52,6 +53,7 @@ class BlockedActivity : ComponentActivity() {
         updateRuleFromIntent(intent)
         setContent {
             EarnitV2Theme {
+                BackHandler(onBack = ::returnHome)
                 BlockedScreen(
                     blockedAppName = blockedAppName,
                     blockedPackage = blockedPackage,

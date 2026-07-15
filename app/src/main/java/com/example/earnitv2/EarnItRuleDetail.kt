@@ -1,5 +1,6 @@
 package com.example.earnitv2
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -146,11 +147,19 @@ fun EarnItRuleDetail(
         isActiveNow = rule.enabled && rule.isActiveNow(),
         pauseCountdownLabel = pausedUntilMillis?.let { pauseCountdownLabel(it, nowMillis) }
     )
+    val logicalBack = {
+        when {
+            editGateState != EditGateState.Hidden -> editGateState = EditGateState.Hidden
+            pauseSheetState != PauseSheetState.Hidden -> pauseSheetState = PauseSheetState.Hidden
+            else -> onBack()
+        }
+    }
+    BackHandler(onBack = logicalBack)
 
     if (editGateState != EditGateState.Hidden) {
         RuleManagementSurface(
             title = "Edit Rule",
-            onBack = { editGateState = EditGateState.Hidden },
+            onBack = logicalBack,
             modifier = modifier
         ) {
             EditRuleGateCard(
@@ -167,7 +176,7 @@ fun EarnItRuleDetail(
     if (pauseSheetState != PauseSheetState.Hidden) {
         RuleManagementSurface(
             title = "Pause this Rule?",
-            onBack = { pauseSheetState = PauseSheetState.Hidden },
+            onBack = logicalBack,
             modifier = modifier
         ) {
             PauseOptionsCard(
@@ -206,7 +215,7 @@ fun EarnItRuleDetail(
     ) {
         RuleDetailTopBar(
             rule = rule,
-            onBack = onBack,
+            onBack = logicalBack,
             onEditRule = {
                 if (isProtectedByStrictMode) onProtectedActionBlocked() else editGateState = EditGateState.Confirm
             },

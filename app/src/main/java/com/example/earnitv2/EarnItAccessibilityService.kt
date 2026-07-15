@@ -62,7 +62,7 @@ class EarnItAccessibilityService : AccessibilityService() {
             eventAtMillis = eventAtMillis
         )
 
-        if (foregroundPackage == packageName) {
+        if (isEarnItPackage(foregroundPackage, packageName)) {
             stopActiveBlockedUsage()
             return
         }
@@ -340,4 +340,8 @@ class EarnItAccessibilityService : AccessibilityService() {
         const val CONSUMPTION_TICK_MILLIS = 1_000L
         const val BLOCKED_ACTIVITY_DEBOUNCE_MILLIS = 2_000L
     }
+}
+
+internal fun isEarnItPackage(foregroundPackage: String, earnItPackage: String): Boolean {
+    return foregroundPackage == earnItPackage
 }

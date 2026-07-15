@@ -1,22 +1,35 @@
 package com.example.earnitv2
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -25,7 +38,15 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 
@@ -53,6 +74,14 @@ internal fun EarnItStrictModeScreen(
 ) {
     var setup by remember(state.lifecycleState) { mutableStateOf(StrictModeSetupState.from(state.configuration)) }
     var step by remember(state.lifecycleState) { mutableStateOf(StrictModeScreenStep.Setup) }
+    val logicalBack = {
+        if (state.lifecycleState == StrictModeLifecycleState.Inactive && step == StrictModeScreenStep.Review) {
+            step = StrictModeScreenStep.Setup
+        } else {
+            onBack()
+        }
+    }
+    BackHandler(onBack = logicalBack)
 
     LaunchedEffect(state.lifecycleState, state.activationGraceEndsAtMillis, state.expiresAtMillis) {
         while (state.lifecycleState == StrictModeLifecycleState.Activating ||
@@ -64,7 +93,7 @@ internal fun EarnItStrictModeScreen(
         }
     }
 
-    StrictModeScaffold(title = "Strict Mode", onBack = onBack, modifier = modifier) {
+    StrictModeScaffold(title = "Strict Mode", onBack = logicalBack, modifier = modifier) {
         when (state.lifecycleState) {
             StrictModeLifecycleState.Inactive -> {
                 if (step == StrictModeScreenStep.Review) {
@@ -72,7 +101,7 @@ internal fun EarnItStrictModeScreen(
                         configuration = setup.toConfiguration(),
                         enabledRuleCount = enabledRuleCount,
                         disabledRuleCount = disabledRuleCount,
-                        onBack = { step = StrictModeScreenStep.Setup },
+                        onBack = logicalBack,
                         onActivate = { onBeginActivation(setup.toConfiguration()) }
                     )
                 } else {
@@ -123,10 +152,12 @@ private fun StrictModeScaffold(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             TextButton(onClick = onBack) {
-                Text(text = "< Back")
+                Text(text = "\u2039", modifier = Modifier.clearAndSetSemantics { })
+                Text(text = "Back")
             }
+            Spacer(modifier = Modifier.width(4.dp))
             Text(text = title, style = MaterialTheme.typography.headlineMedium)
         }
         content()
@@ -140,175 +171,421 @@ private fun StrictModeSetup(
     onReview: () -> Unit
 ) {
     StrictModeCard {
-        Text(text = "Status: Off", style = MaterialTheme.typography.titleSmall)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Text(text = "Status", style = MaterialTheme.typography.titleSmall)
+            StrictModeStatusBadge(active = false)
+        }
         Text(
-            text = "Strict Mode protects changes made inside EarnIt. Android system settings can still affect protection.",
-            style = MaterialTheme.typography.bodyMedium
+            text = "Strict Mode protects your Rules inside EarnIt. Android system settings can still affect protection.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
     }
     StrictModeCard {
-        Text(text = "Duration", style = MaterialTheme.typography.titleSmall)
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = { onSetupChange(setup.copy(durationType = StrictModeDurationType.Timed)) }) {
-                Text(text = if (setup.durationType == StrictModeDurationType.Timed) "Timed selected" else "Timed")
-            }
-            OutlinedButton(onClick = { onSetupChange(setup.copy(durationType = StrictModeDurationType.Indefinite)) }) {
-                Text(text = if (setup.durationType == StrictModeDurationType.Indefinite) "Indefinite selected" else "Indefinite")
-            }
+        SectionHeading(
+            title = "Commitment",
+            supportingText = "How long do you want Strict Mode active?"
+        )
+        Column(modifier = Modifier.selectableGroup(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            StrictModeSelectionCard(
+                symbol = "\u25F7",
+                title = "Until a timer ends",
+                description = "Strict Mode turns off automatically.",
+                selected = setup.durationType == StrictModeDurationType.Timed,
+                onClick = {
+                    if (setup.durationType != StrictModeDurationType.Timed) {
+                        onSetupChange(setup.returnToTimedCommitment())
+                    }
+                }
+            )
+            StrictModeSelectionCard(
+                symbol = "\u221E",
+                title = "Until I turn it off",
+                description = "Stays active until you deactivate it.",
+                selected = setup.durationType == StrictModeDurationType.Indefinite,
+                onClick = { onSetupChange(setup.copy(durationType = StrictModeDurationType.Indefinite)) }
+            )
         }
         if (setup.durationType == StrictModeDurationType.Timed) {
-            DurationPresetRows(
-                selectedMillis = setup.timedDurationMillis,
-                customValue = setup.customTimedHours,
-                onCustomValueChange = { onSetupChange(setup.copy(customTimedHours = it.filter(Char::isDigit).take(4))) },
-                onSelect = { onSetupChange(setup.copy(timedDurationMillis = it, timedCustomVisible = false)) },
-                onUseCustom = { millis, value ->
-                    onSetupChange(
-                        setup.copy(
-                            timedDurationMillis = millis,
-                            customTimedHours = value,
-                            timedCustomVisible = true
-                        )
-                    )
-                },
-                onShowCustom = { onSetupChange(setup.copy(timedCustomVisible = true)) },
-                customVisible = setup.timedCustomVisible,
-                customLabel = "Custom hours",
-                maxValue = StrictModeStore.MAX_TIMED_DURATION_MILLIS / (60L * 60_000L)
+            Text(
+                text = "Quick picks",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold
             )
+            CommitmentQuickPicks(setup = setup, onSetupChange = onSetupChange)
             if (!setup.timedDurationValid) {
-                Text(text = "Choose a duration from 1 hour to 30 days.", style = MaterialTheme.typography.bodySmall)
+                Text(
+                    text = "Choose a duration from 1 hour to 30 days.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
+                )
             }
         }
     }
     StrictModeCard {
-        Text(text = "Deactivation method", style = MaterialTheme.typography.titleSmall)
-        DeactivationMethodRow(
-            title = "Countdown selected",
-            description = "Wait for a chosen period before Strict Mode can be deactivated.",
-            enabled = true
+        SectionHeading(
+            title = "Turn off with",
+            supportingText = "Choose how you'll be able to deactivate Strict Mode."
         )
-        DurationPresetRows(
-            selectedMillis = setup.deactivationCountdownMillis,
-            customValue = setup.customCountdownMinutes,
-            onCustomValueChange = { onSetupChange(setup.copy(customCountdownMinutes = it.filter(Char::isDigit).take(4))) },
-            onSelect = { onSetupChange(setup.copy(deactivationCountdownMillis = it, countdownCustomVisible = false)) },
-            onUseCustom = { millis, value ->
-                onSetupChange(
-                    setup.copy(
-                        deactivationCountdownMillis = millis,
-                        customCountdownMinutes = value,
-                        countdownCustomVisible = true
-                    )
-                )
-            },
-            onShowCustom = { onSetupChange(setup.copy(countdownCustomVisible = true)) },
-            customVisible = setup.countdownCustomVisible,
-            customLabel = "Custom minutes",
-            presets = countdownPresets(),
-            maxValue = StrictModeStore.MAX_DEACTIVATION_COUNTDOWN_MILLIS / 60_000L
+        CountdownMethodCard(
+            setup = setup,
+            onSetupChange = onSetupChange,
+            title = "Countdown",
+            description = "Wait for a chosen period before Strict Mode can be deactivated.",
+            recommended = true
         )
         if (!setup.countdownDurationValid) {
             Text(text = "Choose a countdown from 1 minute to 24 hours.", style = MaterialTheme.typography.bodySmall)
         }
-        DeactivationMethodRow(
+        UnavailableMethodRow(
             title = "Charger + wait",
-            description = "Connect your charger and complete a waiting period.",
-            enabled = false
+            description = "Connect your charger and complete a waiting period."
         )
-        DeactivationMethodRow(
+        UnavailableMethodRow(
             title = "PIN",
-            description = "Require a PIN before deactivation.",
-            enabled = false
+            description = "Require a PIN before deactivation."
         )
-        DeactivationMethodRow(
-            title = "Email Approval",
-            description = "Approve deactivation through a secure email link.",
-            enabled = false
+        UnavailableMethodRow(
+            title = "Email approval",
+            description = "Approve deactivation through a secure email link."
         )
-        DeactivationMethodRow(
-            title = "NFC Tag or Security Fob",
-            description = "Require a physical tag or compatible security device.",
-            enabled = false
+        UnavailableMethodRow(
+            title = "NFC tag or security fob",
+            description = "Require a physical tag or compatible security device."
         )
     }
     StrictModeCard {
-        Text(text = "What Strict Mode Protects", style = MaterialTheme.typography.titleSmall)
-        Text(
-            text = "When active, Strict Mode prevents protected Rules from being edited, paused, disabled, or deleted.",
-            style = MaterialTheme.typography.bodyMedium
+        SectionHeading(
+            title = "What Strict Mode protects",
+            supportingText = "These actions are locked for every enabled Rule."
         )
+        ProtectionRow(symbol = "\u270E", label = "Edit Rules")
+        HorizontalDivider()
+        ProtectionRow(symbol = "\u23F8", label = "Pause Rules")
+        HorizontalDivider()
+        ProtectionRow(symbol = "\u2298", label = "Disable Rules")
+        HorizontalDivider()
+        ProtectionRow(symbol = "\u232B", label = "Delete Rules")
         Text(
-            text = "Disabled and paused Rules stay unchanged. If enabled or resumed later, they become protected immediately.",
-            style = MaterialTheme.typography.bodyMedium
+            text = "Disabled and paused Rules stay unchanged. If resumed or enabled later, they become protected immediately.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
-        Button(onClick = onReview, enabled = setup.isValid, modifier = Modifier.fillMaxWidth()) {
-            Text(text = "Review and Activate")
-        }
+    }
+    Button(
+        onClick = onReview,
+        enabled = setup.isValid,
+        modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
+        shape = RoundedCornerShape(18.dp)
+    ) {
+        Text(text = "Review and Activate")
     }
 }
 
 @Composable
-private fun DurationPresetRows(
-    selectedMillis: Long?,
-    customValue: String,
-    onCustomValueChange: (String) -> Unit,
-    onSelect: (Long) -> Unit,
-    onUseCustom: (Long, String) -> Unit,
-    onShowCustom: () -> Unit,
-    customVisible: Boolean,
-    customLabel: String,
-    presets: List<Pair<String, Long>> = timedDurationPresets(),
-    maxValue: Long
-) {
-    presets.forEach { (label, millis) ->
-        OutlinedButton(onClick = { onSelect(millis) }, modifier = Modifier.fillMaxWidth()) {
-            Text(text = if (selectedMillis == millis) "$label selected" else label)
-        }
-    }
-    OutlinedButton(onClick = onShowCustom, modifier = Modifier.fillMaxWidth()) {
-        Text(text = if (customVisible) "Custom selected" else "Custom")
-    }
-    if (customVisible) {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedTextField(
-                value = customValue,
-                onValueChange = onCustomValueChange,
-                label = { Text(text = customLabel) },
-                supportingText = { Text(text = "1 to $maxValue") },
-                isError = customValue.toLongOrNull()?.let { it !in 1L..maxValue } == true,
-                modifier = Modifier.weight(1f)
-            )
-            OutlinedButton(onClick = {
-                customValue.toLongOrNull()?.takeIf { it in 1L..maxValue }?.let { value ->
-                    val millis = if (customLabel.contains("hours")) value * 60L * 60_000L else value * 60_000L
-                    onUseCustom(millis, value.toString())
-                }
-            }) {
-                Text(text = "Use")
-            }
-        }
+private fun SectionHeading(title: String, supportingText: String) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(text = title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+        Text(
+            text = supportingText,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }
 
 @Composable
-private fun DeactivationMethodRow(
+private fun StrictModeStatusBadge(active: Boolean) {
+    Surface(
+        shape = RoundedCornerShape(50),
+        color = if (active) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant
+    ) {
+        Text(
+            text = if (active) "ACTIVE" else "OFF",
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = if (active) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+@Composable
+private fun StrictModeSelectionCard(
+    symbol: String,
     title: String,
     description: String,
-    enabled: Boolean
+    selected: Boolean,
+    onClick: () -> Unit
 ) {
-    OutlinedButton(
-        onClick = {},
-        enabled = enabled,
-        modifier = Modifier.fillMaxWidth()
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 88.dp)
+            .selectable(selected = selected, role = Role.RadioButton, onClick = onClick),
+        shape = RoundedCornerShape(16.dp),
+        color = if (selected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = .18f) else MaterialTheme.colorScheme.surface,
+        border = BorderStroke(
+            if (selected) 2.dp else 1.dp,
+            if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
+        )
     ) {
-        Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(text = title)
-            Text(text = description, style = MaterialTheme.typography.bodySmall)
-            if (!enabled) {
-                Text(text = "Coming Soon", style = MaterialTheme.typography.labelMedium)
+        Row(
+            modifier = Modifier.padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            SymbolBadge(symbol = symbol, selected = selected)
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Text(text = title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                Text(
+                    text = description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            if (selected) {
+                Text(
+                    text = "\u2713",
+                    modifier = Modifier.clearAndSetSemantics { },
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.Bold
+                )
             }
         }
+    }
+}
+
+@Composable
+private fun SymbolBadge(symbol: String, selected: Boolean = false) {
+    Surface(
+        modifier = Modifier.size(44.dp).clearAndSetSemantics { },
+        shape = CircleShape,
+        color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Text(
+                text = symbol,
+                style = MaterialTheme.typography.titleMedium,
+                color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+@Composable
+private fun CommitmentQuickPicks(
+    setup: StrictModeSetupState,
+    onSetupChange: (StrictModeSetupState) -> Unit
+) {
+    val picks = listOf(
+        StrictModeCommitmentPreset.OneHour to "1 hour",
+        StrictModeCommitmentPreset.TwentyFourHours to "24 hours",
+        StrictModeCommitmentPreset.SevenDays to "7 days",
+        StrictModeCommitmentPreset.Custom to "Custom"
+    )
+    Column(modifier = Modifier.selectableGroup(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        picks.chunked(2).forEach { rowPicks ->
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                rowPicks.forEach { (preset, label) ->
+                    ChoiceChip(
+                        label = label,
+                        selected = setup.selectedCommitmentPreset == preset,
+                        onClick = { onSetupChange(setup.selectCommitmentPreset(preset)) },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
+        }
+    }
+    if (setup.selectedCommitmentPreset == StrictModeCommitmentPreset.Custom) {
+        CustomDurationInput(
+            value = setup.customTimedHours,
+            label = "Custom hours",
+            maxValue = StrictModeStore.MAX_TIMED_DURATION_MILLIS / (60L * 60_000L),
+            onValueChange = { onSetupChange(setup.editCustomCommitmentDraft(it)) },
+            onUse = { hours ->
+                onSetupChange(
+                    setup.copy(
+                        timedDurationMillis = hours * 60L * 60_000L,
+                        customTimedHours = hours.toString(),
+                        timedCustomVisible = true
+                    )
+                )
+            }
+        )
+    }
+}
+
+@Composable
+private fun ChoiceChip(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier
+            .heightIn(min = 52.dp)
+            .selectable(selected = selected, role = Role.RadioButton, onClick = onClick),
+        shape = RoundedCornerShape(14.dp),
+        color = if (selected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = .30f) else MaterialTheme.colorScheme.surface,
+        border = BorderStroke(
+            if (selected) 2.dp else 1.dp,
+            if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
+        )
+    ) {
+        Box(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp), contentAlignment = Alignment.CenterStart) {
+            Text(text = label, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Medium)
+        }
+    }
+}
+
+@Composable
+private fun CustomDurationInput(
+    value: String,
+    label: String,
+    maxValue: Long,
+    onValueChange: (String) -> Unit,
+    onUse: (Long) -> Unit
+) {
+    val parsed = value.toLongOrNull()
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedTextField(
+            value = value,
+            onValueChange = onValueChange,
+            label = { Text(text = label) },
+            supportingText = { Text(text = "1 to $maxValue") },
+            isError = parsed != null && parsed !in 1L..maxValue,
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        OutlinedButton(
+            onClick = { parsed?.takeIf { it in 1L..maxValue }?.let(onUse) },
+            enabled = parsed != null && parsed in 1L..maxValue,
+            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+        ) {
+            Text(text = "Use")
+        }
+    }
+}
+
+@Composable
+private fun CountdownMethodCard(
+    setup: StrictModeSetupState,
+    onSetupChange: (StrictModeSetupState) -> Unit,
+    title: String,
+    description: String,
+    recommended: Boolean
+) {
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = .12f),
+        border = BorderStroke(2.dp, MaterialTheme.colorScheme.primary)
+    ) {
+        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                SymbolBadge(symbol = "\u23F1", selected = true)
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(text = title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                        if (recommended) Text(
+                            text = "Recommended",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                    Text(text = description, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+            Text(text = "Wait time", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
+            Column(modifier = Modifier.selectableGroup(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                countdownPresets().chunked(2).forEach { rowPicks ->
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        rowPicks.forEach { (label, millis) ->
+                            ChoiceChip(
+                                label = when (label) { "10 minutes" -> "10 min"; "30 minutes" -> "30 min"; else -> label },
+                                selected = setup.deactivationCountdownMillis == millis && !setup.countdownCustomVisible,
+                                onClick = { onSetupChange(setup.copy(deactivationCountdownMillis = millis, countdownCustomVisible = false)) },
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                        if (rowPicks.size == 1) {
+                            ChoiceChip(
+                                label = "Custom",
+                                selected = setup.countdownCustomVisible,
+                                onClick = {
+                                    if (!setup.countdownCustomVisible) {
+                                        onSetupChange(setup.chooseCustomCountdown())
+                                    }
+                                },
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                    }
+                }
+            }
+            if (setup.countdownCustomVisible) {
+                CustomDurationInput(
+                    value = setup.customCountdownMinutes,
+                    label = "Custom minutes",
+                    maxValue = StrictModeStore.MAX_DEACTIVATION_COUNTDOWN_MILLIS / 60_000L,
+                    onValueChange = { onSetupChange(setup.editCustomCountdownDraft(it)) },
+                    onUse = { minutes ->
+                        onSetupChange(
+                            setup.copy(
+                                deactivationCountdownMillis = minutes * 60_000L,
+                                customCountdownMinutes = minutes.toString(),
+                                countdownCustomVisible = true
+                            )
+                        )
+                    }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun UnavailableMethodRow(
+    title: String,
+    description: String,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth().alpha(.72f),
+        shape = RoundedCornerShape(14.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .35f),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            SymbolBadge(symbol = "\u25CB")
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(text = title, style = MaterialTheme.typography.titleSmall)
+                Text(text = description, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(text = "Coming Soon", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+            }
+        }
+    }
+}
+
+@Composable
+private fun ProtectionRow(symbol: String, label: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        DecorativeSymbol(text = symbol)
+        Text(text = label, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
+        LockGlyph()
     }
 }
 
@@ -320,37 +597,186 @@ private fun StrictModeReview(
     onBack: () -> Unit,
     onActivate: () -> Unit
 ) {
+    SectionHeading(
+        title = "Review Strict Mode",
+        supportingText = "Confirm your settings before activating."
+    )
     StrictModeCard {
-        Text(text = "Review activation", style = MaterialTheme.typography.titleLarge)
-        Text(text = "Duration type: ${configuration.durationType.label}")
-        if (configuration.durationType == StrictModeDurationType.Timed) {
-            Text(text = "Duration: ${durationLabel(configuration.timedDurationMillis)}")
-        }
-        Text(text = "Deactivation method: Countdown")
-        Text(text = "Countdown duration: ${durationLabel(configuration.deactivationCountdownMillis)}")
-        Text(text = "Enabled Rules: $enabledRuleCount")
-        Text(text = "Disabled or paused Rules: $disabledRuleCount")
-        Text(text = "Enabled Rules will be protected while Strict Mode is active.")
-        Text(text = "Disabled and paused Rules will remain unchanged. If enabled or resumed while Strict Mode is active, they become protected immediately.")
-        Text(text = "Strict Mode activates after a 30-second review period.")
-        Button(onClick = onActivate, modifier = Modifier.fillMaxWidth()) {
-            Text(text = "Activate Strict Mode")
-        }
-        OutlinedButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) {
-            Text(text = "Back")
+        ReviewRow(
+            symbol = "\u25F7",
+            label = "Commitment",
+            value = if (configuration.durationType == StrictModeDurationType.Timed) {
+                durationLabel(configuration.timedDurationMillis)
+            } else {
+                "Until I turn it off"
+            },
+            supportingValue = if (configuration.durationType == StrictModeDurationType.Timed) {
+                "Until a timer ends"
+            } else null
+        )
+        HorizontalDivider()
+        ReviewRow(
+            symbol = "\u23F1",
+            label = "Turn off with",
+            value = "Countdown",
+            supportingValue = durationLabel(configuration.deactivationCountdownMillis)
+        )
+        HorizontalDivider()
+        ReviewRow(symbol = "\u25A3", label = "Protected Rules", value = ruleCountLabel(enabledRuleCount))
+        HorizontalDivider()
+        ReviewRow(symbol = "\u2298", label = "Not protected", value = ruleCountLabel(disabledRuleCount))
+    }
+    StrictModeCard {
+        ReviewNoticeRow(symbol = "\u25A1", text = "Strict Mode activates after a 30-second review period.")
+        HorizontalDivider()
+        ReviewNoticeRow(symbol = "\u25C7", text = "You can cancel before the countdown finishes.")
+    }
+    Button(
+        onClick = onActivate,
+        modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
+        shape = RoundedCornerShape(18.dp)
+    ) {
+        Text(text = "Activate Strict Mode")
+    }
+    OutlinedButton(
+        onClick = onBack,
+        modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
+        shape = RoundedCornerShape(18.dp)
+    ) {
+        Text(text = "Back")
+    }
+}
+
+@Composable
+private fun ReviewRow(
+    symbol: String,
+    label: String,
+    value: String,
+    supportingValue: String? = null
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().heightIn(min = 62.dp),
+        verticalAlignment = Alignment.Top,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        DecorativeSymbol(text = symbol)
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Text(text = label, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
+            Text(text = value, style = MaterialTheme.typography.bodyMedium)
+            supportingValue?.let {
+                Text(text = it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
         }
     }
 }
 
 @Composable
+private fun ReviewNoticeRow(symbol: String, text: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        DecorativeSymbol(text = symbol)
+        Text(text = text, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable
 private fun StrictModeActivationCountdown(remainingSeconds: Long, onCancel: () -> Unit) {
-    StrictModeCard {
-        Text(text = "Strict Mode activates in", style = MaterialTheme.typography.titleLarge)
-        Text(text = remainingSeconds.coerceAtLeast(0L).toString(), style = MaterialTheme.typography.displaySmall)
-        Text(text = "This is your final opportunity to cancel before Strict Mode becomes active.")
-        OutlinedButton(onClick = onCancel, modifier = Modifier.fillMaxWidth()) {
-            Text(text = "Cancel")
+    val seconds = remainingSeconds.coerceIn(0L, 30L)
+    val progress = seconds / 30f
+    val trackColor = MaterialTheme.colorScheme.surfaceVariant
+    val progressColor = MaterialTheme.colorScheme.primary
+    Box(
+        modifier = Modifier.fillMaxWidth().heightIn(min = 560.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        StrictModeCard {
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 20.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                Text(text = "Strict Mode activates in", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    text = seconds.toString(),
+                    style = MaterialTheme.typography.displayLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Text(text = "seconds", style = MaterialTheme.typography.titleMedium)
+                Box(modifier = Modifier.size(112.dp), contentAlignment = Alignment.Center) {
+                    Canvas(modifier = Modifier.fillMaxSize()) {
+                        val strokeWidth = 9.dp.toPx()
+                        val radius = (size.minDimension - strokeWidth) / 2f
+                        drawCircle(
+                            color = trackColor,
+                            radius = radius,
+                            center = Offset(size.width / 2f, size.height / 2f),
+                            style = Stroke(width = strokeWidth)
+                        )
+                        drawArc(
+                            color = progressColor,
+                            startAngle = -90f,
+                            sweepAngle = progress * 360f,
+                            useCenter = false,
+                            style = Stroke(width = strokeWidth, cap = StrokeCap.Round)
+                        )
+                    }
+                    DecorativeSymbol(text = "\u25C7", style = MaterialTheme.typography.displaySmall)
+                }
+                Text(
+                    text = "This is your final opportunity to cancel before Strict Mode becomes active.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                OutlinedButton(
+                    onClick = onCancel,
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
+                    shape = RoundedCornerShape(18.dp)
+                ) {
+                    Text(text = "Cancel")
+                }
+            }
         }
+    }
+}
+
+@Composable
+private fun DecorativeSymbol(
+    text: String,
+    style: androidx.compose.ui.text.TextStyle = MaterialTheme.typography.titleMedium
+) {
+    Text(
+        text = text,
+        modifier = Modifier.clearAndSetSemantics { },
+        style = style,
+        color = MaterialTheme.colorScheme.primary
+    )
+}
+
+@Composable
+private fun LockGlyph() {
+    val color = MaterialTheme.colorScheme.onSurfaceVariant
+    Canvas(modifier = Modifier.size(24.dp).clearAndSetSemantics { }) {
+        val stroke = 2.dp.toPx()
+        drawArc(
+            color = color,
+            startAngle = 180f,
+            sweepAngle = 180f,
+            useCenter = false,
+            topLeft = Offset(size.width * .27f, size.height * .08f),
+            size = androidx.compose.ui.geometry.Size(size.width * .46f, size.height * .55f),
+            style = Stroke(width = stroke, cap = StrokeCap.Round)
+        )
+        drawRoundRect(
+            color = color,
+            topLeft = Offset(size.width * .16f, size.height * .42f),
+            size = androidx.compose.ui.geometry.Size(size.width * .68f, size.height * .48f),
+            cornerRadius = androidx.compose.ui.geometry.CornerRadius(3.dp.toPx()),
+            style = Stroke(width = stroke)
+        )
     }
 }
 
@@ -533,10 +959,11 @@ internal fun StrictModeProtectedActionDialog(
 private fun StrictModeCard(content: @Composable ColumnScope.() -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(18.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
     ) {
-        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             content()
         }
     }
@@ -573,8 +1000,9 @@ internal data class StrictModeSetupState(
 
     companion object {
         fun from(configuration: StrictModeConfiguration): StrictModeSetupState {
-            val timedCustom = configuration.timedDurationMillis != null &&
-                timedDurationPresets().none { it.second == configuration.timedDurationMillis }
+            val timedCustom = configuration.durationType == StrictModeDurationType.Timed &&
+                configuration.timedDurationMillis != null &&
+                strictModeCommitmentPresetFor(configuration.timedDurationMillis) == StrictModeCommitmentPreset.Custom
             val countdownCustom = configuration.deactivationCountdownMillis != null &&
                 countdownPresets().none { it.second == configuration.deactivationCountdownMillis }
             return StrictModeSetupState(
@@ -594,17 +1022,6 @@ internal data class StrictModeSetupState(
             )
         }
     }
-}
-
-internal fun timedDurationPresets(): List<Pair<String, Long>> {
-    return listOf(
-        "1 hour" to 60 * 60_000L,
-        "4 hours" to 4 * 60 * 60_000L,
-        "8 hours" to 8 * 60 * 60_000L,
-        "1 day" to 24 * 60 * 60_000L,
-        "3 days" to 3 * 24 * 60 * 60_000L,
-        "7 days" to 7 * 24 * 60 * 60_000L
-    )
 }
 
 internal fun countdownPresets(): List<Pair<String, Long>> {
@@ -644,11 +1061,7 @@ private fun plural(value: Long, unit: String): String {
     return "$value $unit${if (value == 1L) "" else "s"}"
 }
 
-private val StrictModeDurationType.label: String
-    get() = when (this) {
-        StrictModeDurationType.Timed -> "Timed"
-        StrictModeDurationType.Indefinite -> "Indefinite"
-    }
+private fun ruleCountLabel(count: Int): String = "$count ${if (count == 1) "rule" else "rules"}"
 
 internal fun strictModeRuleLabel(rule: EarnItRuleStore.Rule): String {
     return when (rule.type) {

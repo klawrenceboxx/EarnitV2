@@ -1,27 +1,35 @@
 package com.example.earnitv2
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.example.earnitv2.ui.theme.EarnitV2Theme
@@ -237,6 +245,7 @@ internal fun EarnItSettings(
     onCreateFirstRule: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    BackHandler(onBack = onBack)
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -253,42 +262,81 @@ internal fun EarnItSettings(
 
         Card(
             modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(18.dp),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
         ) {
             Column(
-                modifier = Modifier.padding(14.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
-                Text(text = "Strict Mode", style = MaterialTheme.typography.titleSmall)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    SettingsSymbolBadge(symbol = "\u25C7", emphasized = true)
+                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                        Text(text = "Strict Mode", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                        Text(
+                            text = "Protect your Rules from changes.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    SettingsStatusBadge(status = strictModeSettingsBadge(strictModeState.lifecycleState))
+                }
                 Text(
-                    text = "Status: ${strictModeSettingsStatus(strictModeState.lifecycleState)}",
-                    style = MaterialTheme.typography.bodyMedium
+                    text = strictModeSettingsDetail(strictModeState),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                OutlinedButton(onClick = onOpenStrictMode, modifier = Modifier.fillMaxWidth()) {
-                    Text(text = "Open Strict Mode")
+                Surface(
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp).clickable(onClick = onOpenStrictMode),
+                    shape = RoundedCornerShape(14.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .32f)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(text = "Open Strict Mode", modifier = Modifier.weight(1f), color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
+                        Text(
+                            text = "\u203A",
+                            modifier = Modifier.clearAndSetSemantics { },
+                            color = MaterialTheme.colorScheme.primary,
+                            style = MaterialTheme.typography.titleLarge
+                        )
+                    }
                 }
             }
         }
 
         Card(
             modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(18.dp),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
         ) {
             Column(
-                modifier = Modifier.padding(14.dp),
+                modifier = Modifier.padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Text(text = if (permissionState.isReady) "Setup complete" else "Finish setup", style = MaterialTheme.typography.titleSmall)
-                Text(
-                    text = if (permissionState.isReady) {
-                        "Earning progress and app blocking are ready."
-                    } else {
-                        permissionState.repairTargetLabels.joinToString(" and ") + " needs attention."
-                    },
-                    style = MaterialTheme.typography.bodyMedium
-                )
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    SettingsSymbolBadge(symbol = if (permissionState.isReady) "\u2713" else "!", success = permissionState.isReady)
+                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                        Text(
+                            text = if (permissionState.isReady) "Setup Complete" else "Finish setup",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            text = if (permissionState.isReady) {
+                                "Earning progress and app blocking are ready."
+                            } else {
+                                permissionState.repairTargetLabels.joinToString(" and ") + " needs attention."
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
                 if (!permissionState.isReady) {
                     PermissionRepairRows(
                         permissionState = permissionState,
@@ -306,30 +354,92 @@ internal fun EarnItSettings(
 
         Card(
             modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(18.dp),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
         ) {
-            Column(
-                modifier = Modifier.padding(14.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+            Row(
+                modifier = Modifier.fillMaxWidth().heightIn(min = 78.dp).padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Text(text = "About EarnIt", style = MaterialTheme.typography.titleSmall)
-                Text(
-                    text = "EarnIt turns time in your Earn App into Reward Time for your Reward Apps. Rules stay on this device.",
-                    style = MaterialTheme.typography.bodyMedium
-                )
+                SettingsSymbolBadge(symbol = "i")
+                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                    Text(text = "About EarnIt", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        text = "Learn how EarnIt helps you build better habits.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
         }
     }
 }
 
-private fun strictModeSettingsStatus(state: StrictModeLifecycleState): String {
+@Composable
+private fun SettingsSymbolBadge(
+    symbol: String,
+    emphasized: Boolean = false,
+    success: Boolean = false
+) {
+    val container = when {
+        success -> MaterialTheme.colorScheme.tertiaryContainer
+        emphasized -> MaterialTheme.colorScheme.primaryContainer
+        else -> MaterialTheme.colorScheme.surfaceVariant
+    }
+    val content = when {
+        success -> MaterialTheme.colorScheme.onTertiaryContainer
+        emphasized -> MaterialTheme.colorScheme.onPrimaryContainer
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    Surface(
+        modifier = Modifier.size(46.dp).clearAndSetSemantics { },
+        shape = CircleShape,
+        color = container
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Text(text = symbol, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = content)
+        }
+    }
+}
+
+@Composable
+private fun SettingsStatusBadge(status: String) {
+    val active = status != "Off"
+    Surface(
+        shape = RoundedCornerShape(50),
+        color = if (active) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant
+    ) {
+        Text(
+            text = status,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = if (active) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+private fun strictModeSettingsDetail(state: StrictModeState): String {
+    return when {
+        state.lifecycleState == StrictModeLifecycleState.Inactive -> "Choose a commitment and deactivation wait time."
+        state.lifecycleState == StrictModeLifecycleState.Activating -> "Activating after the review countdown."
+        state.lifecycleState == StrictModeLifecycleState.DeactivationCounting -> "Deactivation countdown in progress."
+        state.lifecycleState == StrictModeLifecycleState.DeactivationReady -> "Ready to confirm deactivation."
+        state.configuration.durationType == StrictModeDurationType.Indefinite -> "Active until you turn it off."
+        state.expiresAtMillis != null -> "${durationLabel(strictModeRemainingMillis(state.expiresAtMillis))} remaining."
+        else -> "Your enabled Rules are protected."
+    }
+}
+
+internal fun strictModeSettingsBadge(state: StrictModeLifecycleState): String {
     return when (state) {
         StrictModeLifecycleState.Inactive -> "Off"
         StrictModeLifecycleState.Activating -> "Activating"
-        StrictModeLifecycleState.Active -> "Active"
-        StrictModeLifecycleState.DeactivationCounting -> "Deactivation countdown"
-        StrictModeLifecycleState.DeactivationReady -> "Ready to deactivate"
+        StrictModeLifecycleState.Active,
+        StrictModeLifecycleState.DeactivationCounting,
+        StrictModeLifecycleState.DeactivationReady -> "Active"
     }
 }
 

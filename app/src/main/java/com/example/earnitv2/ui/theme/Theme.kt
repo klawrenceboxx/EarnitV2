@@ -1,6 +1,5 @@
 package com.example.earnitv2.ui.theme
 
-import android.app.Activity
 import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
@@ -12,31 +11,54 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.platform.LocalContext
 
 private val DarkColorScheme = darkColorScheme(
-    primary = Purple80,
-    secondary = PurpleGrey80,
-    tertiary = Pink80
+    primary = WarmCoral,
+    onPrimary = WarmInk,
+    primaryContainer = WarmCoralContainer,
+    onPrimaryContainer = WarmText,
+    secondary = WarmTextMuted,
+    onSecondary = WarmInk,
+    secondaryContainer = WarmSurfaceRaised,
+    onSecondaryContainer = WarmText,
+    tertiary = WarmSuccess,
+    onTertiary = WarmInk,
+    tertiaryContainer = WarmSuccessContainer,
+    onTertiaryContainer = WarmText,
+    background = WarmInk,
+    onBackground = WarmText,
+    surface = WarmSurface,
+    onSurface = WarmText,
+    surfaceVariant = WarmSurfaceRaised,
+    onSurfaceVariant = WarmTextMuted,
+    outline = WarmOutline,
+    outlineVariant = WarmOutline
 )
 
 private val LightColorScheme = lightColorScheme(
-    primary = Purple40,
-    secondary = PurpleGrey40,
-    tertiary = Pink40
-
-    /* Other default colors to override
-    background = Color(0xFFFFFBFE),
-    surface = Color(0xFFFFFBFE),
-    onPrimary = Color.White,
-    onSecondary = Color.White,
-    onTertiary = Color.White,
-    onBackground = Color(0xFF1C1B1F),
-    onSurface = Color(0xFF1C1B1F),
-    */
+    primary = CoralDark,
+    onPrimary = CreamSurface,
+    primaryContainer = CoralLightContainer,
+    onPrimaryContainer = CocoaText,
+    secondary = CocoaMuted,
+    onSecondary = CreamSurface,
+    secondaryContainer = CreamSurfaceRaised,
+    onSecondaryContainer = CocoaText,
+    tertiary = SuccessDark,
+    onTertiary = CreamSurface,
+    tertiaryContainer = SuccessLightContainer,
+    onTertiaryContainer = CocoaText,
+    background = CreamBackground,
+    onBackground = CocoaText,
+    surface = CreamSurface,
+    onSurface = CocoaText,
+    surfaceVariant = CreamSurfaceRaised,
+    onSurfaceVariant = CocoaMuted,
+    outline = CreamOutline,
+    outlineVariant = CreamOutline
 )
 
 @Composable
 fun EarnitV2Theme(
     darkTheme: Boolean = isSystemInDarkTheme(),
-    // Dynamic color is available on Android 12+
     dynamicColor: Boolean = true,
     content: @Composable () -> Unit
 ) {
@@ -45,7 +67,6 @@ fun EarnitV2Theme(
             val context = LocalContext.current
             if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
         }
-
         darkTheme -> DarkColorScheme
         else -> LightColorScheme
     }
