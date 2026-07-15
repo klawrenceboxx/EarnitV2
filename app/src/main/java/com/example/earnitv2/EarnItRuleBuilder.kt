@@ -12,11 +12,14 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -26,6 +29,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
@@ -182,15 +186,8 @@ fun EarnItRuleBuilder(
                 EarnStep(
                 rule = rule,
                 apps = apps,
-                appsLoading = appsLoading,
-                selectedProductivePackage = selectedProductivePackage,
                 selectedProductivePackages = selectedProductivePackages,
-                productivePickerOpen = productivePickerOpen,
-                productiveSearch = productiveSearch,
-                onOpenProductivePicker = onOpenProductivePicker,
-                onCloseProductivePicker = onCloseProductivePicker,
-                onProductiveSearchChange = onProductiveSearchChange,
-                onSelectProductiveApp = onSelectProductiveApp
+                onOpenProductivePicker = onOpenProductivePicker
                 )
             }
             RuleBuilderStep.Reward -> RewardStep(
@@ -858,15 +855,8 @@ internal fun compactRuleSoFarLines(
 private fun EarnStep(
     rule: EarnItRuleStore.Rule,
     apps: List<EarnItRuleStore.LaunchableApp>,
-    appsLoading: Boolean,
-    selectedProductivePackage: String,
     selectedProductivePackages: Set<String>,
-    productivePickerOpen: Boolean,
-    productiveSearch: String,
-    onOpenProductivePicker: () -> Unit,
-    onCloseProductivePicker: () -> Unit,
-    onProductiveSearchChange: (String) -> Unit,
-    onSelectProductiveApp: (String) -> Unit
+    onOpenProductivePicker: () -> Unit
 ) {
     val savedEarnApps = rule.earnApps.associateBy { it.packageName }
     val namesByPackage = apps.associate { it.packageName to it.name } +
@@ -878,38 +868,132 @@ private fun EarnStep(
         title = "How will you earn Reward Time?",
         helperText = "Choose one or more Earn Apps where productive time should count."
     ) {
-        OutlinedButton(onClick = onOpenProductivePicker, modifier = Modifier.fillMaxWidth()) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(16.dp))
+                .clickable(onClick = onOpenProductivePicker),
+            color = MaterialTheme.colorScheme.surface,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+        ) {
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(text = if (selectedApps.isEmpty()) "Choose Earn Apps" else "Manage Earn Apps")
-                if (selectedApps.isNotEmpty()) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(3.dp)
+                ) {
                     Text(
-                        text = selectedAppCountLabel(selectedApps.size),
+                        text = if (selectedApps.isEmpty()) "Choose Earn Apps" else "${selectedApps.size} selected",
+                        style = MaterialTheme.typography.titleSmall
+                    )
+                    Text(
+                        text = selectedAppPreviewLabel(selectedApps.map { it.name }),
+                        style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                Text(text = ">", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(text = "\u203A", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
+    }
+}
 
-        if (productivePickerOpen) {
+@Composable
+internal fun BuilderAppPickerSurface(
+    title: String,
+    searchLabel: String,
+    apps: List<EarnItRuleStore.LaunchableApp>,
+    selectedPackages: Set<String>,
+    searchQuery: String,
+    loading: Boolean,
+    onSearchQueryChange: (String) -> Unit,
+    onToggleApp: (String) -> Unit,
+    onSave: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var selectedCategory by remember { mutableStateOf(AppPickerCategory.All) }
+    val visibleApps = remember(apps, selectedCategory, searchQuery) {
+        filterLaunchableApps(apps, selectedCategory, searchQuery)
+    }
+    BackHandler(onBack = onSave)
+
+    Column(
+        modifier = modifier.fillMaxSize().background(MaterialTheme.colorScheme.background),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            TextButton(onClick = onSave) { Text(text = "Back") }
+            Text(text = title, style = MaterialTheme.typography.headlineSmall)
+        }
+        Column(
+            modifier = Modifier.padding(horizontal = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
             BuilderAppSearchField(
-                value = productiveSearch,
-                onValueChange = onProductiveSearchChange,
-                label = "Search Earn Apps"
+                value = searchQuery,
+                onValueChange = onSearchQueryChange,
+                label = searchLabel
             )
-            BuilderAppList(
-                apps = apps,
-                selectedPackages = selectedProductivePackages,
-                multiSelect = true,
-                searchQuery = productiveSearch,
-                loading = appsLoading,
-                selectedCountLabel = selectedAppCountLabel(selectedProductivePackages.size),
-                onClickApp = onSelectProductiveApp
+            Row(
+                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                AppPickerCategory.entries.forEach { category ->
+                    CategoryChip(
+                        label = category.label,
+                        selected = category == selectedCategory,
+                        onClick = { selectedCategory = category }
+                    )
+                }
+            }
+            Text(
+                text = selectedAppCountLabel(selectedPackages.size),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+        }
+        LazyColumn(
+            modifier = Modifier.fillMaxWidth().weight(1f),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp, vertical = 4.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            when {
+                loading && apps.isEmpty() -> item {
+                    Text(text = "Loading apps...", style = MaterialTheme.typography.bodyMedium)
+                }
+                visibleApps.isEmpty() -> item {
+                    Text(
+                        text = appPickerEmptyText(selectedCategory, searchQuery),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+                else -> items(visibleApps, key = { it.packageName }) { app ->
+                    BuilderAppRow(
+                        app = app,
+                        selected = app.packageName in selectedPackages,
+                        multiSelect = true,
+                        onClickApp = onToggleApp
+                    )
+                }
+            }
+        }
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            tonalElevation = 3.dp,
+            shadowElevation = 6.dp
+        ) {
+            Button(
+                onClick = onSave,
+                modifier = Modifier.fillMaxWidth().padding(16.dp).heightIn(min = 56.dp)
+            ) {
+                Text(text = "Save")
+            }
         }
     }
 }

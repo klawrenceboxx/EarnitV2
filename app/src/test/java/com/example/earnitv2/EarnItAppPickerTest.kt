@@ -28,6 +28,51 @@ class EarnItAppPickerTest {
     }
 
     @Test
+    fun pickerExposesExpandedCategorySet() {
+        assertEquals(
+            listOf(
+                "All", "Social", "Games", "Entertainment", "Productivity", "Education",
+                "Reading", "Health", "Finance", "Communication", "Shopping", "Utilities"
+            ),
+            AppPickerCategory.entries.map { it.label }
+        )
+    }
+
+    @Test
+    fun classifyLaunchableApp_mapsAndroidProductivityAndNewsMetadata() {
+        assertEquals(
+            AppPickerCategory.Productivity,
+            classifyLaunchableApp(
+                EarnItRuleStore.LaunchableApp("com.example.work", "Work", ApplicationInfo.CATEGORY_PRODUCTIVITY)
+            )
+        )
+        assertEquals(
+            AppPickerCategory.Reading,
+            classifyLaunchableApp(
+                EarnItRuleStore.LaunchableApp("com.example.reader", "Reader", ApplicationInfo.CATEGORY_NEWS)
+            )
+        )
+    }
+
+    @Test
+    fun classifyLaunchableApp_supportsNewKeywordCategories() {
+        val examples = listOf(
+            EarnItRuleStore.LaunchableApp("com.notion.id", "Notion") to AppPickerCategory.Productivity,
+            EarnItRuleStore.LaunchableApp("com.duolingo", "Duolingo") to AppPickerCategory.Education,
+            EarnItRuleStore.LaunchableApp("com.amazon.kindle", "Kindle") to AppPickerCategory.Reading,
+            EarnItRuleStore.LaunchableApp("com.fitbit.FitbitMobile", "Fitbit") to AppPickerCategory.Health,
+            EarnItRuleStore.LaunchableApp("com.coinbase.android", "Coinbase") to AppPickerCategory.Finance,
+            EarnItRuleStore.LaunchableApp("com.Slack", "Slack") to AppPickerCategory.Communication,
+            EarnItRuleStore.LaunchableApp("com.ebay.mobile", "eBay") to AppPickerCategory.Shopping,
+            EarnItRuleStore.LaunchableApp("com.google.android.calculator", "Calculator") to AppPickerCategory.Utilities
+        )
+
+        examples.forEach { (app, expected) ->
+            assertEquals(expected, classifyLaunchableApp(app))
+        }
+    }
+
+    @Test
     fun filterLaunchableApps_appliesCategoryBeforeSearch() {
         val apps = listOf(
             EarnItRuleStore.LaunchableApp("com.instagram.android", "Instagram"),
@@ -63,6 +108,24 @@ class EarnItAppPickerTest {
         assertEquals("0 apps selected", selectedAppCountLabel(0))
         assertEquals("1 app selected", selectedAppCountLabel(1))
         assertEquals("2 apps selected", selectedAppCountLabel(2))
+    }
+
+    @Test
+    fun selectedAppPreviewLabel_showsNamesAndRemainingCount() {
+        assertEquals("Select one or more apps", selectedAppPreviewLabel(emptyList()))
+        assertEquals("Duolingo, Kindle", selectedAppPreviewLabel(listOf("Duolingo", "Kindle")))
+        assertEquals(
+            "Duolingo, Kindle, Notion +1 more",
+            selectedAppPreviewLabel(listOf("Duolingo", "Kindle", "Notion", "Readwise"))
+        )
+    }
+
+    @Test
+    fun allCategoryIncludesUncategorizedApps() {
+        val uncategorized = EarnItRuleStore.LaunchableApp("com.example.unknown", "Unknown")
+
+        assertEquals(null, classifyLaunchableApp(uncategorized))
+        assertEquals(listOf(uncategorized), filterLaunchableApps(listOf(uncategorized), AppPickerCategory.All, ""))
     }
 
     @Test

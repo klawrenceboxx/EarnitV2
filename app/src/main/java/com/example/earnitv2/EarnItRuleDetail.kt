@@ -1,6 +1,8 @@
 package com.example.earnitv2
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.DateRange
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -21,6 +23,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -707,7 +710,11 @@ private fun RuleScheduleCard(rule: EarnItRuleStore.Rule) {
                     .background(ruleDetailAccentColor(if (rule.enabled) RuleDetailTone.Active else RuleDetailTone.Paused).copy(alpha = 0.16f)),
                 contentAlignment = Alignment.Center
             ) {
-                Text(text = "Cal", style = MaterialTheme.typography.labelSmall)
+                Icon(
+                    imageVector = Icons.Rounded.DateRange,
+                    contentDescription = null,
+                    tint = ruleDetailAccentColor(if (rule.enabled) RuleDetailTone.Active else RuleDetailTone.Paused)
+                )
             }
             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(text = title, style = MaterialTheme.typography.titleMedium)

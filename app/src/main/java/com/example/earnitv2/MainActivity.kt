@@ -1140,6 +1140,19 @@ internal fun Dashboard(
                 DeepWorkSetupSheet(linked, onDismissDeepWorkSetup, onStartDeepWork)
             }
         }
+    } else if (productivePickerOpen) {
+        BuilderAppPickerSurface(
+            title = "Choose Earn Apps",
+            searchLabel = "Search Earn Apps",
+            apps = apps,
+            selectedPackages = selectedProductivePackages,
+            searchQuery = productiveSearch,
+            loading = appsLoading,
+            onSearchQueryChange = onProductiveSearchChange,
+            onToggleApp = onSelectProductiveApp,
+            onSave = onCloseProductivePicker,
+            modifier = modifier
+        )
     } else {
         Column(
             modifier = modifier
