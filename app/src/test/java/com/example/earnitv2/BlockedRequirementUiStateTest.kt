@@ -54,13 +54,13 @@ class BlockedRequirementUiStateTest {
     }
 
     @Test
-    fun ctu_missingProgressShowsHonestConfiguredRequirement() {
+    fun ctu_missingProgressUsesTheSharedZeroProgressState() {
         val rows = blockedRequirementUiStates(
             rule = completeRule(requirements = listOf(requirement("duo", "Duolingo", 10))),
             progressSeconds = emptyMap()
         )
 
-        assertEquals("10 min required", rows.single().progressLabel)
+        assertEquals("0 / 10 min", rows.single().progressLabel)
     }
 
     @Test

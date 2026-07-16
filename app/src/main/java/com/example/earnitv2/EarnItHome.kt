@@ -403,7 +403,7 @@ private fun LiveRuleCard(
                     }
                     EarnItRuleStore.RuleType.CompleteToUnlock -> {
                         RequirementsRows(
-                            requirements = homeRule.completeToUnlockProgress?.requirements.orEmpty(),
+                            progress = homeRule.completeToUnlockProgress,
                             onOpenEarnApp = onOpenEarnApp
                         )
                         RewardAppsSummarySection(label = "Unlocks", apps = card.rewardApps)
@@ -466,21 +466,32 @@ private fun RuleCardStatus(
 
 @Composable
 private fun RequirementsRows(
-    requirements: List<CompleteRequirementUiState>,
+    progress: CompleteToUnlockRuleProgressUiState?,
     onOpenEarnApp: (String) -> Unit
 ) {
-    RuleAppSection(
-        label = "Requirements",
-        rows = requirements.map { requirement ->
-            HomeRuleAppActionRowState(
-                packageName = requirement.packageName,
-                name = requirement.name.withoutStrayWarningIndicator(),
-                supportingText = requirement.progressLabel,
-                showAction = true
+    val compact = progress?.let(::compactIncompleteRequirements)
+        ?: CompactIncompleteRequirementsUiState(emptyList(), 0)
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        SectionLabel(text = "Requirements")
+        compact.visibleRequirements.forEach { requirement ->
+            RuleAppActionRow(
+                row = HomeRuleAppActionRowState(
+                    packageName = requirement.packageName,
+                    name = requirement.name.withoutStrayWarningIndicator(),
+                    supportingText = requirement.progressLabel,
+                    showAction = true
+                ),
+                onOpenApp = onOpenEarnApp
             )
-        },
-        onOpenApp = onOpenEarnApp
-    )
+        }
+        if (compact.remainingCount > 0) {
+            Text(
+                text = "+${compact.remainingCount} more",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
 }
 
 @Composable

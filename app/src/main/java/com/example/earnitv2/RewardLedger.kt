@@ -298,7 +298,13 @@ object RewardLedger {
         if (!prefs.contains(dayKey)) {
             migrateLegacyLedgerIfPresent(prefs, rule, today, ruleSignature)
         }
-        if (prefs.getString(dayKey, null) != today || prefs.getString(signatureKey, null) != ruleSignature) {
+        if (shouldResetRuleLedger(
+                storedDay = prefs.getString(dayKey, null),
+                currentDay = today,
+                storedRuleSignature = prefs.getString(signatureKey, null),
+                currentRuleSignature = ruleSignature
+            )
+        ) {
             val editor = prefs.edit()
             clearRulePackageKeys(prefs, editor, rule, KEY_REQUIREMENT_PROGRESS_SECONDS)
             clearRulePackageKeys(prefs, editor, rule, KEY_TRACKED_HANDOFF_SECONDS)
@@ -396,3 +402,10 @@ object RewardLedger {
         }
     }
 }
+
+internal fun shouldResetRuleLedger(
+    storedDay: String?,
+    currentDay: String,
+    storedRuleSignature: String?,
+    currentRuleSignature: String
+): Boolean = storedDay != currentDay || storedRuleSignature != currentRuleSignature

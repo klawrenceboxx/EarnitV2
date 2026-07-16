@@ -272,6 +272,77 @@ class EarnItUiStateTest {
     }
 
     @Test
+    fun completeToUnlockHomeCompactStateFiltersCompletedAndUsesFirstTwoPlusRemaining() {
+        val rule = completeToUnlockRule().copy(
+            requirements = listOf(
+                requirement("complete", "Complete", 5),
+                requirement("first", "First", 10),
+                requirement("second", "Second", 15),
+                requirement("third", "Third", 20)
+            )
+        )
+        val progress = completeToUnlockProgressUiState(
+            rule,
+            mapOf(
+                "complete" to 6 * 60L,
+                "first" to 3 * 60L,
+                "second" to 4 * 60L,
+                "third" to 5 * 60L
+            )
+        )
+
+        val compact = compactIncompleteRequirements(progress)
+
+        assertEquals(listOf("first", "second"), compact.visibleRequirements.map { it.packageName })
+        assertEquals(1, compact.remainingCount)
+        assertEquals(
+            progress.remainingRequirementCount,
+            compact.visibleRequirements.size + compact.remainingCount
+        )
+        assertFalse(compact.visibleRequirements.any { it.packageName == "complete" })
+    }
+
+    @Test
+    fun completeToUnlockDetailKeepsFullOrderedProgressIncludingOverCompletion() {
+        val rule = completeToUnlockRule()
+        val progress = completeToUnlockProgressUiState(
+            rule,
+            mapOf(
+                "com.duolingo" to 12 * 60L,
+                "com.headspace" to 3 * 60L
+            )
+        )
+
+        val detailRequirements = completeToUnlockDetailRequirements(progress)
+
+        assertEquals(listOf("com.duolingo", "com.headspace"), detailRequirements.map { it.packageName })
+        assertEquals(listOf("12 / 10 min", "3 / 20 min"), detailRequirements.map { it.progressLabel })
+        assertTrue(detailRequirements.first().complete)
+        assertEquals(1f, detailRequirements.first().progressFraction)
+        assertFalse(detailRequirements.last().complete)
+    }
+
+    @Test
+    fun ledgerResetDecisionPreservesSameDayProgressAndResetsOnANewDay() {
+        assertFalse(
+            shouldResetRuleLedger(
+                storedDay = "20260716",
+                currentDay = "20260716",
+                storedRuleSignature = "rule",
+                currentRuleSignature = "rule"
+            )
+        )
+        assertTrue(
+            shouldResetRuleLedger(
+                storedDay = "20260716",
+                currentDay = "20260717",
+                storedRuleSignature = "rule",
+                currentRuleSignature = "rule"
+            )
+        )
+    }
+
+    @Test
     fun earnRewardTimeHomeCardUsesRequestedSemanticOrder() {
         assertEquals(
             listOf("Earn with", "Earn Apps", "Unlocks", "Reward Apps", "Exchange"),

@@ -38,6 +38,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.contentDescription
@@ -259,7 +260,8 @@ fun EarnItRuleDetail(
                 onProtectedActionBlocked = onProtectedActionBlocked
             )
             EarnItRuleStore.RuleType.CompleteToUnlock -> CompleteToUnlockDetailCard(
-                rule = rule,
+                progress = homeRule.completeToUnlockProgress
+                    ?: completeToUnlockProgressUiState(rule, emptyMap()),
                 rewardApps = detail.card.rewardApps,
                 onOpenRequirementApp = onOpenEarnApp
             )
@@ -659,17 +661,18 @@ private fun EarnRewardTimeDetailCard(
 
 @Composable
 private fun CompleteToUnlockDetailCard(
-    rule: EarnItRuleStore.Rule,
+    progress: CompleteToUnlockRuleProgressUiState,
     rewardApps: List<EarnItAppUiState>,
     onOpenRequirementApp: (String) -> Unit
 ) {
     SectionContainer(title = "Complete to unlock") {
-        rule.requirements.forEach { requirement ->
+        completeToUnlockDetailRequirements(progress).forEach { requirement ->
             AppActionRow(
-                app = requirement.app.toUiState(),
-                secondaryText = requirementDurationLabel(requirement),
-                progress = null,
-                onOpen = { onOpenRequirementApp(requirement.app.packageName) }
+                app = EarnItAppUiState(requirement.packageName, requirement.name),
+                secondaryText = requirement.progressLabel,
+                progress = requirement.progressFraction,
+                completed = requirement.complete,
+                onOpen = { onOpenRequirementApp(requirement.packageName) }
             )
         }
         Text(
@@ -762,9 +765,13 @@ private fun AppActionRow(
     app: EarnItAppUiState,
     secondaryText: String,
     progress: Float?,
+    completed: Boolean = false,
     onOpen: () -> Unit
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(
+        modifier = Modifier.alpha(if (completed) 0.68f else 1f),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -786,8 +793,17 @@ private fun AppActionRow(
                     overflow = TextOverflow.Ellipsis
                 )
             }
-            OutlinedButton(onClick = onOpen) {
-                Text(text = "Open")
+            Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                if (completed) {
+                    Text(
+                        text = "✓ Complete",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.tertiary
+                    )
+                }
+                OutlinedButton(onClick = onOpen) {
+                    Text(text = "Open")
+                }
             }
         }
         if (progress != null) {

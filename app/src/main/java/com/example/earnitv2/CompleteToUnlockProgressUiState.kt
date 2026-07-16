@@ -11,6 +11,10 @@ data class CompleteRequirementUiState(
     val progressLabel: String = progressSeconds?.let { progress ->
         "${formatRequirementProgressMinutes(progress)} / ${formatRequirementWholeMinutes(requiredSeconds)}"
     } ?: "${formatRequirementWholeMinutes(requiredSeconds)} required"
+    val progressFraction: Float = when {
+        requiredSeconds <= 0L -> if (complete) 1f else 0f
+        else -> ((progressSeconds ?: 0L).toFloat() / requiredSeconds.toFloat()).coerceIn(0f, 1f)
+    }
 }
 
 data class CompleteToUnlockRuleProgressUiState(
@@ -19,6 +23,25 @@ data class CompleteToUnlockRuleProgressUiState(
     val remainingRequirementCount: Int,
     val isUnlocked: Boolean
 )
+
+data class CompactIncompleteRequirementsUiState(
+    val visibleRequirements: List<CompleteRequirementUiState>,
+    val remainingCount: Int
+)
+
+fun compactIncompleteRequirements(
+    progress: CompleteToUnlockRuleProgressUiState
+): CompactIncompleteRequirementsUiState {
+    val incomplete = progress.incompleteRequirements
+    return CompactIncompleteRequirementsUiState(
+        visibleRequirements = incomplete.take(HOME_REQUIREMENT_LIMIT),
+        remainingCount = (incomplete.size - HOME_REQUIREMENT_LIMIT).coerceAtLeast(0)
+    )
+}
+
+fun completeToUnlockDetailRequirements(
+    progress: CompleteToUnlockRuleProgressUiState
+): List<CompleteRequirementUiState> = progress.requirements
 
 typealias BlockedRequirementUiState = CompleteRequirementUiState
 
@@ -40,7 +63,7 @@ fun completeToUnlockProgressUiState(
         CompleteRequirementUiState(
             packageName = packageName,
             name = requirement.app.name,
-            progressSeconds = progressSeconds[packageName]?.coerceAtLeast(0L),
+            progressSeconds = progressSeconds[packageName]?.coerceAtLeast(0L) ?: 0L,
             requiredSeconds = requirement.requiredSeconds.coerceAtLeast(0L)
         )
     }
@@ -73,3 +96,5 @@ private fun formatRequirementProgressMinutes(totalSeconds: Long): String {
     val minutes = totalSeconds.coerceAtLeast(0L) / 60L
     return minutes.toString()
 }
+
+private const val HOME_REQUIREMENT_LIMIT = 2
