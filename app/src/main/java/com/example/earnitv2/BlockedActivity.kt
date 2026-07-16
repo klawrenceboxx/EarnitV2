@@ -40,9 +40,7 @@ class BlockedActivity : ComponentActivity() {
     private var ruleId by mutableStateOf<String?>(null)
     private var blockedAppName by mutableStateOf("Instagram")
     private var blockedPackage by mutableStateOf<String?>(null)
-    private var productiveAppName by mutableStateOf("Duolingo")
-    private var productivePackage by mutableStateOf(AppPackages.DEFAULT_PRODUCTIVE_APP)
-    private var exchangeLabel by mutableStateOf("Every 10 min earns 10 min Reward Time")
+    private var earnApps by mutableStateOf(emptyList<BlockedEarnAppUiState>())
     private var blockedReason by mutableStateOf(RuleAccessEvaluator.DenialReason.OutOfRewardTime)
     private var fallbackMessage by mutableStateOf<String?>(null)
     private var incompleteRequirements by mutableStateOf(emptyList<BlockedRequirementUiState>())
@@ -57,14 +55,13 @@ class BlockedActivity : ComponentActivity() {
                 BlockedScreen(
                     blockedAppName = blockedAppName,
                     blockedPackage = blockedPackage,
-                    productiveAppName = productiveAppName,
-                    productivePackage = productivePackage,
-                    exchangeLabel = exchangeLabel,
+                    earnApps = earnApps,
                     blockedReason = blockedReason,
                     incompleteRequirements = incompleteRequirements,
                     fallbackMessage = fallbackMessage,
-                    onOpenProductiveApp = ::openProductiveApp,
+                    onOpenEarnApp = ::openEarnApp,
                     onOpenRequirementApp = ::openRequirementApp,
+                    onViewMoreEarningApps = ::openRuleDetail,
                     onNotNow = ::returnHome
                 )
             }
@@ -83,32 +80,45 @@ class BlockedActivity : ComponentActivity() {
     }
 
     private fun updateRuleFromIntent(intent: Intent?) {
-        ruleId = intent?.getStringExtra(EXTRA_RULE_ID)
-        val rule = ruleId?.let { EarnItRuleStore.findRule(this, it) } ?: EarnItRuleStore.getRule(this)
+        val requestedRuleId = intent?.getStringExtra(EXTRA_RULE_ID)
+        val rule = requestedRuleId?.let { EarnItRuleStore.findRule(this, it) } ?: EarnItRuleStore.getRule(this)
+        ruleId = rule.id
         blockedAppName = intent?.getStringExtra(EXTRA_BLOCKED_APP_NAME)
             ?: rule.blockedApps.firstOrNull()?.name
             ?: "Reward App"
         blockedPackage = intent?.getStringExtra(EXTRA_BLOCKED_PACKAGE)
             ?: rule.blockedApps.firstOrNull { it.name == blockedAppName }?.packageName
-        val primaryEarnApp = rule.earnApps.firstOrNull()
-        productiveAppName = intent?.getStringExtra(EXTRA_PRODUCTIVE_APP_NAME) ?: primaryEarnApp?.name ?: rule.productiveName
-        productivePackage = intent?.getStringExtra(EXTRA_PRODUCTIVE_PACKAGE) ?: primaryEarnApp?.packageName ?: rule.productivePackage
+        earnApps = blockedEarnAppUiStates(
+            rule = rule,
+            legacyEarnAppName = intent?.getStringExtra(EXTRA_PRODUCTIVE_APP_NAME) ?: rule.productiveName,
+            legacyEarnAppPackage = intent?.getStringExtra(EXTRA_PRODUCTIVE_PACKAGE) ?: rule.productivePackage
+        )
         blockedReason = intent?.getStringExtra(EXTRA_BLOCKED_REASON)?.let { rawReason ->
             RuleAccessEvaluator.DenialReason.entries.firstOrNull { it.name == rawReason }
         } ?: RuleAccessEvaluator.DenialReason.OutOfRewardTime
-        exchangeLabel = EarnItUiFormatters.exchangeSummary(rule.rewardSecondsPerProductiveSecond)
         incompleteRequirements = blockedRequirementUiStates(
             rule = rule,
             progressSeconds = RewardLedger.completionProgress(this, rule)
         )
     }
 
-    private fun openProductiveApp() {
-        openApp(productivePackage, productiveAppName)
+    private fun openEarnApp(app: BlockedEarnAppUiState) {
+        openApp(app.packageName, app.name)
     }
 
     private fun openRequirementApp(requirement: BlockedRequirementUiState) {
         openApp(requirement.packageName, requirement.name)
+    }
+
+    private fun openRuleDetail() {
+        val targetRuleId = ruleId ?: return
+        val detailIntent = Intent(this, MainActivity::class.java).apply {
+            putExtra(MainActivity.EXTRA_OPEN_RULE_DETAIL_ID, targetRuleId)
+            addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        }
+        startActivity(detailIntent)
+        finish()
     }
 
     private fun openApp(packageName: String, appName: String) {
@@ -152,18 +162,66 @@ class BlockedActivity : ComponentActivity() {
     }
 }
 
+data class BlockedEarnAppUiState(
+    val packageName: String,
+    val name: String,
+    val exchangeSummary: String
+)
+
+data class BlockedOptionsPresentation<T>(
+    val visibleOptions: List<T>,
+    val hiddenCount: Int
+)
+
+fun <T> blockedOptionsPresentation(options: List<T>): BlockedOptionsPresentation<T> {
+    return BlockedOptionsPresentation(
+        visibleOptions = options.take(MAX_BLOCKED_ACTIONABLE_OPTIONS),
+        hiddenCount = (options.size - MAX_BLOCKED_ACTIONABLE_OPTIONS).coerceAtLeast(0)
+    )
+}
+
+fun blockedOverflowLabel(hiddenCount: Int): String {
+    val noun = if (hiddenCount == 1) "earning app" else "earning apps"
+    return "View ${hiddenCount.coerceAtLeast(0)} more $noun"
+}
+
+fun blockedEarnAppUiStates(
+    rule: EarnItRuleStore.Rule,
+    legacyEarnAppName: String? = null,
+    legacyEarnAppPackage: String? = null
+): List<BlockedEarnAppUiState> {
+    val configuredApps = rule.earnApps
+        .filter { it.packageName.isNotBlank() }
+        .distinctBy { it.packageName }
+    val apps = configuredApps.ifEmpty {
+        val packageName = legacyEarnAppPackage.orEmpty()
+        if (packageName.isBlank()) {
+            emptyList()
+        } else {
+            listOf(EarnItRuleStore.RuleApp(packageName, legacyEarnAppName ?: "Earn App"))
+        }
+    }
+    val exchangeSummary = EarnItUiFormatters.exchangeSummary(rule.rewardSecondsPerProductiveSecond)
+    return apps.map { app ->
+        BlockedEarnAppUiState(
+            packageName = app.packageName,
+            name = app.name,
+            exchangeSummary = exchangeSummary
+        )
+    }
+}
+
 @Composable
 fun BlockedScreen(
     blockedAppName: String,
     blockedPackage: String?,
-    productiveAppName: String,
-    productivePackage: String,
-    exchangeLabel: String,
+    earnApps: List<BlockedEarnAppUiState>,
     blockedReason: RuleAccessEvaluator.DenialReason,
     incompleteRequirements: List<BlockedRequirementUiState>,
     fallbackMessage: String?,
-    onOpenProductiveApp: () -> Unit,
+    onOpenEarnApp: (BlockedEarnAppUiState) -> Unit,
     onOpenRequirementApp: (BlockedRequirementUiState) -> Unit,
+    onViewMoreEarningApps: () -> Unit,
     onNotNow: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -206,22 +264,17 @@ fun BlockedScreen(
                 when (blockedReason) {
                     RuleAccessEvaluator.DenialReason.OutOfRewardTime -> {
                         Text(text = "Earn more with", style = MaterialTheme.typography.bodyMedium)
-                        EarnAppCard(
-                            productiveAppName = productiveAppName,
-                            productivePackage = productivePackage,
-                            exchangeLabel = exchangeLabel
+                        EarnAppsAvailable(
+                            earnApps = earnApps,
+                            onOpenEarnApp = onOpenEarnApp,
+                            onViewMore = onViewMoreEarningApps
                         )
-                        Button(
-                            onClick = onOpenProductiveApp,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text(text = "Open $productiveAppName", maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        }
                     }
                     RuleAccessEvaluator.DenialReason.CompleteToUnlockIncomplete -> {
                         RequirementsRemaining(
                             requirements = incompleteRequirements,
-                            onOpenRequirementApp = onOpenRequirementApp
+                            onOpenRequirementApp = onOpenRequirementApp,
+                            onViewMore = onViewMoreEarningApps
                         )
                     }
                     RuleAccessEvaluator.DenialReason.ScheduledBlockActive -> Unit
@@ -262,9 +315,41 @@ fun blockedDescription(reason: RuleAccessEvaluator.DenialReason, blockedAppName:
 }
 
 @Composable
+private fun EarnAppsAvailable(
+    earnApps: List<BlockedEarnAppUiState>,
+    onOpenEarnApp: (BlockedEarnAppUiState) -> Unit,
+    onViewMore: () -> Unit
+) {
+    if (earnApps.size == 1) {
+        val app = earnApps.single()
+        EarnAppCard(app = app)
+        Button(
+            onClick = { onOpenEarnApp(app) },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(text = "Open ${app.name}", maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+    } else {
+        val presentation = blockedOptionsPresentation(earnApps)
+        presentation.visibleOptions.forEach { app ->
+            BlockedAppActionRow(
+                packageName = app.packageName,
+                name = app.name,
+                supportingText = app.exchangeSummary,
+                onOpen = { onOpenEarnApp(app) }
+            )
+        }
+        if (presentation.hiddenCount > 0) {
+            ViewMoreEarningOptionsRow(hiddenCount = presentation.hiddenCount, onClick = onViewMore)
+        }
+    }
+}
+
+@Composable
 private fun RequirementsRemaining(
     requirements: List<BlockedRequirementUiState>,
-    onOpenRequirementApp: (BlockedRequirementUiState) -> Unit
+    onOpenRequirementApp: (BlockedRequirementUiState) -> Unit,
+    onViewMore: () -> Unit
 ) {
     if (requirements.isEmpty()) {
         Text(
@@ -295,12 +380,29 @@ private fun RequirementsRemaining(
                 )
             }
         } else {
-            requirements.forEach { requirement ->
+            val presentation = blockedOptionsPresentation(requirements)
+            presentation.visibleOptions.forEach { requirement ->
                 RequirementRow(
                     requirement = requirement,
                     onOpen = { onOpenRequirementApp(requirement) }
                 )
             }
+            if (presentation.hiddenCount > 0) {
+                ViewMoreEarningOptionsRow(hiddenCount = presentation.hiddenCount, onClick = onViewMore)
+            }
+        }
+    }
+}
+
+@Composable
+private fun ViewMoreEarningOptionsRow(hiddenCount: Int, onClick: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+    ) {
+        TextButton(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
+            Text(text = blockedOverflowLabel(hiddenCount), style = MaterialTheme.typography.titleSmall)
         }
     }
 }
@@ -324,6 +426,21 @@ private fun RequirementRow(
     requirement: BlockedRequirementUiState,
     onOpen: () -> Unit
 ) {
+    BlockedAppActionRow(
+        packageName = requirement.packageName,
+        name = requirement.name,
+        supportingText = requirement.progressLabel,
+        onOpen = onOpen
+    )
+}
+
+@Composable
+private fun BlockedAppActionRow(
+    packageName: String,
+    name: String,
+    supportingText: String,
+    onOpen: () -> Unit
+) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
@@ -335,14 +452,29 @@ private fun RequirementRow(
                 .padding(12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            RequirementContent(requirement = requirement, modifier = Modifier.weight(1f))
+            Row(
+                modifier = Modifier.weight(1f),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                EarnItAppIcon(packageName = packageName, appName = name, size = 40.dp)
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = name,
+                        style = MaterialTheme.typography.titleMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(text = supportingText, style = MaterialTheme.typography.bodySmall)
+                }
+            }
             Spacer(modifier = Modifier.width(8.dp))
             TextButton(
                 onClick = onOpen,
                 modifier = Modifier.widthIn(max = 128.dp)
             ) {
                 Text(
-                    text = "Open ${requirement.name}",
+                    text = "Open $name",
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -376,9 +508,7 @@ private fun RequirementContent(
 
 @Composable
 private fun EarnAppCard(
-    productiveAppName: String,
-    productivePackage: String,
-    exchangeLabel: String,
+    app: BlockedEarnAppUiState,
     modifier: Modifier = Modifier
 ) {
     Card(
@@ -391,15 +521,15 @@ private fun EarnAppCard(
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            EarnItAppIcon(packageName = productivePackage, appName = productiveAppName, size = 48.dp)
+            EarnItAppIcon(packageName = app.packageName, appName = app.name, size = 48.dp)
             Column(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.weight(1f)) {
                 Text(
-                    text = productiveAppName,
+                    text = app.name,
                     style = MaterialTheme.typography.titleMedium,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
-                Text(text = exchangeLabel, style = MaterialTheme.typography.bodySmall)
+                Text(text = app.exchangeSummary, style = MaterialTheme.typography.bodySmall)
             }
         }
     }
@@ -412,15 +542,27 @@ fun BlockedScreenPreview() {
         BlockedScreen(
             blockedAppName = "Instagram",
             blockedPackage = "com.instagram.android",
-            productiveAppName = "Duolingo",
-            productivePackage = "com.duolingo",
-            exchangeLabel = "Every 10 min earns 20 min Reward Time",
+            earnApps = listOf(
+                BlockedEarnAppUiState(
+                    packageName = "com.duolingo",
+                    name = "Duolingo",
+                    exchangeSummary = "Every 10 min earns 20 min Reward Time"
+                ),
+                BlockedEarnAppUiState(
+                    packageName = "com.ichi2.anki",
+                    name = "AnkiDroid",
+                    exchangeSummary = "Every 10 min earns 20 min Reward Time"
+                )
+            ),
             blockedReason = RuleAccessEvaluator.DenialReason.OutOfRewardTime,
             incompleteRequirements = emptyList(),
             fallbackMessage = null,
-            onOpenProductiveApp = {},
+            onOpenEarnApp = {},
             onOpenRequirementApp = {},
+            onViewMoreEarningApps = {},
             onNotNow = {}
         )
     }
 }
+
+private const val MAX_BLOCKED_ACTIONABLE_OPTIONS = 4

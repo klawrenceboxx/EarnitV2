@@ -12,8 +12,6 @@ data class EarnItAppUiState(
 
 data class RuleCardUiState(
     val ruleId: String,
-    val earnAppName: String,
-    val earnAppPackage: String,
     val earnApps: List<EarnItAppUiState>,
     val rewardApps: List<EarnItAppUiState>,
     val rewardAppCount: Int,
@@ -36,7 +34,6 @@ data class RuleDetailUiState(
 )
 
 data class RuleDraftUiState(
-    val selectedEarnApp: EarnItAppUiState?,
     val selectedEarnApps: List<EarnItAppUiState>,
     val selectedRewardApps: List<EarnItAppUiState>,
     val exchangeSelection: Int,
@@ -67,11 +64,8 @@ object EarnItUiStateAdapters {
         isActiveNow: Boolean
     ): RuleCardUiState {
         val earnApps = rule.earnApps.map { it.toUiState() }
-        val primaryEarnApp = earnApps.firstOrNull()
         return RuleCardUiState(
             ruleId = rule.id,
-            earnAppName = primaryEarnApp?.name ?: rule.productiveName,
-            earnAppPackage = primaryEarnApp?.packageName ?: rule.productivePackage,
             earnApps = earnApps,
             rewardApps = rule.blockedApps.map { it.toUiState() },
             rewardAppCount = rule.blockedApps.size,
@@ -119,7 +113,6 @@ object EarnItUiStateAdapters {
         val firstWindow = normalizedWindows.first()
 
         return RuleDraftUiState(
-            selectedEarnApp = earnApps.firstOrNull(),
             selectedEarnApps = earnApps,
             selectedRewardApps = rewardApps,
             exchangeSelection = exchangeSelection.coerceAtLeast(1),
@@ -194,12 +187,29 @@ object EarnItUiFormatters {
     }
 
     fun exchangeAgreement(rule: EarnItRuleStore.Rule): String {
-        val earnLabel = if (rule.earnApps.size == 1) {
-            "in ${rule.earnApps.first().name}"
-        } else {
-            "across selected Earn Apps"
+        return exchangeAgreement(
+            earnAppNames = rule.earnApps.map { it.name },
+            exchangeSelection = rule.rewardSecondsPerProductiveSecond
+        )
+    }
+
+    fun exchangeAgreement(earnAppNames: List<String>, exchangeSelection: Int): String {
+        return "Every 10 min ${earnAppContext(earnAppNames)} earns " +
+            "${exchangeSelection.coerceAtLeast(1)} min Reward Time."
+    }
+
+    fun earnAppContext(earnAppNames: List<String>): String {
+        return when (earnAppNames.size) {
+            0 -> "in your Earn App"
+            1 -> "in ${earnAppNames.single()}"
+            else -> "across selected Earn Apps"
         }
-        return "Every 10 min $earnLabel earns ${rule.rewardSecondsPerProductiveSecond} min of Reward Time."
+    }
+
+    fun compactAppNames(appNames: List<String>): String {
+        val visibleNames = appNames.take(2).joinToString(", ")
+        val remainingCount = (appNames.size - 2).coerceAtLeast(0)
+        return if (remainingCount > 0) "$visibleNames +$remainingCount more" else visibleNames
     }
 
     fun exchangeSummary(exchangeSelection: Int): String {
@@ -263,13 +273,13 @@ object EarnItUiFormatters {
     ): String {
         val parts = mutableListOf<String>()
         if (earnAppNames.isNotEmpty()) {
-            parts.add("When I use ${earnAppNames.take(2).joinToString(", ")}" + if (earnAppNames.size > 2) " +${earnAppNames.size - 2}" else "")
+            parts.add("When I use ${compactAppNames(earnAppNames)}")
         }
         if (exchangeSelection > 0) {
             parts.add(exchangeSummary(exchangeSelection))
         }
         if (rewardAppNames.isNotEmpty()) {
-            parts.add("For ${rewardAppNames.take(2).joinToString(", ")}" + if (rewardAppNames.size > 2) " +${rewardAppNames.size - 2}" else "")
+            parts.add("For ${compactAppNames(rewardAppNames)}")
         }
         val validDays = activeDays.filter { it in EarnItRuleStore.allDays }.toSet()
         if (validDays.isNotEmpty()) {

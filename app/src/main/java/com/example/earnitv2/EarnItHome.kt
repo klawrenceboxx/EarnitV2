@@ -250,6 +250,18 @@ data class HomeRuleAppActionRowState(
     val showAction: Boolean
 )
 
+data class CompactHomeAppRows(
+    val visibleRows: List<HomeRuleAppActionRowState>,
+    val remainingCount: Int
+)
+
+fun compactHomeAppRows(rows: List<HomeRuleAppActionRowState>): CompactHomeAppRows {
+    return CompactHomeAppRows(
+        visibleRows = rows.take(2),
+        remainingCount = (rows.size - 2).coerceAtLeast(0)
+    )
+}
+
 fun earnRewardTimeEarnAppRows(card: RuleCardUiState, supportingText: String?): List<HomeRuleAppActionRowState> {
     return card.earnApps.map { app ->
         HomeRuleAppActionRowState(
@@ -391,7 +403,7 @@ private fun LiveRuleCard(
                     }
                     EarnItRuleStore.RuleType.CompleteToUnlock -> {
                         RequirementsRows(
-                            requirements = homeRule.completeToUnlockProgress?.incompleteRequirements.orEmpty(),
+                            requirements = homeRule.completeToUnlockProgress?.requirements.orEmpty(),
                             onOpenEarnApp = onOpenEarnApp
                         )
                         RewardAppsSummarySection(label = "Unlocks", apps = card.rewardApps)
@@ -457,27 +469,18 @@ private fun RequirementsRows(
     requirements: List<CompleteRequirementUiState>,
     onOpenEarnApp: (String) -> Unit
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        SectionLabel(text = "Requirements")
-        requirements.take(2).forEach { requirement ->
-            RuleAppActionRow(
-                row = HomeRuleAppActionRowState(
-                    packageName = requirement.packageName,
-                    name = requirement.name.withoutStrayWarningIndicator(),
-                    supportingText = requirement.progressLabel,
-                    showAction = true
-                ),
-                onOpenApp = onOpenEarnApp
+    RuleAppSection(
+        label = "Requirements",
+        rows = requirements.map { requirement ->
+            HomeRuleAppActionRowState(
+                packageName = requirement.packageName,
+                name = requirement.name.withoutStrayWarningIndicator(),
+                supportingText = requirement.progressLabel,
+                showAction = true
             )
-        }
-        if (requirements.size > 2) {
-            Text(
-                text = "+${requirements.size - 2} more",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-    }
+        },
+        onOpenApp = onOpenEarnApp
+    )
 }
 
 @Composable
@@ -498,12 +501,20 @@ private fun RuleAppSection(
     rows: List<HomeRuleAppActionRowState>,
     onOpenApp: (String) -> Unit
 ) {
+    val compactRows = compactHomeAppRows(rows)
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         SectionLabel(text = label)
-        rows.forEach { row ->
+        compactRows.visibleRows.forEach { row ->
             RuleAppActionRow(
                 row = row,
                 onOpenApp = onOpenApp
+            )
+        }
+        if (compactRows.remainingCount > 0) {
+            Text(
+                text = "+${compactRows.remainingCount} more",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
     }
@@ -597,10 +608,13 @@ private fun SectionLabel(text: String) {
     )
 }
 
-private fun temporaryRuleTitle(rule: EarnItRuleStore.Rule): String {
+internal fun temporaryRuleTitle(rule: EarnItRuleStore.Rule): String {
     return when (rule.type) {
-        EarnItRuleStore.RuleType.EarnRewardTime -> rule.earnApps.firstOrNull()?.name ?: rule.productiveName
-        EarnItRuleStore.RuleType.CompleteToUnlock -> "Complete to Unlock"
+        EarnItRuleStore.RuleType.EarnRewardTime -> EarnItUiFormatters.compactAppNames(rule.earnApps.map { it.name })
+            .ifBlank { rule.productiveName }
+        EarnItRuleStore.RuleType.CompleteToUnlock -> EarnItUiFormatters.compactAppNames(
+            rule.requirements.map { it.app.name }
+        ).ifBlank { "Complete to Unlock" }
         EarnItRuleStore.RuleType.ScheduledBlock -> "Scheduled Block"
     }
 }

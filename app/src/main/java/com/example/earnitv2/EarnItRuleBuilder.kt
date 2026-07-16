@@ -206,7 +206,7 @@ fun EarnItRuleBuilder(
             RuleBuilderStep.Exchange -> ExchangeStep(
                 rule = rule,
                 selectedRatio = selectedRatio,
-                selectedEarnAppName = draft.selectedEarnApp?.name,
+                selectedEarnApps = draft.selectedEarnApps,
                 selectedRewardAppCount = draft.selectedRewardApps.size,
                 onSelectRatio = onSelectRatio
             )
@@ -1280,17 +1280,17 @@ private fun BuilderAppRow(
 private fun ExchangeStep(
     rule: EarnItRuleStore.Rule,
     selectedRatio: Int,
-    selectedEarnAppName: String?,
+    selectedEarnApps: List<EarnItAppUiState>,
     selectedRewardAppCount: Int,
     onSelectRatio: (Int) -> Unit
 ) {
-    val earnAppName = selectedEarnAppName ?: "your Earn App"
+    val earnAppContext = EarnItUiFormatters.earnAppContext(selectedEarnApps.map { it.name })
     EditorSection(
         title = "How much Reward Time should you earn?",
         helperText = "Choose the exchange for productive time."
     ) {
         ExchangeStatement(
-            earnAppName = earnAppName,
+            earnAppContext = earnAppContext,
             ratio = selectedRatio
         )
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1315,7 +1315,7 @@ private fun ExchangeStep(
 }
 
 @Composable
-private fun ExchangeStatement(earnAppName: String, ratio: Int) {
+private fun ExchangeStatement(earnAppContext: String, ratio: Int) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
@@ -1327,7 +1327,7 @@ private fun ExchangeStatement(earnAppName: String, ratio: Int) {
         ) {
             Text(text = "Every", style = MaterialTheme.typography.labelSmall)
             Text(text = "10 min", style = MaterialTheme.typography.titleMedium)
-            Text(text = "in $earnAppName earns", style = MaterialTheme.typography.bodyMedium)
+            Text(text = "$earnAppContext earns", style = MaterialTheme.typography.bodyMedium)
             Text(text = "${ratio.coerceAtLeast(1)} min Reward Time", style = MaterialTheme.typography.titleMedium)
         }
     }
@@ -1791,15 +1791,18 @@ private fun EarnRewardReviewStep(draft: RuleDraftUiState) {
         helperText = "Read this as the agreement EarnIt will enforce."
     ) {
         ReviewCard {
-                ReviewAppSection(
+                ReviewAppsSection(
                     label = "WHEN I USE",
-                    app = draft.selectedEarnApp,
+                    apps = draft.selectedEarnApps,
                     missingValue = "Choose an Earn App before saving."
                 )
                 ReviewAgreementSection(
                     label = "I EARN",
                     value = if (draft.exchangeSelection > 0) {
-                        EarnItUiFormatters.exchangeSummary(draft.exchangeSelection)
+                        EarnItUiFormatters.exchangeAgreement(
+                            earnAppNames = draft.selectedEarnApps.map { it.name },
+                            exchangeSelection = draft.exchangeSelection
+                        )
                     } else {
                         "Choose a Reward Time exchange before saving."
                     }
@@ -1872,21 +1875,6 @@ private fun ReviewAgreementSection(label: String, value: String) {
 }
 
 @Composable
-private fun ReviewAppSection(label: String, app: EarnItAppUiState?, missingValue: String) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(text = label, style = MaterialTheme.typography.labelSmall)
-        if (app == null) {
-            Text(text = missingValue, style = MaterialTheme.typography.bodyLarge)
-        } else {
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                EarnItAppIcon(packageName = app.packageName, appName = app.name, size = 36.dp)
-                Text(text = app.name, style = MaterialTheme.typography.bodyLarge)
-            }
-        }
-    }
-}
-
-@Composable
 private fun ReviewAppsSection(label: String, apps: List<EarnItAppUiState>, missingValue: String) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(text = label, style = MaterialTheme.typography.labelSmall)
@@ -1906,7 +1894,7 @@ private fun ReviewAppsSection(label: String, apps: List<EarnItAppUiState>, missi
 }
 private fun reviewMissingItems(draft: RuleDraftUiState): List<String> {
     return buildList {
-        if (draft.selectedEarnApp == null) add("Earn App")
+        if (draft.selectedEarnApps.isEmpty()) add("Earn App")
         if (draft.selectedRewardApps.isEmpty()) add("Reward App")
         if (draft.exchangeSelection <= 0) add("Reward Time exchange")
         if (!reviewScheduleIsValid(draft)) add("Active schedule")
@@ -1964,7 +1952,7 @@ private fun stepIsComplete(
 ): Boolean {
     return when (step) {
         RuleBuilderStep.Earn -> when (ruleType) {
-            EarnItRuleStore.RuleType.EarnRewardTime -> draft.selectedEarnApp != null
+            EarnItRuleStore.RuleType.EarnRewardTime -> draft.selectedEarnApps.isNotEmpty()
             EarnItRuleStore.RuleType.CompleteToUnlock -> requirements.isNotEmpty()
             EarnItRuleStore.RuleType.ScheduledBlock -> true
         }
@@ -1984,13 +1972,13 @@ private fun stepIsEnabled(
     return when (step) {
         RuleBuilderStep.Earn -> true
         RuleBuilderStep.Reward -> when (ruleType) {
-            EarnItRuleStore.RuleType.EarnRewardTime -> draft.selectedEarnApp != null
+            EarnItRuleStore.RuleType.EarnRewardTime -> draft.selectedEarnApps.isNotEmpty()
             EarnItRuleStore.RuleType.CompleteToUnlock -> requirements.isNotEmpty()
             EarnItRuleStore.RuleType.ScheduledBlock -> true
         }
-        RuleBuilderStep.Exchange -> draft.selectedEarnApp != null && draft.selectedRewardApps.isNotEmpty()
+        RuleBuilderStep.Exchange -> draft.selectedEarnApps.isNotEmpty() && draft.selectedRewardApps.isNotEmpty()
         RuleBuilderStep.Schedule -> when (ruleType) {
-            EarnItRuleStore.RuleType.EarnRewardTime -> draft.selectedEarnApp != null &&
+            EarnItRuleStore.RuleType.EarnRewardTime -> draft.selectedEarnApps.isNotEmpty() &&
                 draft.selectedRewardApps.isNotEmpty() &&
                 draft.exchangeSelection > 0
             EarnItRuleStore.RuleType.CompleteToUnlock -> requirements.isNotEmpty() && draft.selectedRewardApps.isNotEmpty()
@@ -2007,7 +1995,7 @@ private fun canContinue(
 ): Boolean {
     return when (step) {
         RuleBuilderStep.Earn -> when (ruleType) {
-            EarnItRuleStore.RuleType.EarnRewardTime -> draft.selectedEarnApp != null
+            EarnItRuleStore.RuleType.EarnRewardTime -> draft.selectedEarnApps.isNotEmpty()
             EarnItRuleStore.RuleType.CompleteToUnlock -> requirements.isNotEmpty()
             EarnItRuleStore.RuleType.ScheduledBlock -> true
         }

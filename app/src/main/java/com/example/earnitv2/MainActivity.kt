@@ -137,6 +137,7 @@ class MainActivity : ComponentActivity() {
         deepWorkSession = DeepWorkStore.load(this)
         firstLaunchComplete = isFirstLaunchComplete() || EarnItRuleStore.getRules(this).isNotEmpty()
         refreshDashboardState()
+        handleNavigationIntent(intent)
         setContent {
             EarnitV2Theme {
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
@@ -234,7 +235,7 @@ class MainActivity : ComponentActivity() {
                             onPauseTimerTick = ::refreshDashboardState,
                             onDeleteRule = ::deleteRule,
                             onToggleManageRules = { manageRulesOpen = !manageRulesOpen },
-                            onOpenRuleDetail = { selectedRuleDetailId = it },
+                            onOpenRuleDetail = ::openRuleDetail,
                             onBackFromRuleDetail = { selectedRuleDetailId = null },
                             onCancelEditingRule = ::exitBuilderFromFirstStage,
                             onOpenProductivePicker = {
@@ -296,6 +297,33 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         refreshDashboardState()
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        refreshDashboardState()
+        handleNavigationIntent(intent)
+    }
+
+    private fun handleNavigationIntent(intent: Intent?) {
+        val requestedRuleId = intent?.getStringExtra(EXTRA_OPEN_RULE_DETAIL_ID)?.takeIf { it.isNotBlank() } ?: return
+        intent.removeExtra(EXTRA_OPEN_RULE_DETAIL_ID)
+        openRuleDetail(requestedRuleId)
+    }
+
+    private fun openRuleDetail(ruleId: String) {
+        if (rules.none { it.id == ruleId }) return
+        editingRuleTemplate = null
+        builderEntryContext = null
+        builderReturnRuleDetailId = null
+        settingsOpen = false
+        strictModeOpen = false
+        strictModeBlockedActionOpen = false
+        ruleTypeSelectionOpen = false
+        unavailableRuleType = null
+        deepWorkSetupOpen = false
+        selectedRuleDetailId = ruleId
     }
 
     private fun refreshDashboardState() {
@@ -902,10 +930,11 @@ class MainActivity : ComponentActivity() {
             .getBoolean(KEY_FIRST_LAUNCH_COMPLETE, false)
     }
 
-    private companion object {
-        const val PREFS_NAME = "earnit_setup"
-        const val KEY_FIRST_LAUNCH_COMPLETE = "first_launch_complete"
-        const val APP_LIST_REFRESH_INTERVAL_MS = 60_000L
+    companion object {
+        internal const val EXTRA_OPEN_RULE_DETAIL_ID = "com.example.earnitv2.extra.OPEN_RULE_DETAIL_ID"
+        private const val PREFS_NAME = "earnit_setup"
+        private const val KEY_FIRST_LAUNCH_COMPLETE = "first_launch_complete"
+        private const val APP_LIST_REFRESH_INTERVAL_MS = 60_000L
     }
 }
 

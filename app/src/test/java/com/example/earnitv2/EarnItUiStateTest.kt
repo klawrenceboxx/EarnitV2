@@ -58,8 +58,8 @@ class EarnItUiStateTest {
         )
 
         assertEquals("rule_1", state.ruleId)
-        assertEquals("Duolingo", state.earnAppName)
-        assertEquals("com.duolingo", state.earnAppPackage)
+        assertEquals(listOf("Duolingo"), state.earnApps.map { it.name })
+        assertEquals(listOf("com.duolingo"), state.earnApps.map { it.packageName })
         assertEquals(2, state.rewardAppCount)
         assertEquals("2 min available", state.availableRewardTimeLabel)
         assertEquals("10 min productive today", state.productiveUsageLabel)
@@ -112,6 +112,26 @@ class EarnItUiStateTest {
 
         assertFalse(state.canReview)
         assertFalse(state.canSave)
+    }
+
+    @Test
+    fun exchangeAgreementUsesSingularAndMultiEarnAppWording() {
+        assertEquals(
+            "Every 10 min in Duolingo earns 2 min Reward Time.",
+            EarnItUiFormatters.exchangeAgreement(listOf("Duolingo"), 2)
+        )
+        assertEquals(
+            "Every 10 min across selected Earn Apps earns 2 min Reward Time.",
+            EarnItUiFormatters.exchangeAgreement(listOf("Duolingo", "AnkiDroid"), 2)
+        )
+    }
+
+    @Test
+    fun compactAppNamesUsesFirstTwoAndRemainingCount() {
+        assertEquals(
+            "Duolingo, AnkiDroid +2 more",
+            EarnItUiFormatters.compactAppNames(listOf("Duolingo", "AnkiDroid", "Kindle", "Notion"))
+        )
     }
 
     @Test
@@ -311,6 +331,42 @@ class EarnItUiStateTest {
         val openedPackages = rows.map { it.packageName }
 
         assertEquals(listOf("com.duolingo", "com.ichi2.anki"), openedPackages)
+    }
+
+    @Test
+    fun homeAppRowsUseSharedFirstTwoPlusRemainingPattern() {
+        val rows = listOf(
+            HomeRuleAppActionRowState("duo", "Duolingo", null, true),
+            HomeRuleAppActionRowState("anki", "AnkiDroid", null, true),
+            HomeRuleAppActionRowState("kindle", "Kindle", null, true),
+            HomeRuleAppActionRowState("notion", "Notion", null, true)
+        )
+
+        val compact = compactHomeAppRows(rows)
+
+        assertEquals(listOf("Duolingo", "AnkiDroid"), compact.visibleRows.map { it.name })
+        assertEquals(2, compact.remainingCount)
+    }
+
+    @Test
+    fun temporaryHomeManagementUsesCompactEarnAppNamesForBothEarnRuleTypes() {
+        val earnRule = sampleRule().copy(
+            productiveApps = listOf(
+                EarnItRuleStore.RuleApp("duo", "Duolingo"),
+                EarnItRuleStore.RuleApp("anki", "AnkiDroid"),
+                EarnItRuleStore.RuleApp("kindle", "Kindle")
+            )
+        )
+        val completeRule = completeToUnlockRule().copy(
+            requirements = listOf(
+                EarnItRuleStore.RuleRequirement(EarnItRuleStore.RuleApp("duo", "Duolingo"), 600),
+                EarnItRuleStore.RuleRequirement(EarnItRuleStore.RuleApp("anki", "AnkiDroid"), 600),
+                EarnItRuleStore.RuleRequirement(EarnItRuleStore.RuleApp("kindle", "Kindle"), 600)
+            )
+        )
+
+        assertEquals("Duolingo, AnkiDroid +1 more", temporaryRuleTitle(earnRule))
+        assertEquals("Duolingo, AnkiDroid +1 more", temporaryRuleTitle(completeRule))
     }
 
     @Test

@@ -1,0 +1,47 @@
+{
+  "runId": "agency-os-foundations-v1",
+  "figmaFileKey": "UKkUuB1emLUNbEDDTsbIEC",
+  "phase": "foundations-complete",
+  "entities": {
+    "pages": {
+      "foundations": "5:2"
+    },
+    "collections": {
+      "primitives": "VariableCollectionId:10:2",
+      "brand": "VariableCollectionId:10:3",
+      "foundation": "VariableCollectionId:10:4",
+      "responsive": "VariableCollectionId:10:5"
+    },
+    "documentation": {
+      "catalog": "13:2",
+      "colors": "13:5",
+      "typography": "13:6",
+      "spacing": "13:7",
+      "radius": "13:8",
+      "elevation": "13:9",
+      "layout": "13:10",
+      "responsive": "13:11",
+      "usageGuide": "13:12"
+    }
+  },
+  "counts": {
+    "variables": 71,
+    "textStyles": 13,
+    "effectStyles": 3,
+    "components": 0
+  },
+  "completedSteps": [
+    "collections",
+    "primitive-colors",
+    "brand-aliases",
+    "semantic-colors",
+    "spacing",
+    "radius",
+    "responsive-layout",
+    "text-styles",
+    "effect-styles",
+    "documentation",
+    "validation"
+  ],
+  "pendingValidations": []
+}
