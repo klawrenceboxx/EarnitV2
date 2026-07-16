@@ -6,6 +6,48 @@ import org.junit.Test
 
 class EarnItRuleBuilderNavigationTest {
     @Test
+    fun rewardPickerUsesRuleSpecificFullScreenCopyForBothRewardFlows() {
+        assertEquals(
+            "Choose Reward Apps",
+            rewardAppPickerTitle(EarnItRuleStore.RuleType.EarnRewardTime)
+        )
+        assertEquals(
+            "Choose Apps to Unlock",
+            rewardAppPickerTitle(EarnItRuleStore.RuleType.CompleteToUnlock)
+        )
+        assertEquals(
+            "Search Reward Apps",
+            rewardAppPickerSearchLabel(EarnItRuleStore.RuleType.EarnRewardTime)
+        )
+        assertEquals(
+            "Search Apps to Unlock",
+            rewardAppPickerSearchLabel(EarnItRuleStore.RuleType.CompleteToUnlock)
+        )
+    }
+
+    @Test
+    fun savingRewardPickerAppliesStagedSelection() {
+        val existing = setOf("instagram", "youtube")
+        val staged = setOf("instagram", "reddit")
+
+        assertEquals(
+            staged,
+            resolveRewardAppPickerSelection(existing, staged, applyChanges = true)
+        )
+    }
+
+    @Test
+    fun backingOutOfRewardPickerRestoresExistingSelection() {
+        val existing = setOf("instagram", "youtube")
+        val staged = setOf("instagram", "reddit")
+
+        assertEquals(
+            existing,
+            resolveRewardAppPickerSelection(existing, staged, applyChanges = false)
+        )
+    }
+
+    @Test
     fun logicalPreviousStep_returnsNullFromFirstStage() {
         assertNull(logicalPreviousStep(EarnItRuleStore.RuleType.EarnRewardTime, RuleBuilderStep.Earn))
         assertNull(logicalPreviousStep(EarnItRuleStore.RuleType.ScheduledBlock, RuleBuilderStep.Reward))
@@ -228,6 +270,34 @@ class EarnItRuleBuilderNavigationTest {
         assertEquals(listOf("Blocked", "Every day · All day"), lines)
     }
 
+    @Test
+    fun requirementPickerDisablesAppsAlreadyUsedByOtherRequirements() {
+        val requirements = listOf(
+            requirement("duo", "Duolingo", 10),
+            requirement("kindle", "Kindle", 20),
+            requirement("notion", "Notion", 30)
+        )
+
+        assertEquals(
+            setOf("duo", "kindle", "notion"),
+            unavailableRequirementAppPackages(requirements, editingIndex = null)
+        )
+    }
+
+    @Test
+    fun requirementPickerKeepsTheCurrentlyEditedAppAvailable() {
+        val requirements = listOf(
+            requirement("duo", "Duolingo", 10),
+            requirement("kindle", "Kindle", 20),
+            requirement("notion", "Notion", 30)
+        )
+
+        assertEquals(
+            setOf("duo", "notion"),
+            unavailableRequirementAppPackages(requirements, editingIndex = 1)
+        )
+    }
+
     private fun earnRewardDraft(): RuleDraftUiState {
         return EarnItUiStateAdapters.ruleDraft(
             selectedEarnApps = listOf(EarnItRuleStore.LaunchableApp("com.duolingo", "Duolingo")),
@@ -245,6 +315,13 @@ class EarnItRuleBuilderNavigationTest {
             exchangeSelection = 2,
             activeDays = EarnItRuleStore.allDays.toSet(),
             timeWindows = listOf(EarnItRuleStore.TimeWindow(0, 1_440))
+        )
+    }
+
+    private fun requirement(packageName: String, name: String, minutes: Long): EarnItRuleStore.RuleRequirement {
+        return EarnItRuleStore.RuleRequirement(
+            app = EarnItRuleStore.RuleApp(packageName, name),
+            requiredSeconds = minutes * 60L
         )
     }
 }

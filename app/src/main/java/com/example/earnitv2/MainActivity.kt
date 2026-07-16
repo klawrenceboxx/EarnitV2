@@ -78,6 +78,14 @@ internal fun firstStageBuilderExitDestination(
     }
 }
 
+internal fun unavailableRequirementAppPackages(
+    requirements: List<EarnItRuleStore.RuleRequirement>,
+    editingIndex: Int?
+): Set<String> {
+    val editingPackage = editingIndex?.let { requirements.getOrNull(it)?.app?.packageName }
+    return requirements.map { it.app.packageName }.filterNot { it == editingPackage }.toSet()
+}
+
 class MainActivity : ComponentActivity() {
     private var rules by mutableStateOf(emptyList<EarnItRuleStore.Rule>())
     private var ruleStates by mutableStateOf(emptyList<RuleDashboardState>())
@@ -98,6 +106,7 @@ class MainActivity : ComponentActivity() {
     private var requirementPickerOpen by mutableStateOf(false)
     private var requirementSearch by mutableStateOf("")
     private var selectedRequirementPackage by mutableStateOf<String?>(null)
+    private var requirementPickerOriginalPackage by mutableStateOf<String?>(null)
     private var selectedRequirementMinutes by mutableStateOf(10)
     private var editingRequirementIndex by mutableStateOf<Int?>(null)
     private var selectedRatio by mutableStateOf(1)
@@ -111,6 +120,7 @@ class MainActivity : ComponentActivity() {
     private var scheduleEditorEndMinute by mutableStateOf(17 * 60)
     private var productivePickerOpen by mutableStateOf(false)
     private var blockedPickerOpen by mutableStateOf(false)
+    private var blockedPickerOriginalPackages by mutableStateOf<Set<String>?>(null)
     private var productiveSearch by mutableStateOf("")
     private var blockedSearch by mutableStateOf("")
     private var usageAccessGranted by mutableStateOf(false)
@@ -243,16 +253,16 @@ class MainActivity : ComponentActivity() {
                                 refreshLaunchableApps()
                             },
                             onCloseProductivePicker = { productivePickerOpen = false },
-                            onOpenBlockedPicker = {
-                                blockedPickerOpen = true
-                                refreshLaunchableApps()
-                            },
-                            onCloseBlockedPicker = { blockedPickerOpen = false },
+                            onOpenBlockedPicker = ::openBlockedPicker,
+                            onCloseBlockedPicker = ::saveBlockedPicker,
+                            onDismissBlockedPicker = ::dismissBlockedPicker,
                             onProductiveSearchChange = { productiveSearch = it },
                             onBlockedSearchChange = { blockedSearch = it },
                             onSelectProductiveApp = ::selectProductiveApp,
                             onOpenRequirementPicker = ::openRequirementPicker,
                             onCloseRequirementPicker = ::cancelRequirementEditor,
+                            onDismissRequirementAppPicker = ::dismissRequirementPicker,
+                            onUseRequirementApp = ::useRequirementApp,
                             onRequirementSearchChange = { requirementSearch = it },
                             onSelectRequirementApp = ::selectRequirementApp,
                             onSelectRequirementMinutes = { selectedRequirementMinutes = it },
@@ -522,6 +532,7 @@ class MainActivity : ComponentActivity() {
         requirementPickerOpen = false
         requirementSearch = ""
         selectedRequirementPackage = null
+        requirementPickerOriginalPackage = null
         selectedRequirementMinutes = 10
         editingRequirementIndex = null
         selectedRatio = rule.rewardSecondsPerProductiveSecond
@@ -535,6 +546,7 @@ class MainActivity : ComponentActivity() {
         scheduleEditorEndMinute = 17 * 60
         productivePickerOpen = false
         blockedPickerOpen = false
+        blockedPickerOriginalPackages = null
         productiveSearch = ""
         blockedSearch = ""
     }
@@ -547,6 +559,7 @@ class MainActivity : ComponentActivity() {
         unavailableRuleType = null
         productivePickerOpen = false
         blockedPickerOpen = false
+        blockedPickerOriginalPackages = null
         requirementPickerOpen = false
         cancelScheduleWindow()
     }
@@ -571,6 +584,7 @@ class MainActivity : ComponentActivity() {
         unavailableRuleType = null
         productivePickerOpen = false
         blockedPickerOpen = false
+        blockedPickerOriginalPackages = null
         requirementPickerOpen = false
         cancelScheduleWindow()
         ruleTypeSelectionOpen = true
@@ -587,6 +601,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun openRequirementPicker() {
+        requirementPickerOriginalPackage = selectedRequirementPackage
         requirementPickerOpen = true
         requirementSearch = ""
         if (selectedRequirementPackage == null && editingRequirementIndex == null) {
@@ -597,6 +612,18 @@ class MainActivity : ComponentActivity() {
 
     private fun selectRequirementApp(packageName: String) {
         selectedRequirementPackage = packageName
+    }
+
+    private fun useRequirementApp() {
+        if (selectedRequirementPackage == null) return
+        requirementPickerOpen = false
+        requirementSearch = ""
+        requirementPickerOriginalPackage = null
+    }
+
+    private fun dismissRequirementPicker() {
+        selectedRequirementPackage = requirementPickerOriginalPackage
+        requirementPickerOriginalPackage = null
         requirementPickerOpen = false
         requirementSearch = ""
     }
@@ -618,6 +645,7 @@ class MainActivity : ComponentActivity() {
             (selectedRequirements.filterNot { it.app.packageName == requirement.app.packageName } + requirement)
         }
         selectedRequirementPackage = null
+        requirementPickerOriginalPackage = null
         selectedRequirementMinutes = 10
         editingRequirementIndex = null
         requirementPickerOpen = false
@@ -628,6 +656,7 @@ class MainActivity : ComponentActivity() {
         val requirement = selectedRequirements.getOrNull(index) ?: return
         editingRequirementIndex = index
         selectedRequirementPackage = requirement.app.packageName
+        requirementPickerOriginalPackage = null
         selectedRequirementMinutes = (requirement.requiredSeconds / 60L).toInt().coerceAtLeast(1)
         requirementPickerOpen = false
         requirementSearch = ""
@@ -638,6 +667,7 @@ class MainActivity : ComponentActivity() {
         if (editingRequirementIndex == index) {
             editingRequirementIndex = null
             selectedRequirementPackage = null
+            requirementPickerOriginalPackage = null
             selectedRequirementMinutes = 10
             requirementPickerOpen = false
             requirementSearch = ""
@@ -648,6 +678,7 @@ class MainActivity : ComponentActivity() {
         requirementPickerOpen = false
         requirementSearch = ""
         selectedRequirementPackage = null
+        requirementPickerOriginalPackage = null
         selectedRequirementMinutes = 10
         editingRequirementIndex = null
     }
@@ -665,6 +696,35 @@ class MainActivity : ComponentActivity() {
         } else {
             selectedBlockedPackages + packageName
         }
+    }
+
+    private fun openBlockedPicker() {
+        blockedPickerOriginalPackages = selectedBlockedPackages
+        blockedPickerOpen = true
+        blockedSearch = ""
+        refreshLaunchableApps()
+    }
+
+    private fun saveBlockedPicker() {
+        selectedBlockedPackages = resolveRewardAppPickerSelection(
+            originalPackages = blockedPickerOriginalPackages ?: selectedBlockedPackages,
+            stagedPackages = selectedBlockedPackages,
+            applyChanges = true
+        )
+        blockedPickerOriginalPackages = null
+        blockedPickerOpen = false
+        blockedSearch = ""
+    }
+
+    private fun dismissBlockedPicker() {
+        selectedBlockedPackages = resolveRewardAppPickerSelection(
+            originalPackages = blockedPickerOriginalPackages ?: selectedBlockedPackages,
+            stagedPackages = selectedBlockedPackages,
+            applyChanges = false
+        )
+        blockedPickerOriginalPackages = null
+        blockedPickerOpen = false
+        blockedSearch = ""
     }
 
     private fun toggleRuleEnabled(rule: EarnItRuleStore.Rule) {
@@ -854,6 +914,7 @@ class MainActivity : ComponentActivity() {
         builderStep = RuleBuilderStep.Earn
         productivePickerOpen = false
         blockedPickerOpen = false
+        blockedPickerOriginalPackages = null
         refreshDashboardState()
     }
 
@@ -938,6 +999,12 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+internal fun resolveRewardAppPickerSelection(
+    originalPackages: Set<String>,
+    stagedPackages: Set<String>,
+    applyChanges: Boolean
+): Set<String> = if (applyChanges) stagedPackages else originalPackages
+
 @Composable
 internal fun Dashboard(
     ruleStates: List<RuleDashboardState>,
@@ -1020,11 +1087,14 @@ internal fun Dashboard(
     onCloseProductivePicker: () -> Unit,
     onOpenBlockedPicker: () -> Unit,
     onCloseBlockedPicker: () -> Unit,
+    onDismissBlockedPicker: () -> Unit,
     onProductiveSearchChange: (String) -> Unit,
     onBlockedSearchChange: (String) -> Unit,
     onSelectProductiveApp: (String) -> Unit,
     onOpenRequirementPicker: () -> Unit,
     onCloseRequirementPicker: () -> Unit,
+    onDismissRequirementAppPicker: () -> Unit,
+    onUseRequirementApp: () -> Unit,
     onRequirementSearchChange: (String) -> Unit,
     onSelectRequirementApp: (String) -> Unit,
     onSelectRequirementMinutes: (Int) -> Unit,
@@ -1174,6 +1244,24 @@ internal fun Dashboard(
                 DeepWorkSetupSheet(linked, apps, onDismissDeepWorkSetup, onStartDeepWork)
             }
         }
+    } else if (requirementPickerOpen) {
+        BuilderAppPickerSurface(
+            title = "Choose requirement app",
+            searchLabel = "Search apps",
+            apps = apps,
+            selectedPackages = selectedRequirementPackage?.let(::setOf) ?: emptySet(),
+            searchQuery = requirementSearch,
+            loading = appsLoading,
+            onSearchQueryChange = onRequirementSearchChange,
+            onToggleApp = onSelectRequirementApp,
+            onSave = onUseRequirementApp,
+            onBack = onDismissRequirementAppPicker,
+            multiSelect = false,
+            disabledPackages = unavailableRequirementAppPackages(selectedRequirements, editingRequirementIndex),
+            saveLabel = "Use App",
+            saveEnabled = selectedRequirementPackage != null,
+            modifier = modifier
+        )
     } else if (productivePickerOpen) {
         BuilderAppPickerSurface(
             title = "Choose Earn Apps",
@@ -1187,6 +1275,23 @@ internal fun Dashboard(
             onSave = onCloseProductivePicker,
             modifier = modifier
         )
+    } else if (blockedPickerOpen) {
+        BuilderAppPickerSurface(
+            title = rewardAppPickerTitle(editingRule.type),
+            supportingText = rewardAppPickerSupportingText(editingRule.type),
+            searchLabel = rewardAppPickerSearchLabel(editingRule.type),
+            apps = apps,
+            selectedPackages = selectedBlockedPackages,
+            searchQuery = blockedSearch,
+            loading = appsLoading,
+            onSearchQueryChange = onBlockedSearchChange,
+            onToggleApp = onToggleBlockedApp,
+            onSave = onCloseBlockedPicker,
+            onBack = onDismissBlockedPicker,
+            multiSelect = true,
+            saveLabel = "Save",
+            modifier = modifier
+        )
     } else {
         Column(
             modifier = modifier
@@ -1198,13 +1303,10 @@ internal fun Dashboard(
             RuleEditor(
                 rule = editingRule,
                 apps = apps,
-                appsLoading = appsLoading,
                 selectedProductivePackage = selectedProductivePackage,
                 selectedProductivePackages = selectedProductivePackages,
                 selectedBlockedPackages = selectedBlockedPackages,
                 selectedRequirements = selectedRequirements,
-                requirementPickerOpen = requirementPickerOpen,
-                requirementSearch = requirementSearch,
                 selectedRequirementPackage = selectedRequirementPackage,
                 selectedRequirementMinutes = selectedRequirementMinutes,
                 editingRequirementIndex = editingRequirementIndex,
@@ -1217,26 +1319,14 @@ internal fun Dashboard(
                 editingScheduleWindowIndex = editingScheduleWindowIndex,
                 scheduleEditorStartMinute = scheduleEditorStartMinute,
                 scheduleEditorEndMinute = scheduleEditorEndMinute,
-                productivePickerOpen = productivePickerOpen,
-                blockedPickerOpen = blockedPickerOpen,
-                productiveSearch = productiveSearch,
-                blockedSearch = blockedSearch,
                 onOpenProductivePicker = onOpenProductivePicker,
-                onCloseProductivePicker = onCloseProductivePicker,
                 onOpenBlockedPicker = onOpenBlockedPicker,
-                onCloseBlockedPicker = onCloseBlockedPicker,
-                onProductiveSearchChange = onProductiveSearchChange,
-                onBlockedSearchChange = onBlockedSearchChange,
-                onSelectProductiveApp = onSelectProductiveApp,
                 onOpenRequirementPicker = onOpenRequirementPicker,
                 onCloseRequirementPicker = onCloseRequirementPicker,
-                onRequirementSearchChange = onRequirementSearchChange,
-                onSelectRequirementApp = onSelectRequirementApp,
                 onSelectRequirementMinutes = onSelectRequirementMinutes,
                 onSaveRequirement = onSaveRequirement,
                 onEditRequirement = onEditRequirement,
                 onDeleteRequirement = onDeleteRequirement,
-                onToggleBlockedApp = onToggleBlockedApp,
                 onSelectRatio = onSelectRatio,
                 onToggleActiveDay = onToggleActiveDay,
                 onSelectActiveDays = onSelectActiveDays,
@@ -1303,13 +1393,10 @@ private fun RuleRow(
 private fun RuleEditor(
     rule: EarnItRuleStore.Rule,
     apps: List<EarnItRuleStore.LaunchableApp>,
-    appsLoading: Boolean,
     selectedProductivePackage: String,
     selectedProductivePackages: Set<String>,
     selectedBlockedPackages: Set<String>,
     selectedRequirements: List<EarnItRuleStore.RuleRequirement>,
-    requirementPickerOpen: Boolean,
-    requirementSearch: String,
     selectedRequirementPackage: String?,
     selectedRequirementMinutes: Int,
     editingRequirementIndex: Int?,
@@ -1322,26 +1409,14 @@ private fun RuleEditor(
     editingScheduleWindowIndex: Int?,
     scheduleEditorStartMinute: Int,
     scheduleEditorEndMinute: Int,
-    productivePickerOpen: Boolean,
-    blockedPickerOpen: Boolean,
-    productiveSearch: String,
-    blockedSearch: String,
     onOpenProductivePicker: () -> Unit,
-    onCloseProductivePicker: () -> Unit,
     onOpenBlockedPicker: () -> Unit,
-    onCloseBlockedPicker: () -> Unit,
-    onProductiveSearchChange: (String) -> Unit,
-    onBlockedSearchChange: (String) -> Unit,
-    onSelectProductiveApp: (String) -> Unit,
     onOpenRequirementPicker: () -> Unit,
     onCloseRequirementPicker: () -> Unit,
-    onRequirementSearchChange: (String) -> Unit,
-    onSelectRequirementApp: (String) -> Unit,
     onSelectRequirementMinutes: (Int) -> Unit,
     onSaveRequirement: () -> Unit,
     onEditRequirement: (Int) -> Unit,
     onDeleteRequirement: (Int) -> Unit,
-    onToggleBlockedApp: (String) -> Unit,
     onSelectRatio: (Int) -> Unit,
     onToggleActiveDay: (Int) -> Unit,
     onSelectActiveDays: (Set<Int>) -> Unit,
@@ -1362,13 +1437,10 @@ private fun RuleEditor(
     EarnItRuleBuilder(
         rule = rule,
         apps = apps,
-        appsLoading = appsLoading,
         selectedProductivePackage = selectedProductivePackage,
         selectedProductivePackages = selectedProductivePackages,
         selectedBlockedPackages = selectedBlockedPackages,
         selectedRequirements = selectedRequirements,
-        requirementPickerOpen = requirementPickerOpen,
-        requirementSearch = requirementSearch,
         selectedRequirementPackage = selectedRequirementPackage,
         selectedRequirementMinutes = selectedRequirementMinutes,
         editingRequirementIndex = editingRequirementIndex,
@@ -1381,28 +1453,16 @@ private fun RuleEditor(
         editingScheduleWindowIndex = editingScheduleWindowIndex,
         scheduleEditorStartMinute = scheduleEditorStartMinute,
         scheduleEditorEndMinute = scheduleEditorEndMinute,
-        productivePickerOpen = productivePickerOpen,
-        blockedPickerOpen = blockedPickerOpen,
-        productiveSearch = productiveSearch,
-        blockedSearch = blockedSearch,
         builderStep = builderStep,
         onBuilderStepChange = onBuilderStepChange,
         onOpenProductivePicker = onOpenProductivePicker,
-        onCloseProductivePicker = onCloseProductivePicker,
         onOpenBlockedPicker = onOpenBlockedPicker,
-        onCloseBlockedPicker = onCloseBlockedPicker,
-        onProductiveSearchChange = onProductiveSearchChange,
-        onBlockedSearchChange = onBlockedSearchChange,
-        onSelectProductiveApp = onSelectProductiveApp,
         onOpenRequirementPicker = onOpenRequirementPicker,
         onCloseRequirementPicker = onCloseRequirementPicker,
-        onRequirementSearchChange = onRequirementSearchChange,
-        onSelectRequirementApp = onSelectRequirementApp,
         onSelectRequirementMinutes = onSelectRequirementMinutes,
         onSaveRequirement = onSaveRequirement,
         onEditRequirement = onEditRequirement,
         onDeleteRequirement = onDeleteRequirement,
-        onToggleBlockedApp = onToggleBlockedApp,
         onSelectRatio = onSelectRatio,
         onToggleActiveDay = onToggleActiveDay,
         onSelectActiveDays = onSelectActiveDays,
@@ -1670,11 +1730,14 @@ fun DashboardPreview() {
             onCloseProductivePicker = {},
             onOpenBlockedPicker = {},
             onCloseBlockedPicker = {},
+            onDismissBlockedPicker = {},
             onProductiveSearchChange = {},
             onBlockedSearchChange = {},
             onSelectProductiveApp = {},
             onOpenRequirementPicker = {},
             onCloseRequirementPicker = {},
+            onDismissRequirementAppPicker = {},
+            onUseRequirementApp = {},
             onRequirementSearchChange = {},
             onSelectRequirementApp = {},
             onSelectRequirementMinutes = {},

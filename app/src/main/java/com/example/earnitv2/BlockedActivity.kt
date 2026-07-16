@@ -3,11 +3,15 @@ package com.example.earnitv2
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.os.Bundle
+import androidx.activity.SystemBarStyle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,9 +20,9 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
@@ -29,12 +33,18 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import com.example.earnitv2.ui.theme.EarnitV2Theme
+import com.example.earnitv2.ui.theme.WarmInk
+import java.util.Calendar
 
 class BlockedActivity : ComponentActivity() {
     private var ruleId by mutableStateOf<String?>(null)
@@ -44,13 +54,17 @@ class BlockedActivity : ComponentActivity() {
     private var blockedReason by mutableStateOf(RuleAccessEvaluator.DenialReason.OutOfRewardTime)
     private var fallbackMessage by mutableStateOf<String?>(null)
     private var incompleteRequirements by mutableStateOf(emptyList<BlockedRequirementUiState>())
+    private var scheduleStatus by mutableStateOf<BlockedScheduleUiState?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.dark(WarmInk.toArgb()),
+            navigationBarStyle = SystemBarStyle.dark(WarmInk.toArgb())
+        )
         updateRuleFromIntent(intent)
         setContent {
-            EarnitV2Theme {
+            EarnitV2Theme(darkTheme = true, dynamicColor = false) {
                 BackHandler(onBack = ::returnHome)
                 BlockedScreen(
                     blockedAppName = blockedAppName,
@@ -58,6 +72,7 @@ class BlockedActivity : ComponentActivity() {
                     earnApps = earnApps,
                     blockedReason = blockedReason,
                     incompleteRequirements = incompleteRequirements,
+                    scheduleStatus = scheduleStatus,
                     fallbackMessage = fallbackMessage,
                     onOpenEarnApp = ::openEarnApp,
                     onOpenRequirementApp = ::openRequirementApp,
@@ -100,6 +115,7 @@ class BlockedActivity : ComponentActivity() {
             rule = rule,
             progressSeconds = RewardLedger.completionProgress(this, rule)
         )
+        scheduleStatus = blockedScheduleUiState(rule)
     }
 
     private fun openEarnApp(app: BlockedEarnAppUiState) {
@@ -111,7 +127,7 @@ class BlockedActivity : ComponentActivity() {
     }
 
     private fun openRuleDetail() {
-        val targetRuleId = ruleId ?: return
+        val targetRuleId = blockedRuleDetailTarget(ruleId) ?: return
         val detailIntent = Intent(this, MainActivity::class.java).apply {
             putExtra(MainActivity.EXTRA_OPEN_RULE_DETAIL_ID, targetRuleId)
             addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
@@ -168,6 +184,86 @@ data class BlockedEarnAppUiState(
     val exchangeSummary: String
 )
 
+data class BlockedScheduleUiState(
+    val activeDays: String,
+    val activeTimeRange: String,
+    val remainingTime: String?
+)
+
+data class BlockedScreenPresentation(
+    val ruleType: EarnItRuleStore.RuleType,
+    val title: String,
+    val sectionTitle: String?
+)
+
+fun blockedScreenPresentation(reason: RuleAccessEvaluator.DenialReason): BlockedScreenPresentation {
+    return when (reason) {
+        RuleAccessEvaluator.DenialReason.OutOfRewardTime -> BlockedScreenPresentation(
+            ruleType = EarnItRuleStore.RuleType.EarnRewardTime,
+            title = "You're out of Reward Time",
+            sectionTitle = "Earn more with"
+        )
+        RuleAccessEvaluator.DenialReason.CompleteToUnlockIncomplete -> BlockedScreenPresentation(
+            ruleType = EarnItRuleStore.RuleType.CompleteToUnlock,
+            title = "Complete requirements to unlock",
+            sectionTitle = "Complete all requirements"
+        )
+        RuleAccessEvaluator.DenialReason.ScheduledBlockActive -> BlockedScreenPresentation(
+            ruleType = EarnItRuleStore.RuleType.ScheduledBlock,
+            title = "Blocked by schedule",
+            sectionTitle = null
+        )
+    }
+}
+
+fun blockedScheduleUiState(rule: EarnItRuleStore.Rule): BlockedScheduleUiState {
+    val calendar = Calendar.getInstance()
+    val day = ((calendar.get(Calendar.DAY_OF_WEEK) + 5) % 7) + 1
+    val minuteOfDay = calendar.get(Calendar.HOUR_OF_DAY) * 60 + calendar.get(Calendar.MINUTE)
+    return blockedScheduleUiState(rule, day, minuteOfDay)
+}
+
+fun blockedScheduleUiState(
+    rule: EarnItRuleStore.Rule,
+    day: Int,
+    minuteOfDay: Int
+): BlockedScheduleUiState {
+    val detailLines = EarnItRuleStore.scheduleDetailLines(rule.activeDays, rule.effectiveTimeWindows)
+    val remainingMinutes = remainingMinutesUntilScheduleEnds(rule, day, minuteOfDay)
+    return BlockedScheduleUiState(
+        activeDays = detailLines.firstOrNull().orEmpty(),
+        activeTimeRange = detailLines.drop(1).joinToString(" · "),
+        remainingTime = remainingMinutes?.let(::blockedScheduleRemainingLabel)
+    )
+}
+
+fun remainingMinutesUntilScheduleEnds(
+    rule: EarnItRuleStore.Rule,
+    day: Int,
+    minuteOfDay: Int
+): Int? {
+    if (!rule.isActiveAt(day, minuteOfDay)) return null
+    for (offset in 1..MINUTES_PER_WEEK) {
+        val absoluteMinute = minuteOfDay + offset
+        val futureDay = ((day - 1 + absoluteMinute / MINUTES_PER_DAY) % EarnItRuleStore.allDays.size) + 1
+        val futureMinute = absoluteMinute % MINUTES_PER_DAY
+        if (!rule.isActiveAt(futureDay, futureMinute)) return offset
+    }
+    return null
+}
+
+fun blockedScheduleRemainingLabel(totalMinutes: Int): String {
+    val safeMinutes = totalMinutes.coerceAtLeast(1)
+    val hours = safeMinutes / 60
+    val minutes = safeMinutes % 60
+    val duration = when {
+        hours == 0 -> "$minutes min"
+        minutes == 0 -> "$hours hr"
+        else -> "$hours hr $minutes min"
+    }
+    return "Ends in $duration"
+}
+
 data class BlockedOptionsPresentation<T>(
     val visibleOptions: List<T>,
     val hiddenCount: Int
@@ -184,6 +280,13 @@ fun blockedOverflowLabel(hiddenCount: Int): String {
     val noun = if (hiddenCount == 1) "earning app" else "earning apps"
     return "View ${hiddenCount.coerceAtLeast(0)} more $noun"
 }
+
+fun blockedRequirementOverflowLabel(hiddenCount: Int): String {
+    val noun = if (hiddenCount == 1) "requirement" else "requirements"
+    return "View ${hiddenCount.coerceAtLeast(0)} more $noun"
+}
+
+fun blockedRuleDetailTarget(ruleId: String?): String? = ruleId?.takeIf { it.isNotBlank() }
 
 fun blockedEarnAppUiStates(
     rule: EarnItRuleStore.Rule,
@@ -218,6 +321,7 @@ fun BlockedScreen(
     earnApps: List<BlockedEarnAppUiState>,
     blockedReason: RuleAccessEvaluator.DenialReason,
     incompleteRequirements: List<BlockedRequirementUiState>,
+    scheduleStatus: BlockedScheduleUiState?,
     fallbackMessage: String?,
     onOpenEarnApp: (BlockedEarnAppUiState) -> Unit,
     onOpenRequirementApp: (BlockedRequirementUiState) -> Unit,
@@ -225,37 +329,33 @@ fun BlockedScreen(
     onNotNow: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val presentation = blockedScreenPresentation(blockedReason)
+    val accentColor = ruleTypePresentation(presentation.ruleType).accentColor
     Box(
         modifier = modifier
             .fillMaxSize()
-            .padding(horizontal = 24.dp, vertical = 32.dp),
-        contentAlignment = Alignment.Center
+            .background(MaterialTheme.colorScheme.background)
+            .safeDrawingPadding(),
+        contentAlignment = Alignment.TopCenter
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .widthIn(max = 360.dp),
+                .widthIn(max = 520.dp)
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 24.dp, vertical = 28.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(24.dp)
+            verticalArrangement = Arrangement.spacedBy(22.dp)
         ) {
-            Text(
-                text = blockedTitle(blockedReason),
-                style = MaterialTheme.typography.headlineMedium,
-                textAlign = TextAlign.Center
+            BlockedRuleHeader(
+                ruleType = presentation.ruleType,
+                title = presentation.title
             )
-
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                EarnItAppIcon(packageName = blockedPackage, appName = blockedAppName, size = 64.dp)
-                Text(text = blockedAppName, style = MaterialTheme.typography.titleLarge)
-                Text(
-                    text = blockedDescription(blockedReason, blockedAppName),
-                    style = MaterialTheme.typography.bodyMedium,
-                    textAlign = TextAlign.Center
-                )
-            }
+            BlockedAppIdentity(
+                packageName = blockedPackage,
+                appName = blockedAppName,
+                description = blockedDescription(blockedReason, blockedAppName)
+            )
 
             Column(
                 modifier = Modifier.fillMaxWidth(),
@@ -263,27 +363,28 @@ fun BlockedScreen(
             ) {
                 when (blockedReason) {
                     RuleAccessEvaluator.DenialReason.OutOfRewardTime -> {
-                        Text(text = "Earn more with", style = MaterialTheme.typography.bodyMedium)
+                        BlockedSectionTitle(presentation.sectionTitle.orEmpty(), accentColor)
                         EarnAppsAvailable(
                             earnApps = earnApps,
                             onOpenEarnApp = onOpenEarnApp,
-                            onViewMore = onViewMoreEarningApps
+                            onViewMore = onViewMoreEarningApps,
+                            accentColor = accentColor
                         )
                     }
                     RuleAccessEvaluator.DenialReason.CompleteToUnlockIncomplete -> {
+                        BlockedSectionTitle(presentation.sectionTitle.orEmpty(), accentColor)
                         RequirementsRemaining(
                             requirements = incompleteRequirements,
                             onOpenRequirementApp = onOpenRequirementApp,
-                            onViewMore = onViewMoreEarningApps
+                            onViewMore = onViewMoreEarningApps,
+                            accentColor = accentColor
                         )
                     }
-                    RuleAccessEvaluator.DenialReason.ScheduledBlockActive -> Unit
-                }
-                TextButton(
-                    onClick = onNotNow,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(text = "Not now")
+                    RuleAccessEvaluator.DenialReason.ScheduledBlockActive -> {
+                        if (scheduleStatus != null) {
+                            BlockedScheduleStatusCard(scheduleStatus, accentColor)
+                        }
+                    }
                 }
                 if (fallbackMessage != null) {
                     Text(
@@ -294,16 +395,117 @@ fun BlockedScreen(
                     )
                 }
             }
+            BlockedNotNowAction(onClick = onNotNow)
         }
     }
 }
 
-fun blockedTitle(reason: RuleAccessEvaluator.DenialReason): String {
-    return when (reason) {
-        RuleAccessEvaluator.DenialReason.ScheduledBlockActive -> "Blocked by schedule"
-        RuleAccessEvaluator.DenialReason.CompleteToUnlockIncomplete -> "Complete requirements to unlock"
-        RuleAccessEvaluator.DenialReason.OutOfRewardTime -> "You're out of Reward Time"
+@Composable
+private fun BlockedRuleHeader(
+    ruleType: EarnItRuleStore.RuleType,
+    title: String
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        RuleTypeIcon(ruleType = ruleType, size = 54.dp)
+        Text(
+            text = title,
+            style = MaterialTheme.typography.headlineMedium,
+            color = MaterialTheme.colorScheme.onBackground,
+            textAlign = TextAlign.Center
+        )
     }
+}
+
+@Composable
+private fun BlockedAppIdentity(
+    packageName: String?,
+    appName: String,
+    description: String
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        EarnItAppIcon(packageName = packageName, appName = appName, size = 72.dp)
+        Text(
+            text = appName,
+            style = MaterialTheme.typography.titleLarge,
+            color = MaterialTheme.colorScheme.onBackground,
+            textAlign = TextAlign.Center,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
+        )
+        Text(
+            text = description,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center
+        )
+    }
+}
+
+@Composable
+private fun BlockedSectionTitle(title: String, accentColor: Color) {
+    Text(
+        text = title,
+        style = MaterialTheme.typography.titleMedium,
+        color = accentColor,
+        modifier = Modifier.fillMaxWidth()
+    )
+}
+
+@Composable
+private fun BlockedScheduleStatusCard(status: BlockedScheduleUiState, accentColor: Color) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, accentColor.copy(alpha = 0.42f))
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            BlockedScheduleStatusLine(label = "Active days", value = status.activeDays)
+            BlockedScheduleStatusLine(label = "Active time", value = status.activeTimeRange)
+            if (status.remainingTime != null) {
+                BlockedScheduleStatusLine(
+                    label = "Current block",
+                    value = status.remainingTime,
+                    valueColor = accentColor
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun BlockedScheduleStatusLine(
+    label: String,
+    value: String,
+    valueColor: Color = MaterialTheme.colorScheme.onSurface
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Text(text = value, style = MaterialTheme.typography.bodyLarge, color = valueColor)
+    }
+}
+
+@Composable
+private fun BlockedNotNowAction(onClick: () -> Unit) {
+    TextButton(onClick = onClick) {
+        Text(text = "Not now", color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+fun blockedTitle(reason: RuleAccessEvaluator.DenialReason): String {
+    return blockedScreenPresentation(reason).title
 }
 
 fun blockedDescription(reason: RuleAccessEvaluator.DenialReason, blockedAppName: String): String {
@@ -318,30 +520,25 @@ fun blockedDescription(reason: RuleAccessEvaluator.DenialReason, blockedAppName:
 private fun EarnAppsAvailable(
     earnApps: List<BlockedEarnAppUiState>,
     onOpenEarnApp: (BlockedEarnAppUiState) -> Unit,
-    onViewMore: () -> Unit
+    onViewMore: () -> Unit,
+    accentColor: Color
 ) {
-    if (earnApps.size == 1) {
-        val app = earnApps.single()
-        EarnAppCard(app = app)
-        Button(
-            onClick = { onOpenEarnApp(app) },
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text(text = "Open ${app.name}", maxLines = 1, overflow = TextOverflow.Ellipsis)
-        }
-    } else {
-        val presentation = blockedOptionsPresentation(earnApps)
-        presentation.visibleOptions.forEach { app ->
-            BlockedAppActionRow(
-                packageName = app.packageName,
-                name = app.name,
-                supportingText = app.exchangeSummary,
-                onOpen = { onOpenEarnApp(app) }
-            )
-        }
-        if (presentation.hiddenCount > 0) {
-            ViewMoreEarningOptionsRow(hiddenCount = presentation.hiddenCount, onClick = onViewMore)
-        }
+    val presentation = blockedOptionsPresentation(earnApps)
+    presentation.visibleOptions.forEach { app ->
+        BlockedAppActionRow(
+            packageName = app.packageName,
+            name = app.name,
+            supportingText = app.exchangeSummary,
+            accentColor = accentColor,
+            onOpen = { onOpenEarnApp(app) }
+        )
+    }
+    if (presentation.hiddenCount > 0) {
+        ViewMoreEarningOptionsRow(
+            label = blockedOverflowLabel(presentation.hiddenCount),
+            accentColor = accentColor,
+            onClick = onViewMore
+        )
     }
 }
 
@@ -349,7 +546,8 @@ private fun EarnAppsAvailable(
 private fun RequirementsRemaining(
     requirements: List<BlockedRequirementUiState>,
     onOpenRequirementApp: (BlockedRequirementUiState) -> Unit,
-    onViewMore: () -> Unit
+    onViewMore: () -> Unit,
+    accentColor: Color
 ) {
     if (requirements.isEmpty()) {
         Text(
@@ -365,71 +563,48 @@ private fun RequirementsRemaining(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Text(text = "Complete all requirements:", style = MaterialTheme.typography.bodyMedium)
-        if (requirements.size == 1) {
-            val requirement = requirements.single()
-            RequirementCard(requirement = requirement)
-            Button(
-                onClick = { onOpenRequirementApp(requirement) },
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text(
-                    text = "Open ${requirement.name}",
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-        } else {
-            val presentation = blockedOptionsPresentation(requirements)
-            presentation.visibleOptions.forEach { requirement ->
-                RequirementRow(
-                    requirement = requirement,
-                    onOpen = { onOpenRequirementApp(requirement) }
-                )
-            }
-            if (presentation.hiddenCount > 0) {
-                ViewMoreEarningOptionsRow(hiddenCount = presentation.hiddenCount, onClick = onViewMore)
-            }
+        val presentation = blockedOptionsPresentation(requirements)
+        presentation.visibleOptions.forEach { requirement ->
+            RequirementRow(
+                requirement = requirement,
+                accentColor = accentColor,
+                onOpen = { onOpenRequirementApp(requirement) }
+            )
+        }
+        if (presentation.hiddenCount > 0) {
+            ViewMoreEarningOptionsRow(
+                label = blockedRequirementOverflowLabel(presentation.hiddenCount),
+                accentColor = accentColor,
+                onClick = onViewMore
+            )
         }
     }
 }
 
 @Composable
-private fun ViewMoreEarningOptionsRow(hiddenCount: Int, onClick: () -> Unit) {
+private fun ViewMoreEarningOptionsRow(label: String, accentColor: Color, onClick: () -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, accentColor.copy(alpha = 0.32f))
     ) {
         TextButton(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
-            Text(text = blockedOverflowLabel(hiddenCount), style = MaterialTheme.typography.titleSmall)
+            Text(text = label, style = MaterialTheme.typography.titleSmall, color = accentColor)
         }
-    }
-}
-
-@Composable
-private fun RequirementCard(
-    requirement: BlockedRequirementUiState,
-    modifier: Modifier = Modifier
-) {
-    Card(
-        modifier = modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
-    ) {
-        RequirementContent(requirement = requirement, modifier = Modifier.padding(14.dp))
     }
 }
 
 @Composable
 private fun RequirementRow(
     requirement: BlockedRequirementUiState,
+    accentColor: Color,
     onOpen: () -> Unit
 ) {
     BlockedAppActionRow(
         packageName = requirement.packageName,
         name = requirement.name,
         supportingText = requirement.progressLabel,
+        accentColor = accentColor,
         onOpen = onOpen
     )
 }
@@ -439,12 +614,13 @@ private fun BlockedAppActionRow(
     packageName: String,
     name: String,
     supportingText: String,
+    accentColor: Color,
     onOpen: () -> Unit
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, accentColor.copy(alpha = 0.32f))
     ) {
         Row(
             modifier = Modifier
@@ -462,74 +638,30 @@ private fun BlockedAppActionRow(
                     Text(
                         text = name,
                         style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
-                    Text(text = supportingText, style = MaterialTheme.typography.bodySmall)
+                    Text(
+                        text = supportingText,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             }
             Spacer(modifier = Modifier.width(8.dp))
             TextButton(
                 onClick = onOpen,
-                modifier = Modifier.widthIn(max = 128.dp)
+                modifier = Modifier
+                    .widthIn(max = 128.dp)
+                    .semantics { contentDescription = "Open $name" }
             ) {
                 Text(
-                    text = "Open $name",
+                    text = "Open",
+                    color = accentColor,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
-            }
-        }
-    }
-}
-
-@Composable
-private fun RequirementContent(
-    requirement: BlockedRequirementUiState,
-    modifier: Modifier = Modifier
-) {
-    Row(
-        modifier = modifier,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        EarnItAppIcon(packageName = requirement.packageName, appName = requirement.name, size = 40.dp)
-        Column(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.weight(1f)) {
-            Text(
-                text = requirement.name,
-                style = MaterialTheme.typography.titleMedium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            Text(text = requirement.progressLabel, style = MaterialTheme.typography.bodySmall)
-        }
-    }
-}
-
-@Composable
-private fun EarnAppCard(
-    app: BlockedEarnAppUiState,
-    modifier: Modifier = Modifier
-) {
-    Card(
-        modifier = modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
-    ) {
-        Row(
-            modifier = Modifier.padding(14.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            EarnItAppIcon(packageName = app.packageName, appName = app.name, size = 48.dp)
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.weight(1f)) {
-                Text(
-                    text = app.name,
-                    style = MaterialTheme.typography.titleMedium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Text(text = app.exchangeSummary, style = MaterialTheme.typography.bodySmall)
             }
         }
     }
@@ -556,6 +688,7 @@ fun BlockedScreenPreview() {
             ),
             blockedReason = RuleAccessEvaluator.DenialReason.OutOfRewardTime,
             incompleteRequirements = emptyList(),
+            scheduleStatus = null,
             fallbackMessage = null,
             onOpenEarnApp = {},
             onOpenRequirementApp = {},
@@ -566,3 +699,5 @@ fun BlockedScreenPreview() {
 }
 
 private const val MAX_BLOCKED_ACTIONABLE_OPTIONS = 4
+private const val MINUTES_PER_DAY = 1_440
+private const val MINUTES_PER_WEEK = 7 * MINUTES_PER_DAY

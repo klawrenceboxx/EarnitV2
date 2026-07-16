@@ -78,6 +78,28 @@ class BlockedRequirementUiStateTest {
     }
 
     @Test
+    fun blockedVariantsUseTheCorrectRuleIdentityAndReasonCopy() {
+        val earn = blockedScreenPresentation(RuleAccessEvaluator.DenialReason.OutOfRewardTime)
+        val complete = blockedScreenPresentation(RuleAccessEvaluator.DenialReason.CompleteToUnlockIncomplete)
+        val scheduled = blockedScreenPresentation(RuleAccessEvaluator.DenialReason.ScheduledBlockActive)
+
+        assertEquals(EarnItRuleStore.RuleType.EarnRewardTime, earn.ruleType)
+        assertEquals(RuleTypeAccentRole.Green, ruleTypePresentation(earn.ruleType).accentRole)
+        assertEquals("You're out of Reward Time", earn.title)
+        assertEquals("Earn more with", earn.sectionTitle)
+
+        assertEquals(EarnItRuleStore.RuleType.CompleteToUnlock, complete.ruleType)
+        assertEquals(RuleTypeAccentRole.Blue, ruleTypePresentation(complete.ruleType).accentRole)
+        assertEquals("Complete requirements to unlock", complete.title)
+        assertEquals("Complete all requirements", complete.sectionTitle)
+
+        assertEquals(EarnItRuleStore.RuleType.ScheduledBlock, scheduled.ruleType)
+        assertEquals(RuleTypeAccentRole.Amber, ruleTypePresentation(scheduled.ruleType).accentRole)
+        assertEquals("Blocked by schedule", scheduled.title)
+        assertEquals(null, scheduled.sectionTitle)
+    }
+
+    @Test
     fun earnRewardBlockedRowsIncludeEveryConfiguredEarnApp() {
         val rule = completeRule(emptyList()).copy(
             type = EarnItRuleStore.RuleType.EarnRewardTime,
@@ -145,7 +167,7 @@ class BlockedRequirementUiStateTest {
             presentation.visibleOptions.map { it.packageName }
         )
         assertEquals(2, presentation.hiddenCount)
-        assertEquals("View 2 more earning apps", blockedOverflowLabel(presentation.hiddenCount))
+        assertEquals("View 2 more requirements", blockedRequirementOverflowLabel(presentation.hiddenCount))
     }
 
     @Test
@@ -164,6 +186,44 @@ class BlockedRequirementUiStateTest {
         )
 
         assertTrue(rows.isEmpty())
+    }
+
+    @Test
+    fun scheduledBlockBuildsScheduleOnlyStatusWithRemainingTime() {
+        val rule = completeRule(emptyList()).copy(
+            type = EarnItRuleStore.RuleType.ScheduledBlock,
+            activeDays = setOf(1, 2, 3, 4, 5),
+            startMinute = 9 * 60,
+            endMinute = 17 * 60
+        )
+
+        val status = blockedScheduleUiState(rule, day = 1, minuteOfDay = 16 * 60 + 30)
+
+        assertEquals("Weekdays", status.activeDays)
+        assertEquals("9:00 AM-5:00 PM", status.activeTimeRange)
+        assertEquals("Ends in 30 min", status.remainingTime)
+        assertEquals(
+            null,
+            blockedScreenPresentation(RuleAccessEvaluator.DenialReason.ScheduledBlockActive).sectionTitle
+        )
+    }
+
+    @Test
+    fun scheduledBlockRemainingTimeHandlesOvernightWindows() {
+        val rule = completeRule(emptyList()).copy(
+            type = EarnItRuleStore.RuleType.ScheduledBlock,
+            activeDays = setOf(1),
+            startMinute = 22 * 60,
+            endMinute = 8 * 60
+        )
+
+        assertEquals(60, remainingMinutesUntilScheduleEnds(rule, day = 2, minuteOfDay = 7 * 60))
+    }
+
+    @Test
+    fun viewMoreKeepsTheOriginatingRuleId() {
+        assertEquals("rule-123", blockedRuleDetailTarget("rule-123"))
+        assertEquals(null, blockedRuleDetailTarget(""))
     }
 
     private fun requirement(
