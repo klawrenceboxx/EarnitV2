@@ -4,6 +4,8 @@ import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.content.SharedPreferences
+import android.content.pm.ApplicationInfo
+import android.util.Log
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
@@ -18,6 +20,7 @@ object RewardLedger {
     private const val KEY_REWARD_CONSUMED_SECONDS = "reward_consumed_seconds"
     private const val KEY_REQUIREMENT_PROGRESS_SECONDS = "requirement_progress_seconds"
     private const val KEY_TRACKED_HANDOFF_SECONDS = "tracked_handoff_seconds"
+    private const val KEY_TRACKED_HANDOFF_CREDIT_CURSOR = "tracked_handoff_credit_cursor"
     private const val KEY_DEEP_WORK_CREDITED_SECONDS = "deep_work_credited_seconds"
 
     data class Snapshot(
@@ -98,6 +101,12 @@ object RewardLedger {
             activeAppUsageSecondsToday(usageStatsManager, rule, packageName)
         }
     }
+
+    internal data class TrackedHandoffCreditDecision(
+        val creditStartMillis: Long,
+        val activeSeconds: Long,
+        val rejectionReason: String?
+    )
 
     @Synchronized
     fun creditDeepWork(context: Context, rule: EarnItRuleStore.Rule, elapsedSeconds: Long): Snapshot {
@@ -230,7 +239,10 @@ object RewardLedger {
         startedAtMillis: Long,
         endedAtMillis: Long
     ) {
-        if (endedAtMillis <= startedAtMillis) return
+        if (endedAtMillis <= startedAtMillis) {
+            logTrackedHandoffCredit(context, null, logicalPackageName, startedAtMillis, endedAtMillis, null, startedAtMillis, 0L, "invalid-interval")
+            return
+        }
         rules.filter { it.enabled }.forEach { rule ->
             val shouldCredit = when (rule.type) {
                 EarnItRuleStore.RuleType.EarnRewardTime -> logicalPackageName in rule.earnAppPackages
@@ -241,14 +253,59 @@ object RewardLedger {
             }
             if (!shouldCredit) return@forEach
 
-            val activeSeconds = activeOverlapMillis(startedAtMillis, endedAtMillis, rule) / 1_000L
-            if (activeSeconds <= 0L) return@forEach
-
             val prefs = currentPrefs(context, rule)
+            val cursorKey = trackedHandoffCursorKey(rule, logicalPackageName)
+            val creditCursor = prefs.getLong(cursorKey, startedAtMillis)
+            val decision = trackedHandoffCreditDecision(
+                rule = rule,
+                startedAtMillis = startedAtMillis,
+                endedAtMillis = endedAtMillis,
+                creditCursor = creditCursor
+            )
+            if (decision.rejectionReason == "duplicate-interval") {
+                logTrackedHandoffCredit(context, rule, logicalPackageName, startedAtMillis, endedAtMillis, creditCursor, decision.creditStartMillis, 0L, "duplicate-interval")
+                return@forEach
+            }
             val key = trackedHandoffKey(rule, logicalPackageName)
-            val updated = prefs.getLong(key, 0L) + activeSeconds
-            prefs.edit().putLong(key, updated).commit()
+            val updated = prefs.getLong(key, 0L) + decision.activeSeconds
+            prefs.edit()
+                .putLong(cursorKey, endedAtMillis)
+                .putLong(key, updated)
+                .commit()
+            logTrackedHandoffCredit(
+                context = context,
+                rule = rule,
+                logicalPackageName = logicalPackageName,
+                startedAtMillis = startedAtMillis,
+                endedAtMillis = endedAtMillis,
+                creditCursor = creditCursor,
+                creditStartMillis = decision.creditStartMillis,
+                creditedSeconds = decision.activeSeconds,
+                rejectionReason = decision.rejectionReason
+            )
         }
+    }
+
+    internal fun trackedHandoffCreditDecision(
+        rule: EarnItRuleStore.Rule,
+        startedAtMillis: Long,
+        endedAtMillis: Long,
+        creditCursor: Long
+    ): TrackedHandoffCreditDecision {
+        val creditStartMillis = maxOf(startedAtMillis, creditCursor)
+        if (endedAtMillis <= creditStartMillis) {
+            return TrackedHandoffCreditDecision(
+                creditStartMillis = creditStartMillis,
+                activeSeconds = 0L,
+                rejectionReason = "duplicate-interval"
+            )
+        }
+        val activeSeconds = activeOverlapMillis(creditStartMillis, endedAtMillis, rule) / 1_000L
+        return TrackedHandoffCreditDecision(
+            creditStartMillis = creditStartMillis,
+            activeSeconds = activeSeconds,
+            rejectionReason = if (activeSeconds == 0L) "outside-active-schedule" else null
+        )
     }
 
     @Synchronized
@@ -308,6 +365,7 @@ object RewardLedger {
             val editor = prefs.edit()
             clearRulePackageKeys(prefs, editor, rule, KEY_REQUIREMENT_PROGRESS_SECONDS)
             clearRulePackageKeys(prefs, editor, rule, KEY_TRACKED_HANDOFF_SECONDS)
+            clearRulePackageKeys(prefs, editor, rule, KEY_TRACKED_HANDOFF_CREDIT_CURSOR)
             editor
                 .putString(dayKey, today)
                 .putString(signatureKey, ruleSignature)
@@ -365,6 +423,32 @@ object RewardLedger {
 
     private fun trackedHandoffKey(rule: EarnItRuleStore.Rule, packageName: String): String {
         return "${rule.id}_${KEY_TRACKED_HANDOFF_SECONDS}_$packageName"
+    }
+
+    private fun trackedHandoffCursorKey(rule: EarnItRuleStore.Rule, packageName: String): String {
+        return "${rule.id}_${KEY_TRACKED_HANDOFF_CREDIT_CURSOR}_$packageName"
+    }
+
+    private fun logTrackedHandoffCredit(
+        context: Context,
+        rule: EarnItRuleStore.Rule?,
+        logicalPackageName: String,
+        startedAtMillis: Long,
+        endedAtMillis: Long,
+        creditCursor: Long?,
+        creditStartMillis: Long,
+        creditedSeconds: Long,
+        rejectionReason: String?
+    ) {
+        if (context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE == 0) return
+        Log.d(
+            "EarnItRewardLedger",
+            "trackedHandoff rule=${rule?.id} type=${rule?.type} enabled=${rule?.enabled} " +
+                "scheduleActive=${rule?.isActiveNow()} logicalPackage=$logicalPackageName " +
+                "sessionStart=$startedAtMillis sessionEnd=$endedAtMillis cursor=$creditCursor " +
+                "creditInterval=$creditStartMillis..$endedAtMillis creditedSeconds=$creditedSeconds " +
+                "rejection=${rejectionReason ?: "none"}"
+        )
     }
 
     private fun clearRulePackageKeys(

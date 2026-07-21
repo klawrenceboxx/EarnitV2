@@ -74,6 +74,98 @@ class TrackedAppHandoffTest {
     }
 
     @Test
+    fun geminiEntryEvidenceSurvivesDelayedGoogleWrapperTransition() {
+        val tracker = TrackedAppHandoffTracker(
+            pendingLaunch = pendingGeminiLaunch(launchedAtMillis = 1_000L)
+        )
+
+        val entry = tracker.onForegroundPackage(
+            actualPackageName = TrackedAppMatchPolicy.GEMINI_PACKAGE,
+            actualClassName = TrackedAppMatchPolicy.GEMINI_ENTRY_POINT_ACTIVITY,
+            nowMillis = 2_000L
+        )
+        val gateway = tracker.onForegroundPackage(
+            actualPackageName = TrackedAppMatchPolicy.GOOGLE_PACKAGE,
+            actualClassName = TrackedAppMatchPolicy.GOOGLE_ANIMATED_GATEWAY_ACTIVITY,
+            nowMillis = 12_000L,
+            relevantLogicalPackageNames = setOf(TrackedAppMatchPolicy.GEMINI_PACKAGE)
+        )
+
+        assertEquals("gemini-entry-evidence-preserved", entry.decision)
+        assertEquals(17_000L, entry.updatedPending?.expiresAtMillis)
+        assertEquals(TrackedAppMatchPolicy.GEMINI_PACKAGE, gateway.startedSession?.logicalPackageName)
+        assertEquals(12_000L, gateway.startedSession?.startedAtMillis)
+    }
+
+    @Test
+    fun keyboardDuringGeminiLaunchDoesNotDiscardWrapperEvidence() {
+        val tracker = TrackedAppHandoffTracker(
+            pendingLaunch = pendingGeminiLaunch(launchedAtMillis = 1_000L)
+        )
+        tracker.onForegroundPackage(
+            TrackedAppMatchPolicy.GEMINI_PACKAGE,
+            TrackedAppMatchPolicy.GEMINI_ENTRY_POINT_ACTIVITY,
+            nowMillis = 2_000L
+        )
+
+        tracker.onForegroundPackage(
+            actualPackageName = DEFAULT_KEYBOARD_PACKAGE,
+            actualClassName = "android.inputmethodservice.SoftInputWindow",
+            nowMillis = 5_000L,
+            ignoredForegroundPackageNames = setOf(DEFAULT_KEYBOARD_PACKAGE)
+        )
+        val gateway = tracker.onForegroundPackage(
+            actualPackageName = TrackedAppMatchPolicy.GOOGLE_PACKAGE,
+            actualClassName = TrackedAppMatchPolicy.GOOGLE_GATEWAY_ACTIVITY,
+            nowMillis = 8_000L
+        )
+
+        assertEquals(TrackedAppMatchPolicy.GEMINI_PACKAGE, gateway.startedSession?.logicalPackageName)
+    }
+
+    @Test
+    fun persistedGeminiEntryEvidenceSurvivesTrackerRecreation() {
+        val originalTracker = TrackedAppHandoffTracker(
+            pendingLaunch = pendingGeminiLaunch(launchedAtMillis = 1_000L)
+        )
+        originalTracker.onForegroundPackage(
+            TrackedAppMatchPolicy.GEMINI_PACKAGE,
+            TrackedAppMatchPolicy.GEMINI_ENTRY_POINT_ACTIVITY,
+            nowMillis = 2_000L
+        )
+
+        val restoredTracker = TrackedAppHandoffTracker(pendingLaunch = originalTracker.pendingLaunch())
+        val result = restoredTracker.onForegroundPackage(
+            TrackedAppMatchPolicy.GOOGLE_PACKAGE,
+            TrackedAppMatchPolicy.GOOGLE_ANIMATED_GATEWAY_ACTIVITY,
+            nowMillis = 12_000L
+        )
+
+        assertEquals(TrackedAppMatchPolicy.GEMINI_PACKAGE, result.startedSession?.logicalPackageName)
+    }
+
+    @Test
+    fun realGoogleSearchAfterGeminiEntryDoesNotStartOrConsumePendingGeminiSession() {
+        val tracker = TrackedAppHandoffTracker(
+            pendingLaunch = pendingGeminiLaunch(launchedAtMillis = 1_000L)
+        )
+        tracker.onForegroundPackage(
+            TrackedAppMatchPolicy.GEMINI_PACKAGE,
+            TrackedAppMatchPolicy.GEMINI_ENTRY_POINT_ACTIVITY,
+            nowMillis = 2_000L
+        )
+
+        val result = tracker.onForegroundPackage(
+            TrackedAppMatchPolicy.GOOGLE_PACKAGE,
+            GOOGLE_APP_ACTIVITY,
+            nowMillis = 4_000L
+        )
+
+        assertNull(result.startedSession)
+        assertEquals(TrackedAppMatchPolicy.GEMINI_PACKAGE, tracker.pendingLaunch()?.logicalPackageName)
+    }
+
+    @Test
     fun currentGeminiGatewayStartsDirectlyOnlyWithRecentGeminiEntryEvidence() {
         val tracker = TrackedAppHandoffTracker()
 
@@ -357,6 +449,62 @@ class TrackedAppHandoffTest {
     }
 
     @Test
+    fun launcherAndRecentsEndGeminiWithoutRestartingItsOriginalSession() {
+        listOf("com.example.launcher", "com.android.systemui").forEach { foregroundPackage ->
+            val tracker = activeGeminiTracker(startedAtMillis = 2_000L)
+
+            val result = tracker.onForegroundPackage(
+                actualPackageName = foregroundPackage,
+                actualClassName = "com.example.OverviewActivity",
+                nowMillis = 5_000L
+            )
+
+            assertEquals(2_000L, result.endedSession?.startedAtMillis)
+            assertEquals(5_000L, result.endedAtMillis)
+            assertNull(result.startedSession)
+            assertNull(tracker.activeSession())
+        }
+    }
+
+    @Test
+    fun trackedHandoffCreditsActiveScheduleExactlyOnce() {
+        val rule = completeToUnlockRule(activeDays = EarnItRuleStore.allDays.toSet())
+
+        val first = RewardLedger.trackedHandoffCreditDecision(
+            rule = rule,
+            startedAtMillis = 1_000L,
+            endedAtMillis = 11_000L,
+            creditCursor = 1_000L
+        )
+        val duplicate = RewardLedger.trackedHandoffCreditDecision(
+            rule = rule,
+            startedAtMillis = 1_000L,
+            endedAtMillis = 11_000L,
+            creditCursor = 11_000L
+        )
+
+        assertEquals(10L, first.activeSeconds)
+        assertNull(first.rejectionReason)
+        assertEquals(0L, duplicate.activeSeconds)
+        assertEquals("duplicate-interval", duplicate.rejectionReason)
+    }
+
+    @Test
+    fun trackedHandoffRejectsScheduleInactiveInterval() {
+        val rule = completeToUnlockRule(activeDays = emptySet())
+
+        val result = RewardLedger.trackedHandoffCreditDecision(
+            rule = rule,
+            startedAtMillis = 1_000L,
+            endedAtMillis = 11_000L,
+            creditCursor = 1_000L
+        )
+
+        assertEquals(0L, result.activeSeconds)
+        assertEquals("outside-active-schedule", result.rejectionReason)
+    }
+
+    @Test
     fun stoppingSessionTwiceDoesNotDoubleCredit() {
         val tracker = TrackedAppHandoffTracker(
             activeSession = ActiveTrackedAppSession(
@@ -442,6 +590,22 @@ class TrackedAppHandoffTest {
                 actualForegroundClassName = GEMINI_ROBIN_ACTIVITY,
                 startedAtMillis = startedAtMillis
             )
+        )
+    }
+
+    private fun completeToUnlockRule(activeDays: Set<Int>): EarnItRuleStore.Rule {
+        val gemini = EarnItRuleStore.RuleApp(TrackedAppMatchPolicy.GEMINI_PACKAGE, "Gemini")
+        return EarnItRuleStore.Rule(
+            id = "complete-test",
+            productivePackage = "",
+            productiveName = "",
+            blockedApps = listOf(EarnItRuleStore.RuleApp("com.example.blocked", "Blocked")),
+            rewardSecondsPerProductiveSecond = 1,
+            activeDays = activeDays,
+            startMinute = 0,
+            endMinute = 1_440,
+            type = EarnItRuleStore.RuleType.CompleteToUnlock,
+            requirements = listOf(EarnItRuleStore.RuleRequirement(gemini, 300L))
         )
     }
 

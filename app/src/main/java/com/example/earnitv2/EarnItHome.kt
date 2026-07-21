@@ -299,9 +299,7 @@ private fun HomeTopBar(onOpenSettings: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(text = "EarnIt", style = MaterialTheme.typography.headlineSmall)
-        TextButton(onClick = onOpenSettings) {
-            Text(text = "Settings")
-        }
+        TextButton(onClick = onOpenSettings) { Text(text = "Settings") }
     }
 }
 

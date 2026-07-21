@@ -239,6 +239,7 @@ internal fun EarnItSettings(
     hasRules: Boolean,
     strictModeState: StrictModeState,
     onBack: () -> Unit,
+    onOpenAnalytics: () -> Unit,
     onOpenStrictMode: () -> Unit,
     onOpenUsageAccessSettings: () -> Unit,
     onOpenAccessibilitySettings: () -> Unit,
@@ -257,6 +258,40 @@ internal fun EarnItSettings(
             Text(text = "Settings", style = MaterialTheme.typography.headlineMedium)
             TextButton(onClick = onBack) {
                 Text(text = "Done")
+            }
+        }
+
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(onClick = onOpenAnalytics),
+            shape = RoundedCornerShape(18.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 78.dp)
+                    .padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                SettingsSymbolBadge(symbol = "▥", emphasized = true)
+                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                    Text(text = "Analytics", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        text = "Understand your screen time and Rule performance",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Text(
+                    text = "›",
+                    modifier = Modifier.clearAndSetSemantics { },
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.titleLarge
+                )
             }
         }
 

@@ -244,7 +244,7 @@ class EarnItAccessibilityService : AccessibilityService() {
             )
         }
 
-        if (result.resolvedPending != null || result.clearedExpiredPending != null) {
+        if (result.resolvedPending != null || result.clearedExpiredPending != null || result.updatedPending != null) {
             TrackedAppLaunchStore.savePendingLaunch(this, tracker.pendingLaunch())
         }
         if (result.startedSession != null || result.endedSession != null) {
@@ -259,11 +259,15 @@ class EarnItAccessibilityService : AccessibilityService() {
             pendingLogicalPackage = tracker.pendingLaunch()?.logicalPackageName,
             activeLogicalPackage = tracker.activeSession()?.logicalPackageName,
             activeActualPackage = tracker.activeSession()?.actualForegroundPackageName,
+            activeStartedAtMillis = tracker.activeSession()?.startedAtMillis,
             startedHandoff = result.startedSession != null,
             endedHandoff = result.endedSession != null,
             resolvedPending = result.resolvedPending != null,
             clearedExpiredPending = result.clearedExpiredPending != null,
-            recentLaunchEvidence = recentlyForegroundLogicalPackages
+            recentLaunchEvidence = recentlyForegroundLogicalPackages,
+            decision = result.decision,
+            isKeyboardEvent = foregroundPackage == defaultInputMethodPackageName(),
+            rules = rules
         )
     }
 
@@ -344,20 +348,45 @@ class EarnItAccessibilityService : AccessibilityService() {
         pendingLogicalPackage: String?,
         activeLogicalPackage: String?,
         activeActualPackage: String?,
+        activeStartedAtMillis: Long?,
         startedHandoff: Boolean,
         endedHandoff: Boolean,
         resolvedPending: Boolean,
         clearedExpiredPending: Boolean,
-        recentLaunchEvidence: Set<String>
+        recentLaunchEvidence: Set<String>,
+        decision: String,
+        isKeyboardEvent: Boolean,
+        rules: List<EarnItRuleStore.Rule>
     ) {
         if (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE == 0) return
+        val geminiClassification = when {
+            packageName == TrackedAppMatchPolicy.GEMINI_PACKAGE &&
+                className == TrackedAppMatchPolicy.GEMINI_ENTRY_POINT_ACTIVITY -> "gemini-entry"
+            packageName == TrackedAppMatchPolicy.GOOGLE_PACKAGE &&
+                TrackedAppMatchPolicy.isGeminiGatewayClass(className) -> "google-gateway"
+            TrackedAppMatchPolicy.matchingRule(
+                logicalPackageName = TrackedAppMatchPolicy.GEMINI_PACKAGE,
+                actualPackageName = packageName,
+                actualClassName = className
+            ) != null -> "verified-gemini"
+            packageName == TrackedAppMatchPolicy.GOOGLE_PACKAGE -> "ordinary-google"
+            else -> "other"
+        }
+        val ruleStatus = rules.filter { rule ->
+            rule.earnAppPackages.contains(TrackedAppMatchPolicy.GEMINI_PACKAGE) ||
+                rule.requirements.any { it.app.packageName == TrackedAppMatchPolicy.GEMINI_PACKAGE }
+        }.joinToString(prefix = "[", postfix = "]") { rule ->
+            "${rule.id}:${rule.type}:enabled=${rule.enabled}:scheduleActive=${rule.isActiveNow()}"
+        }
         Log.d(
             TAG,
             "foreground timestamp=$timestamp package=$packageName class=$className eventType=$eventType " +
+                "classification=$geminiClassification keyboardEvent=$isKeyboardEvent decision=$decision " +
                 "pendingLogical=$pendingLogicalPackage activeLogical=$activeLogicalPackage " +
-                "activeActual=$activeActualPackage startedHandoff=$startedHandoff endedHandoff=$endedHandoff " +
+                "activeActual=$activeActualPackage activeStartedAt=$activeStartedAtMillis " +
+                "startedHandoff=$startedHandoff endedHandoff=$endedHandoff " +
                 "resolvedPending=$resolvedPending clearedExpiredPending=$clearedExpiredPending " +
-                "recentLaunchEvidence=$recentLaunchEvidence"
+                "recentLaunchEvidence=$recentLaunchEvidence ruleStatus=$ruleStatus"
         )
     }
 
@@ -373,7 +402,7 @@ class EarnItAccessibilityService : AccessibilityService() {
         Log.d(
             TAG,
             "foregroundRaw timestamp=$timestamp package=$packageName class=$className " +
-                "text=${event.text} description=${event.contentDescription} windowId=${event.windowId} " +
+                "eventType=${event.eventType} windowId=${event.windowId} " +
                 "relevantLogical=$relevantLogicalPackages recentLaunchEvidence=$recentlyForegroundLogicalPackages " +
                 "keyboard=${defaultInputMethodPackageName()}"
         )
@@ -399,6 +428,7 @@ class EarnItAccessibilityService : AccessibilityService() {
         if (!ignoreDebounce && !canLaunchBlockedActivity()) return
 
         lastBlockedLaunchAt = System.currentTimeMillis()
+        AnalyticsEventStore.recordBlockedAttempt(this, rule.id, lastBlockedLaunchAt)
         val primaryEarnApp = rule.earnApps.firstOrNull()
         val intent = Intent(this, BlockedActivity::class.java).apply {
             putExtra(BlockedActivity.EXTRA_RULE_ID, rule.id)

@@ -130,6 +130,12 @@ class MainActivity : ComponentActivity() {
     private var manageRulesOpen by mutableStateOf(false)
     private var selectedRuleDetailId by mutableStateOf<String?>(null)
     private var settingsOpen by mutableStateOf(false)
+    private var analyticsOpen by mutableStateOf(false)
+    private var analyticsRange by mutableStateOf(defaultAnalyticsRange())
+    private var analyticsState by mutableStateOf<AnalyticsUiState>(AnalyticsUiState.Loading)
+    private var analyticsInsights by mutableStateOf(emptyList<InsightCandidate>())
+    private var analyticsAppPackage by mutableStateOf<String?>(null)
+    private val analyticsCache = mutableMapOf<AnalyticsRange, Pair<AnalyticsSummary, List<InsightCandidate>>>()
     private var strictModeOpen by mutableStateOf(false)
     private var strictModeBlockedActionOpen by mutableStateOf(false)
     private var ruleTypeSelectionOpen by mutableStateOf(false)
@@ -200,6 +206,11 @@ class MainActivity : ComponentActivity() {
                             pauseExpirations = pauseExpirations,
                             selectedRuleDetailId = selectedRuleDetailId,
                             settingsOpen = settingsOpen,
+                            analyticsOpen = analyticsOpen,
+                            analyticsRange = analyticsRange,
+                            analyticsState = analyticsState,
+                            analyticsInsights = analyticsInsights,
+                            analyticsAppPackage = analyticsAppPackage,
                             strictModeOpen = strictModeOpen,
                             strictModeState = strictModeState,
                             ruleTypeSelectionOpen = ruleTypeSelectionOpen,
@@ -215,6 +226,11 @@ class MainActivity : ComponentActivity() {
                             onOpenUsageAccessSettings = ::openUsageAccessSettings,
                             onOpenAccessibilitySettings = ::openAccessibilitySettings,
                             onOpenSettings = { settingsOpen = true },
+                            onOpenAnalytics = ::openAnalytics,
+                            onCloseAnalytics = { analyticsOpen = false; analyticsAppPackage = null },
+                            onAnalyticsRangeChange = ::changeAnalyticsRange,
+                            onOpenAnalyticsApp = { analyticsAppPackage = it },
+                            onBackFromAnalyticsApp = { analyticsAppPackage = null },
                             onCloseSettings = { settingsOpen = false },
                             onOpenStrictMode = {
                                 settingsOpen = false
@@ -307,6 +323,7 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         refreshDashboardState()
+        if (analyticsOpen) loadAnalytics(forceRefresh = true)
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -345,6 +362,48 @@ class MainActivity : ComponentActivity() {
         refreshLaunchableApps()
         refreshUsageStats(savedRules)
         accessibilityServiceEnabled = isAccessibilityServiceEnabled()
+    }
+
+    private fun openAnalytics() {
+        analyticsRange = defaultAnalyticsRange()
+        analyticsAppPackage = null
+        analyticsOpen = true
+        loadAnalytics()
+    }
+
+    private fun changeAnalyticsRange(range: AnalyticsRange) {
+        if (analyticsRange == range && analyticsState is AnalyticsUiState.Ready) return
+        analyticsRange = range
+        loadAnalytics()
+    }
+
+    private fun loadAnalytics(forceRefresh: Boolean = false) {
+        if (!hasUsageAccess()) {
+            analyticsState = AnalyticsUiState.PermissionRequired
+            return
+        }
+        val requestedRange = analyticsRange
+        if (!forceRefresh) {
+            analyticsCache[requestedRange]?.let { (summary, insights) ->
+                analyticsState = AnalyticsUiState.Ready(summary)
+                analyticsInsights = insights
+                return
+            }
+        }
+        analyticsState = AnalyticsUiState.Loading
+        thread(name = "EarnItAnalytics") {
+            val result = runCatching { AnalyticsRepository(applicationContext).load(requestedRange) }
+            val loaded = result.fold({ AnalyticsUiState.Ready(it) }, { AnalyticsUiState.Unavailable(it.message ?: "Usage history could not be read.") })
+            val insights = result.getOrNull()?.let { summary ->
+                AnalyticsInsightEngine.generate(summary, AnalyticsInsightHistoryStore.load(applicationContext)).also {
+                    AnalyticsInsightHistoryStore.record(applicationContext, it)
+                }
+            }.orEmpty()
+            runOnUiThread {
+                result.getOrNull()?.let { analyticsCache[requestedRange] = it to insights }
+                if (analyticsRange == requestedRange) { analyticsState = loaded; analyticsInsights = insights }
+            }
+        }
     }
 
     private fun refreshStrictModeState() {
@@ -466,6 +525,8 @@ class MainActivity : ComponentActivity() {
 
     private fun startAddingRule() {
         settingsOpen = false
+        analyticsOpen = false
+        analyticsAppPackage = null
         selectedRuleDetailId = null
         builderStep = RuleBuilderStep.Earn
         manageRulesOpen = false
@@ -1043,6 +1104,11 @@ internal fun Dashboard(
     strictModeState: StrictModeState,
     selectedRuleDetailId: String?,
     settingsOpen: Boolean,
+    analyticsOpen: Boolean,
+    analyticsRange: AnalyticsRange,
+    analyticsState: AnalyticsUiState,
+    analyticsInsights: List<InsightCandidate>,
+    analyticsAppPackage: String?,
     ruleTypeSelectionOpen: Boolean,
     unavailableRuleType: RuleTypeOption?,
     deepWorkSession: DeepWorkSession,
@@ -1056,6 +1122,11 @@ internal fun Dashboard(
     onOpenUsageAccessSettings: () -> Unit,
     onOpenAccessibilitySettings: () -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenAnalytics: () -> Unit,
+    onCloseAnalytics: () -> Unit,
+    onAnalyticsRangeChange: (AnalyticsRange) -> Unit,
+    onOpenAnalyticsApp: (String) -> Unit,
+    onBackFromAnalyticsApp: () -> Unit,
     onCloseSettings: () -> Unit,
     onOpenStrictMode: () -> Unit,
     onCloseStrictMode: () -> Unit,
@@ -1180,12 +1251,28 @@ internal fun Dashboard(
                 onTick = onStrictModeTick,
                 modifier = modifier
             )
+        } else if (analyticsOpen) {
+            AnalyticsScreen(
+                range = analyticsRange,
+                state = analyticsState,
+                insights = analyticsInsights,
+                rules = ruleStates.map { it.rule },
+                selectedAppPackage = analyticsAppPackage,
+                onRangeChange = onAnalyticsRangeChange,
+                onOpenApp = onOpenAnalyticsApp,
+                onBackFromApp = onBackFromAnalyticsApp,
+                onBack = onCloseAnalytics,
+                onCreateRule = onAddRule,
+                onRepairPermission = onOpenUsageAccessSettings,
+                modifier = modifier
+            )
         } else if (settingsOpen) {
             EarnItSettings(
                 permissionState = permissionState,
                 hasRules = homeRules.isNotEmpty(),
                 strictModeState = strictModeState,
                 onBack = onCloseSettings,
+                onOpenAnalytics = onOpenAnalytics,
                 onOpenStrictMode = onOpenStrictMode,
                 onOpenUsageAccessSettings = onOpenUsageAccessSettings,
                 onOpenAccessibilitySettings = onOpenAccessibilitySettings,
@@ -1686,6 +1773,11 @@ fun DashboardPreview() {
             strictModeState = StrictModeState(),
             selectedRuleDetailId = null,
             settingsOpen = false,
+            analyticsOpen = false,
+            analyticsRange = AnalyticsRange.SevenDays,
+            analyticsState = AnalyticsUiState.Loading,
+            analyticsInsights = emptyList(),
+            analyticsAppPackage = null,
             ruleTypeSelectionOpen = false,
             unavailableRuleType = null,
             deepWorkSession = DeepWorkSession(),
@@ -1699,6 +1791,11 @@ fun DashboardPreview() {
             onOpenUsageAccessSettings = {},
             onOpenAccessibilitySettings = {},
             onOpenSettings = {},
+            onOpenAnalytics = {},
+            onCloseAnalytics = {},
+            onAnalyticsRangeChange = {},
+            onOpenAnalyticsApp = {},
+            onBackFromAnalyticsApp = {},
             onCloseSettings = {},
             onOpenStrictMode = {},
             onCloseStrictMode = {},

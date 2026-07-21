@@ -35,6 +35,7 @@ object TrackedAppMatchPolicy {
     const val GOOGLE_GATEWAY_ACTIVITY = "com.google.apps.tiktok.nav.gateway.GatewayActivity"
     const val PENDING_LAUNCH_WINDOW_MILLIS = 5_000L
     const val RECENT_LAUNCH_EVIDENCE_WINDOW_MILLIS = 5_000L
+    const val GEMINI_WRAPPER_TRANSITION_WINDOW_MILLIS = 15_000L
 
     fun matchRulesFor(
         logicalPackageName: String,
@@ -103,7 +104,9 @@ data class TrackedAppForegroundResult(
     val endedAtMillis: Long? = null,
     val startedSession: ActiveTrackedAppSession? = null,
     val clearedExpiredPending: PendingTrackedAppLaunch? = null,
-    val resolvedPending: PendingTrackedAppLaunch? = null
+    val resolvedPending: PendingTrackedAppLaunch? = null,
+    val updatedPending: PendingTrackedAppLaunch? = null,
+    val decision: String = "no-change"
 )
 
 class TrackedAppHandoffTracker(
@@ -157,7 +160,10 @@ class TrackedAppHandoffTracker(
             val pending = pendingLaunch
             if (pending != null && nowMillis > pending.expiresAtMillis) {
                 pendingLaunch = null
-                return TrackedAppForegroundResult(clearedExpiredPending = pending)
+                return TrackedAppForegroundResult(
+                    clearedExpiredPending = pending,
+                    decision = "pending-expired-active-session-preserved"
+                )
             }
             if (pending != null && TrackedAppMatchPolicy.matchingRule(
                 logicalPackageName = pending.logicalPackageName,
@@ -167,9 +173,18 @@ class TrackedAppHandoffTracker(
                 ) != null
             ) {
                 pendingLaunch = null
-                return TrackedAppForegroundResult(resolvedPending = pending)
+                return TrackedAppForegroundResult(
+                    resolvedPending = pending,
+                    decision = "pending-resolved-active-session-preserved"
+                )
             }
-            return TrackedAppForegroundResult()
+            val preserveReason = when {
+                activeStillMatches -> "active-session-matched"
+                ignoreForegroundPackage -> "active-session-keyboard-preserved"
+                ignoreClassNoise -> "active-session-window-noise-preserved"
+                else -> "active-session-preserved"
+            }
+            return TrackedAppForegroundResult(decision = preserveReason)
         }
 
         val pending = pendingLaunch
@@ -187,7 +202,8 @@ class TrackedAppHandoffTracker(
             return TrackedAppForegroundResult(
                 endedSession = ended,
                 endedAtMillis = ended?.let { nowMillis },
-                startedSession = started
+                startedSession = started,
+                decision = if (started != null) "direct-wrapper-session-started" else "no-active-session"
             )
         }
 
@@ -207,7 +223,8 @@ class TrackedAppHandoffTracker(
                 endedSession = ended,
                 endedAtMillis = ended?.let { nowMillis },
                 startedSession = started,
-                clearedExpiredPending = pending
+                clearedExpiredPending = pending,
+                decision = if (started != null) "expired-pending-direct-session-started" else "pending-expired"
             )
         }
 
@@ -218,11 +235,27 @@ class TrackedAppHandoffTracker(
             allowGeminiGateway = true
         )
         if (matchingRule != null && matchingRule.packageName == pending.logicalPackageName) {
+            if (pending.logicalPackageName == TrackedAppMatchPolicy.GEMINI_PACKAGE &&
+                actualClassName == TrackedAppMatchPolicy.GEMINI_ENTRY_POINT_ACTIVITY
+            ) {
+                val extendedPending = pending.copy(
+                    expiresAtMillis = maxOf(
+                        pending.expiresAtMillis,
+                        nowMillis + TrackedAppMatchPolicy.GEMINI_WRAPPER_TRANSITION_WINDOW_MILLIS
+                    )
+                )
+                pendingLaunch = extendedPending
+                return TrackedAppForegroundResult(
+                    updatedPending = extendedPending,
+                    decision = "gemini-entry-evidence-preserved"
+                )
+            }
             pendingLaunch = null
             return TrackedAppForegroundResult(
                 endedSession = ended,
                 endedAtMillis = ended?.let { nowMillis },
-                resolvedPending = pending
+                resolvedPending = pending,
+                decision = "direct-package-pending-resolved"
             )
         }
 
@@ -239,13 +272,15 @@ class TrackedAppHandoffTracker(
                 endedSession = ended,
                 endedAtMillis = ended?.let { nowMillis },
                 startedSession = started,
-                resolvedPending = pending
+                resolvedPending = pending,
+                decision = "pending-wrapper-session-started"
             )
         }
 
         return TrackedAppForegroundResult(
             endedSession = ended,
-            endedAtMillis = ended?.let { nowMillis }
+            endedAtMillis = ended?.let { nowMillis },
+            decision = if (ended != null) "active-session-ended-unmatched-foreground" else "pending-awaiting-match"
         )
     }
 
@@ -276,7 +311,11 @@ class TrackedAppHandoffTracker(
     fun stopActiveSession(nowMillis: Long): TrackedAppForegroundResult {
         val ended = activeSession ?: return TrackedAppForegroundResult()
         activeSession = null
-        return TrackedAppForegroundResult(endedSession = ended, endedAtMillis = nowMillis)
+        return TrackedAppForegroundResult(
+            endedSession = ended,
+            endedAtMillis = nowMillis,
+            decision = "active-session-stopped"
+        )
     }
 }
 
