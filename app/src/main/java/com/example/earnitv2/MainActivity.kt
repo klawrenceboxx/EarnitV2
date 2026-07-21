@@ -127,6 +127,14 @@ class MainActivity : ComponentActivity() {
     private var strictModeReturnRuleId by mutableStateOf<String?>(null)
     private var strictModeReturnToSettings by mutableStateOf(false)
     private var pendingStrictModeAction by mutableStateOf<PendingStrictModeAction?>(null)
+    private var chargerSession by mutableStateOf<ChargerAuthorizationSession?>(null)
+    private var chargingState by mutableStateOf(ChargingState(false, false))
+    private lateinit var chargingStateObserver: ChargingStateObserver
+    private val chargingListener = ChargingStateListener { state ->
+        chargingState = state
+        chargerSession = ruleStrictModeStore.reconcileActiveChargerSession(state)
+        refreshStrictModeState()
+    }
     private var strictModeActionMessage by mutableStateOf("Protection method not available yet. Your Rule was not changed.")
     private var editingRuleTemplate by mutableStateOf<EarnItRuleStore.Rule?>(null)
     private var builderEntryContext by mutableStateOf<RuleBuilderEntryContext?>(null)
@@ -186,7 +194,9 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         strictModeStore = StrictModeStore(SharedPreferencesStrictModePersistence(this))
+        chargingStateObserver = AndroidChargingStateObserver(applicationContext)
         ruleStrictModeStore = GlobalStrictModeStore(SharedPreferencesStrictModeFoundationPersistence(this))
+        chargingState = chargingStateObserver.currentState()
         deepWorkSession = DeepWorkStore.load(this)
         val existingRules = EarnItRuleStore.getRules(this)
         val legacyStrictMode = strictModeStore.state()
@@ -210,9 +220,12 @@ class MainActivity : ComponentActivity() {
             strictModeReturnRuleId = restored.ruleId.takeUnless { it == GlobalStrictModeStore.GLOBAL_CONFIGURATION_ID }
             refreshStrictModeState()
             val restoredLifecycle = ruleStrictModeStore.globalConfiguration()?.lifecycle
-            if (restored.actionType == PendingStrictModeActionType.DisableStrictMode &&
-                restoredLifecycle in setOf(RuleStrictModeLifecycle.DeactivationCounting, RuleStrictModeLifecycle.DeactivationReady)
-            ) {
+            if (restored.authorizationMethod == StrictModeProtectionMethod.Charger ||
+                (restored.actionType == PendingStrictModeActionType.DisableStrictMode &&
+                    restoredLifecycle in setOf(RuleStrictModeLifecycle.DeactivationCounting, RuleStrictModeLifecycle.DeactivationReady))) {
+                if (restored.authorizationMethod == StrictModeProtectionMethod.Charger) {
+                    chargerSession = ruleStrictModeStore.beginOrRestoreCharger(restored.id, chargingState)
+                }
                 strictModeOpen = true
             } else {
                 strictModeActionMessage = "A protected change is still in progress. Protection method not available yet; your Rule has not changed."
@@ -280,6 +293,9 @@ class MainActivity : ComponentActivity() {
                             strictModeOpen = strictModeOpen,
                             strictModeState = strictModeState,
                             globalStrictModeConfiguration = globalStrictModeConfiguration,
+                            pendingStrictModeAction = pendingStrictModeAction,
+                            chargerSession = chargerSession,
+                            chargingState = chargingState,
                             ruleTypeSelectionOpen = ruleTypeSelectionOpen,
                             unavailableRuleType = unavailableRuleType,
                             deepWorkSession = deepWorkSession,
@@ -322,6 +338,10 @@ class MainActivity : ComponentActivity() {
                             onConfirmStrictModeDeactivation = ::confirmStrictModeDeactivation,
                             onKeepStrictModeActive = ::keepStrictModeActive,
                             onStrictModeTick = ::refreshStrictModeState,
+                            onAuthorizeCharger = ::authorizeCurrentChargerRequest,
+                            onConfirmProtectedAction = ::confirmProtectedAction,
+                            onCancelProtectedRequest = ::cancelProtectedRequest,
+                            onRequestStrictModeMethodChange = ::requestStrictModeMethodChange,
                             onStrictModeBlockedAction = ::showStrictModeBlockedAction,
                             onOpenEarnApp = ::openEarnApp,
                             onAddRule = ::startAddingRule,
@@ -422,6 +442,16 @@ class MainActivity : ComponentActivity() {
         if (analyticsOpen) loadAnalytics(forceRefresh = true)
     }
 
+    override fun onStart() {
+        super.onStart()
+        chargingStateObserver.observe(chargingListener)
+    }
+
+    override fun onStop() {
+        chargingStateObserver.stopObserving(chargingListener)
+        super.onStop()
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
@@ -505,9 +535,14 @@ class MainActivity : ComponentActivity() {
     private fun refreshStrictModeState() {
         if (::strictModeStore.isInitialized) {
             globalStrictModeConfiguration = ruleStrictModeStore.globalConfiguration()
+            ruleStrictModeStore.restoreCountdownAuthorization()
+            globalStrictModeConfiguration = ruleStrictModeStore.globalConfiguration()
             strictModeState = globalStrictModeConfiguration?.toLegacyStrictModeState() ?: strictModeStore.state()
             pendingStrictModeAction = ruleStrictModeStore.activePendingAction(GlobalStrictModeStore.GLOBAL_CONFIGURATION_ID)
                 ?: strictModeReturnRuleId?.let { ruleStrictModeStore.activePendingAction(it) }
+            chargerSession = pendingStrictModeAction
+                ?.takeIf { it.authorizationMethod == StrictModeProtectionMethod.Charger }
+                ?.let { ruleStrictModeStore.beginOrRestoreCharger(it.id, chargingState) }
         }
     }
 
@@ -516,11 +551,11 @@ class MainActivity : ComponentActivity() {
         strictModeState = strictModeState.copy(configuration = configuration)
     }
 
-    private fun beginStrictModeActivation(configuration: StrictModeConfiguration) {
+    private fun beginStrictModeActivation(configuration: StrictModeConfiguration, method: StrictModeProtectionMethod) {
         ruleStrictModeStore.requestGlobalActivation(
-            method = StrictModeProtectionMethod.Countdown,
+            method = method,
             delayMillis = StrictModeStore.ACTIVATION_GRACE_MILLIS,
-            deactivationWaitMillis = configuration.deactivationCountdownMillis
+            deactivationWaitMillis = configuration.deactivationCountdownMillis.takeIf { method == StrictModeProtectionMethod.Countdown }
         )
         refreshStrictModeState()
     }
@@ -531,9 +566,20 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun beginStrictModeDeactivation() {
-        when (val result = ruleStrictModeStore.beginGlobalCountdownDeactivation()) {
-            is PendingActionCreationResult.Created -> pendingStrictModeAction = result.action
-            is PendingActionCreationResult.AlreadyPending -> pendingStrictModeAction = result.action
+        chargingState = chargingStateObserver.currentState()
+        when (val result = ruleStrictModeStore.beginGlobalDeactivation(chargingState)) {
+            is PendingActionCreationResult.Created -> {
+                pendingStrictModeAction = result.action
+                if (result.action.authorizationMethod == StrictModeProtectionMethod.Charger) {
+                    chargerSession = ruleStrictModeStore.beginOrRestoreCharger(result.action.id, chargingState)
+                }
+            }
+            is PendingActionCreationResult.AlreadyPending -> {
+                pendingStrictModeAction = result.action
+                if (result.action.authorizationMethod == StrictModeProtectionMethod.Charger) {
+                    chargerSession = ruleStrictModeStore.beginOrRestoreCharger(result.action.id, chargingState)
+                }
+            }
             is PendingActionCreationResult.Rejected -> {
                 strictModeActionMessage = result.message
                 strictModeBlockedActionOpen = true
@@ -543,15 +589,17 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun cancelStrictModeDeactivation() {
-        ruleStrictModeStore.cancelGlobalCountdownDeactivation()
+        ruleStrictModeStore.cancelGlobalDeactivation()
         pendingStrictModeAction = null
+        chargerSession = null
         refreshStrictModeState()
     }
 
     private fun confirmStrictModeDeactivation() {
-        when (val result = ruleStrictModeStore.confirmGlobalCountdownDeactivation()) {
+        when (val result = ruleStrictModeStore.confirmGlobalDeactivation()) {
             is PendingActionValidation.Valid -> {
                 pendingStrictModeAction = null
+                chargerSession = null
                 refreshStrictModeState()
             }
             is PendingActionValidation.Invalid -> {
@@ -564,7 +612,119 @@ class MainActivity : ComponentActivity() {
     private fun keepStrictModeActive() {
         ruleStrictModeStore.keepGlobalStrictModeActive()
         pendingStrictModeAction = null
+        chargerSession = null
         refreshStrictModeState()
+    }
+
+    private fun authorizeCurrentChargerRequest() {
+        val pending = pendingStrictModeAction ?: return
+        chargingState = chargingStateObserver.currentState()
+        when (val result = ruleStrictModeStore.authorizeCharger(pending.id, chargingState)) {
+            is PendingActionValidation.Valid -> {
+                pendingStrictModeAction = result.action
+                chargerSession = ruleStrictModeStore.beginOrRestoreCharger(result.action.id, chargingState)
+                refreshStrictModeState()
+            }
+            is PendingActionValidation.Invalid -> {
+                strictModeActionMessage = result.message
+                strictModeBlockedActionOpen = true
+            }
+        }
+    }
+
+    private fun confirmProtectedAction() {
+        val pending = pendingStrictModeAction ?: return
+        if (pending.actionType == PendingStrictModeActionType.DisableStrictMode) {
+            confirmStrictModeDeactivation()
+            return
+        }
+        if (pending.actionType == PendingStrictModeActionType.ReplaceProtectionMethod) {
+            when (val validation = ruleStrictModeStore.validateGlobalForConfirmation(pending.id)) {
+                is PendingActionValidation.Invalid -> {
+                    strictModeActionMessage = validation.message
+                    strictModeBlockedActionOpen = true
+                }
+                is PendingActionValidation.Valid -> {
+                    val descriptor = validation.action.descriptor as StrictModeActionDescriptor.ReplaceMethod
+                    ruleStrictModeStore.replaceMethodAfterConfirmation(
+                        GlobalStrictModeStore.GLOBAL_CONFIGURATION_ID,
+                        descriptor.newMethod,
+                        descriptor.newDurationMillis,
+                        exceptRequestId = pending.id
+                    )
+                    ruleStrictModeStore.consume(pending.id)
+                    pendingStrictModeAction = null
+                    chargerSession = null
+                    refreshStrictModeState()
+                }
+            }
+            return
+        }
+        val rule = rules.firstOrNull { it.id == pending.ruleId }
+        when (val validation = ruleStrictModeStore.validateForConfirmation(pending.id, rule)) {
+            is PendingActionValidation.Invalid -> {
+                strictModeActionMessage = validation.message
+                strictModeBlockedActionOpen = true
+            }
+            is PendingActionValidation.Valid -> {
+                when (val descriptor = validation.action.descriptor) {
+                    is StrictModeActionDescriptor.Update -> EarnItRuleStore.saveRule(this, descriptor.proposedRule)
+                    is StrictModeActionDescriptor.Pause -> {
+                        EarnItPauseStore.pauseUntil(this, descriptor.ruleId, System.currentTimeMillis() + descriptor.durationMillis, descriptor.reason)
+                        EarnItRuleStore.setRuleEnabled(this, descriptor.ruleId, false)
+                    }
+                    is StrictModeActionDescriptor.Delete -> {
+                        EarnItRuleStore.deleteRule(this, descriptor.ruleId)
+                        EarnItPauseStore.clearPause(this, descriptor.ruleId)
+                    }
+                    else -> return
+                }
+                ruleStrictModeStore.consume(pending.id)
+                pendingStrictModeAction = null
+                chargerSession = null
+                strictModeOpen = false
+                editingRuleTemplate = null
+                builderEntryContext = null
+                selectedRuleDetailId = pending.ruleId.takeIf { rules.any { rule -> rule.id == it } }
+                refreshDashboardState()
+            }
+        }
+    }
+
+    private fun cancelProtectedRequest() {
+        val pending = pendingStrictModeAction
+        if (pending?.actionType == PendingStrictModeActionType.DisableStrictMode) {
+            cancelStrictModeDeactivation()
+        } else {
+            pending?.let { ruleStrictModeStore.cancelRequest(it.id) }
+            if (pending?.ruleId == GlobalStrictModeStore.GLOBAL_CONFIGURATION_ID) ruleStrictModeStore.cancelGlobalDeactivation()
+            pendingStrictModeAction = null
+            chargerSession = null
+            strictModeOpen = false
+            if (editingRuleTemplate != null) cancelEditingRule()
+            selectedRuleDetailId = strictModeReturnRuleId
+            refreshDashboardState()
+        }
+    }
+
+    private fun requestStrictModeMethodChange(method: StrictModeProtectionMethod, durationMillis: Long?) {
+        chargingState = chargingStateObserver.currentState()
+        when (val result = ruleStrictModeStore.requestGlobalMethodChange(method, durationMillis, chargingState)) {
+            is StrictModeMethodChangeResult.Applied -> {
+                globalStrictModeConfiguration = result.configuration
+                refreshStrictModeState()
+            }
+            is StrictModeMethodChangeResult.AuthorizationRequired -> {
+                pendingStrictModeAction = result.action
+                chargerSession = result.action.takeIf { it.authorizationMethod == StrictModeProtectionMethod.Charger }
+                    ?.let { ruleStrictModeStore.beginOrRestoreCharger(it.id, chargingState) }
+                refreshStrictModeState()
+            }
+            is StrictModeMethodChangeResult.Rejected -> {
+                strictModeActionMessage = result.message
+                strictModeBlockedActionOpen = true
+            }
+        }
     }
 
     private fun refreshLaunchableApps(force: Boolean = false) {
@@ -973,10 +1133,14 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun createProtectedAction(rule: EarnItRuleStore.Rule, descriptor: StrictModeActionDescriptor) {
+        chargingState = chargingStateObserver.currentState()
         when (val result = ruleStrictModeStore.createPendingAction(rule, descriptor)) {
             is PendingActionCreationResult.Created -> {
                 pendingStrictModeAction = result.action
-                strictModeActionMessage = "Your change is saved as a pending request. Protection method not available yet, so the Rule was not changed."
+                if (result.action.authorizationMethod == StrictModeProtectionMethod.Charger) {
+                    chargerSession = ruleStrictModeStore.beginOrRestoreCharger(result.action.id, chargingState)
+                    strictModeActionMessage = "Connect your charger to review this change."
+                } else strictModeActionMessage = "Your change is saved as a pending request. Complete the protection method to continue."
             }
             is PendingActionCreationResult.AlreadyPending -> {
                 pendingStrictModeAction = result.action
@@ -985,7 +1149,11 @@ class MainActivity : ComponentActivity() {
             is PendingActionCreationResult.Rejected -> strictModeActionMessage = result.message
         }
         strictModeReturnRuleId = rule.id
-        strictModeBlockedActionOpen = true
+        if (pendingStrictModeAction?.authorizationMethod == StrictModeProtectionMethod.Charger) {
+            settingsOpen = false
+            selectedRuleDetailId = null
+            strictModeOpen = true
+        } else strictModeBlockedActionOpen = true
     }
 
     private fun selectAllDaySchedule() {
@@ -1269,6 +1437,9 @@ internal fun Dashboard(
     strictModeOpen: Boolean,
     strictModeState: StrictModeState,
     globalStrictModeConfiguration: GlobalStrictModeConfiguration?,
+    pendingStrictModeAction: PendingStrictModeAction?,
+    chargerSession: ChargerAuthorizationSession?,
+    chargingState: ChargingState,
     selectedRuleDetailId: String?,
     settingsOpen: Boolean,
     analyticsOpen: Boolean,
@@ -1298,13 +1469,17 @@ internal fun Dashboard(
     onOpenStrictMode: () -> Unit,
     onCloseStrictMode: () -> Unit,
     onSaveStrictModeConfiguration: (StrictModeConfiguration) -> Unit,
-    onBeginStrictModeActivation: (StrictModeConfiguration) -> Unit,
+    onBeginStrictModeActivation: (StrictModeConfiguration, StrictModeProtectionMethod) -> Unit,
     onCancelStrictModeActivation: () -> Unit,
     onBeginStrictModeDeactivation: () -> Unit,
     onCancelStrictModeDeactivation: () -> Unit,
     onConfirmStrictModeDeactivation: () -> Unit,
     onKeepStrictModeActive: () -> Unit,
     onStrictModeTick: () -> Unit,
+    onAuthorizeCharger: () -> Unit,
+    onConfirmProtectedAction: () -> Unit,
+    onCancelProtectedRequest: () -> Unit,
+    onRequestStrictModeMethodChange: (StrictModeProtectionMethod, Long?) -> Unit,
     onStrictModeBlockedAction: () -> Unit,
     onOpenEarnApp: (String) -> Unit,
     onAddRule: () -> Unit,
@@ -1400,6 +1575,10 @@ internal fun Dashboard(
             EarnItStrictModeScreen(
                 state = strictModeState,
                 foundationLifecycle = globalStrictModeConfiguration?.lifecycle,
+                globalConfiguration = globalStrictModeConfiguration,
+                pendingAction = pendingStrictModeAction,
+                chargerSession = chargerSession,
+                chargingState = chargingState,
                 onBack = onCloseStrictMode,
                 onSaveConfiguration = onSaveStrictModeConfiguration,
                 onBeginActivation = onBeginStrictModeActivation,
@@ -1409,6 +1588,10 @@ internal fun Dashboard(
                 onConfirmDeactivation = onConfirmStrictModeDeactivation,
                 onKeepStrictModeActive = onKeepStrictModeActive,
                 onTick = onStrictModeTick,
+                onAuthorizeCharger = onAuthorizeCharger,
+                onConfirmProtectedAction = onConfirmProtectedAction,
+                onCancelProtectedRequest = onCancelProtectedRequest,
+                onRequestMethodChange = onRequestStrictModeMethodChange,
                 modifier = modifier
             )
         } else if (analyticsOpen) {
@@ -1935,6 +2118,9 @@ fun DashboardPreview() {
             strictModeOpen = false,
             strictModeState = StrictModeState(),
             globalStrictModeConfiguration = null,
+            pendingStrictModeAction = null,
+            chargerSession = null,
+            chargingState = ChargingState(false, false),
             selectedRuleDetailId = null,
             settingsOpen = false,
             analyticsOpen = false,
@@ -1964,13 +2150,17 @@ fun DashboardPreview() {
             onOpenStrictMode = {},
             onCloseStrictMode = {},
             onSaveStrictModeConfiguration = {},
-            onBeginStrictModeActivation = {},
+            onBeginStrictModeActivation = { _, _ -> },
             onCancelStrictModeActivation = {},
             onBeginStrictModeDeactivation = {},
             onCancelStrictModeDeactivation = {},
             onConfirmStrictModeDeactivation = {},
             onKeepStrictModeActive = {},
             onStrictModeTick = {},
+            onAuthorizeCharger = {},
+            onConfirmProtectedAction = {},
+            onCancelProtectedRequest = {},
+            onRequestStrictModeMethodChange = { _, _ -> },
             onStrictModeBlockedAction = {},
             onOpenEarnApp = {},
             onAddRule = {},

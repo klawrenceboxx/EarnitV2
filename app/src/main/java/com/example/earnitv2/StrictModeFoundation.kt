@@ -115,7 +115,7 @@ internal object RuleRestrictionPolicy {
 }
 
 internal enum class RuleStrictModeLifecycle { Disabled, PendingActivation, Active, DeactivationCounting, DeactivationReady, Invalid }
-internal enum class StrictModeProtectionMethod { Countdown, ChargerWait, AccountabilityPin }
+internal enum class StrictModeProtectionMethod { Countdown, Charger, AccountabilityPin }
 
 internal data class GlobalStrictModeConfiguration(
     val ruleId: String,
@@ -130,8 +130,11 @@ internal data class GlobalStrictModeConfiguration(
     val createdAtMillis: Long,
     val updatedAtMillis: Long
 ) {
-    val configurationComplete: Boolean get() = protectionMethod != null &&
-        (protectionMethod != StrictModeProtectionMethod.Countdown || (deactivationWaitMillis ?: 0L) > 0L)
+    val configurationComplete: Boolean get() = when (protectionMethod) {
+        StrictModeProtectionMethod.Countdown -> (deactivationWaitMillis ?: 0L) > 0L
+        StrictModeProtectionMethod.Charger -> true
+        else -> false
+    }
     fun protectsLessRestrictiveChanges(): Boolean = lifecycle in setOf(
         RuleStrictModeLifecycle.Active,
         RuleStrictModeLifecycle.DeactivationCounting,
@@ -151,7 +154,11 @@ internal sealed class StrictModeActionDescriptor {
     data class Pause(override val ruleId: String, val durationMillis: Long, val reason: String?) : StrictModeActionDescriptor()
     data class Delete(override val ruleId: String) : StrictModeActionDescriptor()
     data class Disable(override val ruleId: String) : StrictModeActionDescriptor()
-    data class ReplaceMethod(override val ruleId: String, val newMethod: StrictModeProtectionMethod) : StrictModeActionDescriptor()
+    data class ReplaceMethod(
+        override val ruleId: String,
+        val newMethod: StrictModeProtectionMethod,
+        val newDurationMillis: Long? = null
+    ) : StrictModeActionDescriptor()
     data class Update(override val ruleId: String, val proposedRule: EarnItRuleStore.Rule) : StrictModeActionDescriptor()
 }
 
@@ -184,9 +191,22 @@ internal fun interface StrictModeAuthorizationMethodProvider {
 
 internal class DefaultStrictModeAuthorizationMethodProvider : StrictModeAuthorizationMethodProvider {
     private val handlers = StrictModeProtectionMethod.entries.associateWith { method ->
-        if (method == StrictModeProtectionMethod.Countdown) CountdownStrictModeMethodHandler else UnavailableStrictModeMethodHandler(method)
+        when (method) {
+            StrictModeProtectionMethod.Countdown -> CountdownStrictModeMethodHandler
+            StrictModeProtectionMethod.Charger -> ChargerStrictModeMethodHandler
+            StrictModeProtectionMethod.AccountabilityPin -> UnavailableStrictModeMethodHandler(method)
+        }
     }
     override fun handlerFor(method: StrictModeProtectionMethod): StrictModeAuthorizationMethodHandler? = handlers[method]
+}
+
+private object ChargerStrictModeMethodHandler : StrictModeAuthorizationMethodHandler {
+    override val method = StrictModeProtectionMethod.Charger
+    override fun isConfigurationComplete(configuration: RuleStrictModeConfiguration) =
+        configuration.protectionMethod == method
+    override fun begin(request: PendingStrictModeAction) = StrictModeAuthorizationStatus.AwaitingAuthorization
+    override fun restore(request: PendingStrictModeAction) = request.authorizationStatus
+    override fun cancel(request: PendingStrictModeAction) = Unit
 }
 
 private object CountdownStrictModeMethodHandler : StrictModeAuthorizationMethodHandler {
@@ -210,6 +230,10 @@ internal interface StrictModeFoundationPersistence {
     fun writeConfigurations(value: String)
     fun readPendingActions(): String?
     fun writePendingActions(value: String)
+    fun readChargerSessions(): String? = null
+    fun writeChargerSessions(value: String) = Unit
+    fun readLegacyChargerWaitSessions(): String? = null
+    fun clearLegacyChargerWaitSessions() = Unit
 }
 
 internal class SharedPreferencesStrictModeFoundationPersistence(context: Context) : StrictModeFoundationPersistence {
@@ -218,6 +242,10 @@ internal class SharedPreferencesStrictModeFoundationPersistence(context: Context
     override fun writeConfigurations(value: String) { prefs.edit().putString("configurations", value).commit() }
     override fun readPendingActions() = prefs.getString("pending_actions", null)
     override fun writePendingActions(value: String) { prefs.edit().putString("pending_actions", value).commit() }
+    override fun readChargerSessions() = prefs.getString("charger_sessions_v2", null)
+    override fun writeChargerSessions(value: String) { prefs.edit().putString("charger_sessions_v2", value).commit() }
+    override fun readLegacyChargerWaitSessions() = prefs.getString("charger_wait_sessions", null)
+    override fun clearLegacyChargerWaitSessions() { prefs.edit().remove("charger_wait_sessions").commit() }
 }
 
 internal sealed class PendingActionCreationResult {
@@ -231,15 +259,38 @@ internal sealed class PendingActionValidation {
     data class Invalid(val message: String) : PendingActionValidation()
 }
 
+internal sealed class StrictModeMethodChangeResult {
+    data class Applied(val configuration: GlobalStrictModeConfiguration) : StrictModeMethodChangeResult()
+    data class AuthorizationRequired(val action: PendingStrictModeAction) : StrictModeMethodChangeResult()
+    data class Rejected(val message: String) : StrictModeMethodChangeResult()
+}
+
 internal class GlobalStrictModeStore(
     private val persistence: StrictModeFoundationPersistence,
     private val authorizationMethods: StrictModeAuthorizationMethodProvider = DefaultStrictModeAuthorizationMethodProvider(),
     private val nowMillis: () -> Long = System::currentTimeMillis
 ) {
     fun configurations(): Map<String, RuleStrictModeConfiguration> {
-        val decoded = decodeConfigurations(persistence.readConfigurations())
+        val raw = persistence.readConfigurations()
+        val legacyChargerWait = raw.orEmpty().contains("ChargerWait")
+        val decoded = decodeConfigurations(raw)
         val normalized = decoded.mapValues { (_, config) -> normalize(config) }
-        if (normalized != decoded) saveConfigurations(normalized.values)
+        if (normalized != decoded || legacyChargerWait) {
+            val migrated = if (legacyChargerWait) normalized.mapValues { (_, config) ->
+                if (config.protectionMethod == StrictModeProtectionMethod.Charger) config.copy(
+                    lifecycle = if (config.lifecycle == RuleStrictModeLifecycle.DeactivationReady) RuleStrictModeLifecycle.DeactivationCounting else config.lifecycle,
+                    deactivationStartedAtMillis = null,
+                    deactivationAvailableAtMillis = null,
+                    configurationVersion = config.configurationVersion + 1,
+                    updatedAtMillis = nowMillis()
+                ) else config
+            } else normalized
+            saveConfigurations(migrated.values)
+            if (legacyChargerWait) migrateLegacyChargerSessions(
+                migrated[GLOBAL_CONFIGURATION_ID] ?: migrated.values.firstOrNull { it.protectionMethod == StrictModeProtectionMethod.Charger }
+            )
+            return migrated
+        }
         return normalized
     }
 
@@ -452,6 +503,76 @@ internal class GlobalStrictModeStore(
         return createGlobalPendingAction(StrictModeActionDescriptor.Disable(GLOBAL_CONFIGURATION_ID))
     }
 
+    fun beginGlobalDeactivation(chargingState: ChargingState? = null): PendingActionCreationResult {
+        val config = globalConfiguration() ?: return PendingActionCreationResult.Rejected("Strict Mode is not configured.")
+        if (config.protectionMethod == StrictModeProtectionMethod.Countdown) return beginGlobalCountdownDeactivation()
+        if (config.protectionMethod != StrictModeProtectionMethod.Charger) {
+            return PendingActionCreationResult.Rejected("This protection method is not available.")
+        }
+        if (config.lifecycle in setOf(RuleStrictModeLifecycle.DeactivationCounting, RuleStrictModeLifecycle.DeactivationReady)) {
+            val existing = activePendingAction(GLOBAL_CONFIGURATION_ID)
+                ?: return PendingActionCreationResult.Rejected("The existing deactivation request needs attention.")
+            chargingState?.let { beginOrRestoreCharger(existing.id, it) }
+            return PendingActionCreationResult.AlreadyPending(existing)
+        }
+        if (config.lifecycle != RuleStrictModeLifecycle.Active) return PendingActionCreationResult.Rejected("Strict Mode is not ready to deactivate.")
+        val result = createGlobalPendingAction(StrictModeActionDescriptor.Disable(GLOBAL_CONFIGURATION_ID))
+        val action = when (result) {
+            is PendingActionCreationResult.Created -> result.action
+            is PendingActionCreationResult.AlreadyPending -> result.action
+            is PendingActionCreationResult.Rejected -> return result
+        }
+        putConfiguration(config.copy(lifecycle = RuleStrictModeLifecycle.DeactivationCounting, updatedAtMillis = nowMillis()))
+        chargingState?.let { beginOrRestoreCharger(action.id, it) }
+        return result
+    }
+
+    fun requestGlobalMethodChange(
+        newMethod: StrictModeProtectionMethod,
+        newDurationMillis: Long?,
+        chargingState: ChargingState? = null
+    ): StrictModeMethodChangeResult {
+        val current = globalConfiguration() ?: return StrictModeMethodChangeResult.Rejected("Strict Mode is not configured.")
+        if (current.lifecycle != RuleStrictModeLifecycle.Active || current.protectionMethod == null) {
+            return StrictModeMethodChangeResult.Rejected("Finish the current Strict Mode request first.")
+        }
+        val proposedValid = when (newMethod) {
+            StrictModeProtectionMethod.Countdown -> (newDurationMillis ?: 0L) > 0L
+            StrictModeProtectionMethod.Charger -> newDurationMillis == null
+            StrictModeProtectionMethod.AccountabilityPin -> false
+        }
+        if (!proposedValid) return StrictModeMethodChangeResult.Rejected("That protection method is not available.")
+        val currentDuration = current.deactivationWaitMillis
+        return when (StrictModeProtectionStrengthPolicy.compare(current.protectionMethod, currentDuration, newMethod, newDurationMillis)) {
+            RestrictionClassification.Equivalent -> StrictModeMethodChangeResult.Rejected("This protection method is already active.")
+            RestrictionClassification.Stricter -> {
+                replaceMethodAfterConfirmation(GLOBAL_CONFIGURATION_ID, newMethod, newDurationMillis)
+                StrictModeMethodChangeResult.Applied(requireNotNull(globalConfiguration()))
+            }
+            RestrictionClassification.LessRestrictive -> {
+                val result = createGlobalPendingAction(
+                    StrictModeActionDescriptor.ReplaceMethod(GLOBAL_CONFIGURATION_ID, newMethod, newDurationMillis)
+                )
+                val action = when (result) {
+                    is PendingActionCreationResult.Created -> result.action
+                    is PendingActionCreationResult.AlreadyPending -> result.action
+                    is PendingActionCreationResult.Rejected -> return StrictModeMethodChangeResult.Rejected(result.message)
+                }
+                if (current.protectionMethod == StrictModeProtectionMethod.Countdown) {
+                    val wait = current.deactivationWaitMillis ?: return StrictModeMethodChangeResult.Rejected("Countdown needs attention.")
+                    val now = nowMillis()
+                    putConfiguration(current.copy(
+                        lifecycle = RuleStrictModeLifecycle.DeactivationCounting,
+                        deactivationStartedAtMillis = now,
+                        deactivationAvailableAtMillis = safeAdd(now, wait) ?: return StrictModeMethodChangeResult.Rejected("Countdown needs attention."),
+                        updatedAtMillis = now
+                    ))
+                } else chargingState?.let { beginOrRestoreCharger(action.id, it) }
+                StrictModeMethodChangeResult.AuthorizationRequired(action)
+            }
+        }
+    }
+
     fun cancelGlobalCountdownDeactivation(): RuleStrictModeConfiguration? = cancelCountdownDeactivation(GLOBAL_CONFIGURATION_ID)
 
     fun confirmGlobalCountdownDeactivation(): PendingActionValidation {
@@ -475,7 +596,33 @@ internal class GlobalStrictModeStore(
         return PendingActionValidation.Valid(action)
     }
 
-    private fun cancelOutstandingProtectedActions(exceptRequestId: String) {
+    fun confirmGlobalDeactivation(): PendingActionValidation {
+        val config = globalConfiguration()
+        return if (config?.protectionMethod == StrictModeProtectionMethod.Countdown) {
+            confirmGlobalCountdownDeactivation()
+        } else {
+            val action = activePendingAction(GLOBAL_CONFIGURATION_ID)
+            val session = action?.let(::chargerSession)
+            val valid = config?.lifecycle == RuleStrictModeLifecycle.DeactivationReady &&
+                config.protectionMethod == StrictModeProtectionMethod.Charger &&
+                action?.actionType == PendingStrictModeActionType.DisableStrictMode &&
+                action.authorizationStatus == StrictModeAuthorizationStatus.AwaitingFinalConfirmation &&
+                session?.state == ChargerAuthorizationState.Authorized &&
+                action.expiresAtMillis > nowMillis() &&
+                StrictModeFingerprint.configuration(config) == action.originalStrictModeFingerprint
+            if (!valid) {
+                action?.let { cancelRequest(it.id) }
+                PendingActionValidation.Invalid("Strict Mode changed while the request was open. Begin again.")
+            } else {
+                disableAfterConfirmation(GLOBAL_CONFIGURATION_ID)
+                consume(action.id)
+                cancelOutstandingProtectedActions(action.id)
+                PendingActionValidation.Valid(action)
+            }
+        }
+    }
+
+    private fun cancelOutstandingProtectedActions(exceptRequestId: String?) {
         val now = nowMillis()
         val updated = pendingActions().map { pending ->
             if (pending.id != exceptRequestId && pending.authorizationStatus !in terminalStatuses) {
@@ -485,7 +632,19 @@ internal class GlobalStrictModeStore(
         savePending(updated)
     }
 
-    fun keepGlobalStrictModeActive(): RuleStrictModeConfiguration? = cancelGlobalCountdownDeactivation()
+    fun keepGlobalStrictModeActive(): RuleStrictModeConfiguration? = cancelGlobalDeactivation()
+
+    fun cancelGlobalDeactivation(): RuleStrictModeConfiguration? {
+        activePendingAction(GLOBAL_CONFIGURATION_ID)?.let { cancelRequest(it.id) }
+        val current = globalConfiguration() ?: return null
+        if (current.lifecycle !in setOf(RuleStrictModeLifecycle.DeactivationCounting, RuleStrictModeLifecycle.DeactivationReady)) return current
+        return current.copy(
+            lifecycle = RuleStrictModeLifecycle.Active,
+            deactivationStartedAtMillis = null,
+            deactivationAvailableAtMillis = null,
+            updatedAtMillis = nowMillis()
+        ).also(::putConfiguration)
+    }
 
     fun cancelCountdownDeactivation(ruleId: String): RuleStrictModeConfiguration? {
         activePendingAction(ruleId)?.let { cancelRequest(it.id) }
@@ -529,7 +688,36 @@ internal class GlobalStrictModeStore(
                 else -> action
             }
         }
-        if (normalized != decoded) savePending(normalized)
+        if (normalized != decoded) {
+            savePending(normalized)
+            val newlyExpired = normalized.filter { normalizedAction ->
+                normalizedAction.authorizationStatus == StrictModeAuthorizationStatus.Expired &&
+                    decoded.firstOrNull { it.id == normalizedAction.id }?.authorizationStatus != StrictModeAuthorizationStatus.Expired
+            }
+            if (newlyExpired.isNotEmpty()) {
+                val sessions = ChargerSessionCodec.decode(persistence.readChargerSessions()).map { session ->
+                    if (newlyExpired.any { it.id == session.requestId }) session.copy(
+                        state = ChargerAuthorizationState.Expired,
+                        updatedAtMillis = now
+                    ) else session
+                }
+                persistence.writeChargerSessions(ChargerSessionCodec.encode(sessions))
+                if (newlyExpired.any { it.ruleId == GLOBAL_CONFIGURATION_ID && it.authorizationMethod == StrictModeProtectionMethod.Charger }) {
+                    val configs = decodeConfigurations(persistence.readConfigurations()).toMutableMap()
+                    configs[GLOBAL_CONFIGURATION_ID]?.takeIf {
+                        it.lifecycle in setOf(RuleStrictModeLifecycle.DeactivationCounting, RuleStrictModeLifecycle.DeactivationReady)
+                    }?.let { config ->
+                        configs[GLOBAL_CONFIGURATION_ID] = config.copy(
+                            lifecycle = RuleStrictModeLifecycle.Active,
+                            deactivationStartedAtMillis = null,
+                            deactivationAvailableAtMillis = null,
+                            updatedAtMillis = now
+                        )
+                        saveConfigurations(configs.values)
+                    }
+                }
+            }
+        }
         return normalized
     }
 
@@ -540,6 +728,12 @@ internal class GlobalStrictModeStore(
         val config = (globalConfiguration() ?: configuration(rule.id))?.let(::normalize)
             ?: return PendingActionCreationResult.Rejected("Strict Mode is not configured.")
         if (!config.protectsLessRestrictiveChanges() || config.protectionMethod == null) return PendingActionCreationResult.Rejected("Strict Mode configuration needs attention.")
+        activeChargerRequestId()?.let { activeId ->
+            val active = pendingActions().firstOrNull { it.id == activeId }
+            if (active != null && active.ruleId != rule.id) {
+                return PendingActionCreationResult.Rejected("Finish or cancel the Charger request already in progress.")
+            }
+        }
         val actions = pendingActions().toMutableList()
         val existing = actions.firstOrNull { it.ruleId == rule.id && it.authorizationStatus !in terminalStatuses }
         if (existing != null && !replaceExisting) return PendingActionCreationResult.AlreadyPending(existing)
@@ -547,7 +741,7 @@ internal class GlobalStrictModeStore(
         val now = nowMillis()
         val request = PendingStrictModeAction(
             id = UUID.randomUUID().toString(), actionType = descriptor.actionType(), descriptor = descriptor,
-            createdAtMillis = now, expiresAtMillis = safeAdd(now, REQUEST_EXPIRY_MILLIS) ?: Long.MAX_VALUE,
+            createdAtMillis = now, expiresAtMillis = requestExpiry(now),
             originalRuleFingerprint = StrictModeFingerprint.rule(rule), originalStrictModeFingerprint = StrictModeFingerprint.configuration(config),
             authorizationStatus = StrictModeAuthorizationStatus.AwaitingAuthorization, authorizationMethod = config.protectionMethod
         )
@@ -558,6 +752,12 @@ internal class GlobalStrictModeStore(
 
     private fun createGlobalPendingAction(descriptor: StrictModeActionDescriptor): PendingActionCreationResult {
         val config = globalConfiguration() ?: return PendingActionCreationResult.Rejected("Strict Mode is not configured.")
+        activeChargerRequestId()?.let { activeId ->
+            val active = pendingActions().firstOrNull { it.id == activeId }
+            if (active != null && active.ruleId != GLOBAL_CONFIGURATION_ID) {
+                return PendingActionCreationResult.Rejected("Finish or cancel the Charger request already in progress.")
+            }
+        }
         val existing = activePendingAction(GLOBAL_CONFIGURATION_ID)
         if (existing != null) return PendingActionCreationResult.AlreadyPending(existing)
         val now = nowMillis()
@@ -566,7 +766,7 @@ internal class GlobalStrictModeStore(
             actionType = descriptor.actionType(),
             descriptor = descriptor,
             createdAtMillis = now,
-            expiresAtMillis = safeAdd(now, REQUEST_EXPIRY_MILLIS) ?: Long.MAX_VALUE,
+            expiresAtMillis = requestExpiry(now),
             originalRuleFingerprint = GLOBAL_ACTION_FINGERPRINT,
             originalStrictModeFingerprint = StrictModeFingerprint.configuration(config),
             authorizationStatus = StrictModeAuthorizationStatus.AwaitingAuthorization,
@@ -583,7 +783,10 @@ internal class GlobalStrictModeStore(
         )
     }
 
-    fun cancelRequest(requestId: String): PendingStrictModeAction? = updatePending(requestId) { it.copy(authorizationStatus = StrictModeAuthorizationStatus.Cancelled, cancelledAtMillis = nowMillis()) }
+    fun cancelRequest(requestId: String): PendingStrictModeAction? {
+        markChargerSessionTerminal(requestId, ChargerAuthorizationState.Cancelled)
+        return updatePending(requestId) { it.copy(authorizationStatus = StrictModeAuthorizationStatus.Cancelled, cancelledAtMillis = nowMillis()) }
+    }
 
     fun removeRequest(requestId: String): Boolean {
         val all = pendingActions().toMutableList()
@@ -607,18 +810,52 @@ internal class GlobalStrictModeStore(
         return PendingActionValidation.Valid(action)
     }
 
+    fun validateGlobalForConfirmation(requestId: String): PendingActionValidation {
+        val action = pendingActions().firstOrNull { it.id == requestId }
+            ?: return PendingActionValidation.Invalid("This change request no longer exists. Begin again.")
+        val config = globalConfiguration()
+        val descriptor = action.descriptor as? StrictModeActionDescriptor.ReplaceMethod
+        val valid = action.ruleId == GLOBAL_CONFIGURATION_ID && descriptor != null &&
+            action.authorizationStatus == StrictModeAuthorizationStatus.AwaitingFinalConfirmation &&
+            action.expiresAtMillis > nowMillis() && (action.authorizationExpiresAtMillis ?: 0L) > nowMillis() &&
+            config != null && config.protectionMethod == action.authorizationMethod &&
+            StrictModeFingerprint.configuration(config) == action.originalStrictModeFingerprint
+        if (!valid) {
+            cancelRequest(requestId)
+            return PendingActionValidation.Invalid("Strict Mode changed while the request was open. Begin again.")
+        }
+        return PendingActionValidation.Valid(action)
+    }
+
+    fun restoreCountdownAuthorization() {
+        val config = globalConfiguration() ?: return
+        if (config.protectionMethod != StrictModeProtectionMethod.Countdown || config.lifecycle != RuleStrictModeLifecycle.DeactivationReady) return
+        activePendingAction(GLOBAL_CONFIGURATION_ID)
+            ?.takeIf { it.authorizationMethod == StrictModeProtectionMethod.Countdown }
+            ?.let { markAuthorized(it.id) }
+    }
+
     fun consume(requestId: String): PendingStrictModeAction? = updatePending(requestId) { action ->
         if (action.authorizationStatus != StrictModeAuthorizationStatus.AwaitingFinalConfirmation) action else action.copy(authorizationStatus = StrictModeAuthorizationStatus.Consumed, consumedAtMillis = nowMillis())
-    }
+    }.also { markChargerSessionTerminal(requestId, ChargerAuthorizationState.Consumed) }
 
     fun disableAfterConfirmation(ruleId: String) {
         val config = configuration(ruleId) ?: return
         putConfiguration(config.copy(lifecycle = RuleStrictModeLifecycle.Disabled, activationRequestedAtMillis = null, activeFromMillis = null, deactivationStartedAtMillis = null, deactivationAvailableAtMillis = null, configurationVersion = config.configurationVersion + 1, updatedAtMillis = nowMillis()))
     }
 
-    fun replaceMethodAfterConfirmation(ruleId: String, method: StrictModeProtectionMethod) {
+    fun replaceMethodAfterConfirmation(ruleId: String, method: StrictModeProtectionMethod, durationMillis: Long? = null, exceptRequestId: String? = null) {
         val config = configuration(ruleId) ?: return
-        putConfiguration(config.copy(protectionMethod = method, lifecycle = RuleStrictModeLifecycle.Active, deactivationWaitMillis = if (method == StrictModeProtectionMethod.Countdown) config.deactivationWaitMillis ?: DEFAULT_COUNTDOWN_MILLIS else null, deactivationStartedAtMillis = null, deactivationAvailableAtMillis = null, configurationVersion = config.configurationVersion + 1, updatedAtMillis = nowMillis()))
+        putConfiguration(config.copy(
+            protectionMethod = method,
+            lifecycle = RuleStrictModeLifecycle.Active,
+            deactivationWaitMillis = if (method == StrictModeProtectionMethod.Countdown) durationMillis ?: config.deactivationWaitMillis ?: DEFAULT_COUNTDOWN_MILLIS else null,
+            deactivationStartedAtMillis = null,
+            deactivationAvailableAtMillis = null,
+            configurationVersion = config.configurationVersion + 1,
+            updatedAtMillis = nowMillis()
+        ))
+        cancelOutstandingProtectedActions(exceptRequestId)
     }
 
     private fun descriptorStillValid(action: PendingStrictModeAction, current: EarnItRuleStore.Rule): Boolean = when (val descriptor = action.descriptor) {
@@ -631,7 +868,7 @@ internal class GlobalStrictModeStore(
         val now = nowMillis()
         // Compatibility with the first per-Rule foundation build, which mapped the legacy
         // countdown identifier to ChargerWait before Countdown had its own persisted value.
-        if (config.protectionMethod == StrictModeProtectionMethod.ChargerWait && config.configurationVersion == 1L) {
+        if (config.protectionMethod == StrictModeProtectionMethod.Charger && config.configurationVersion == 1L) {
             val compatibleLifecycle = if (
                 config.lifecycle == RuleStrictModeLifecycle.Invalid &&
                 config.activationRequestedAtMillis != null && config.activeFromMillis != null
@@ -651,7 +888,7 @@ internal class GlobalStrictModeStore(
         if (config.lifecycle == RuleStrictModeLifecycle.PendingActivation && now >= requireNotNull(config.activeFromMillis)) {
             return normalize(config.copy(lifecycle = RuleStrictModeLifecycle.Active, updatedAtMillis = now))
         }
-        if (config.lifecycle == RuleStrictModeLifecycle.DeactivationCounting) {
+        if (config.lifecycle == RuleStrictModeLifecycle.DeactivationCounting && config.protectionMethod == StrictModeProtectionMethod.Countdown) {
             val started = config.deactivationStartedAtMillis
             val available = config.deactivationAvailableAtMillis
             if (started == null || available == null || available < started) return config.copy(lifecycle = RuleStrictModeLifecycle.Invalid, updatedAtMillis = now)
@@ -665,6 +902,116 @@ internal class GlobalStrictModeStore(
         }
         return config
     }
+
+    fun chargerSession(request: PendingStrictModeAction): ChargerAuthorizationSession? =
+        ChargerSessionCodec.decode(persistence.readChargerSessions()).firstOrNull { it.requestId == request.id }
+
+    fun beginOrRestoreCharger(requestId: String, chargingState: ChargingState): ChargerAuthorizationSession? {
+        val request = pendingActions().firstOrNull { it.id == requestId } ?: return null
+        val config = globalConfiguration() ?: return invalidateCharger(requestId)
+        val valid = request.authorizationMethod == StrictModeProtectionMethod.Charger &&
+            request.authorizationStatus in setOf(StrictModeAuthorizationStatus.AwaitingAuthorization, StrictModeAuthorizationStatus.AwaitingFinalConfirmation) &&
+            request.expiresAtMillis > nowMillis() && config.protectionMethod == StrictModeProtectionMethod.Charger &&
+            StrictModeFingerprint.configuration(config) == request.originalStrictModeFingerprint
+        if (!valid) return invalidateCharger(requestId)
+        val rawSessions = persistence.readChargerSessions()
+        val all = ChargerSessionCodec.decode(rawSessions).toMutableList()
+        val index = all.indexOfFirst { it.requestId == requestId }
+        if (index < 0 && rawSessions.orEmpty().contains(URLEncoder.encode(requestId, StandardCharsets.UTF_8.name()))) {
+            return invalidateCharger(requestId)
+        }
+        val persisted = if (index >= 0) all[index] else ChargerAuthorizationSession(
+            requestId, ChargerAuthorizationState.WaitingForCharger, request.createdAtMillis, request.expiresAtMillis, nowMillis()
+        ).also { all += it; persistence.writeChargerSessions(ChargerSessionCodec.encode(all)) }
+        if (persisted.expiresAtMillis != request.expiresAtMillis) return invalidateCharger(requestId)
+        if (request.authorizationStatus == StrictModeAuthorizationStatus.AwaitingFinalConfirmation) {
+            return persisted.copy(state = ChargerAuthorizationState.Authorized)
+        }
+        return persisted.copy(state = if (chargingState.isActivelyCharging) ChargerAuthorizationState.Ready else ChargerAuthorizationState.WaitingForCharger)
+    }
+
+    fun reconcileActiveChargerSession(chargingState: ChargingState): ChargerAuthorizationSession? {
+        val request = pendingActions().firstOrNull {
+            it.authorizationMethod == StrictModeProtectionMethod.Charger && it.authorizationStatus !in terminalStatuses
+        } ?: return null
+        return beginOrRestoreCharger(request.id, chargingState)
+    }
+
+    fun authorizeCharger(requestId: String, chargingState: ChargingState): PendingActionValidation {
+        val session = beginOrRestoreCharger(requestId, chargingState)
+        if (session?.state != ChargerAuthorizationState.Ready || !chargingState.isActivelyCharging) {
+            return PendingActionValidation.Invalid("Connect your charger before continuing.")
+        }
+        val request = markAuthorized(requestId) ?: return PendingActionValidation.Invalid("This request no longer exists.")
+        writeChargerSession(session.copy(state = ChargerAuthorizationState.Authorized, updatedAtMillis = nowMillis()))
+        if (request.actionType == PendingStrictModeActionType.DisableStrictMode) {
+            globalConfiguration()?.let { putConfiguration(it.copy(lifecycle = RuleStrictModeLifecycle.DeactivationReady, updatedAtMillis = nowMillis())) }
+        }
+        return PendingActionValidation.Valid(request)
+    }
+
+    private fun invalidateCharger(requestId: String): ChargerAuthorizationSession? {
+        val request = pendingActions().firstOrNull { it.id == requestId }
+        markChargerSessionTerminal(requestId, ChargerAuthorizationState.Invalid)
+        updatePending(requestId) { it.copy(authorizationStatus = StrictModeAuthorizationStatus.Invalid, cancelledAtMillis = nowMillis()) }
+        if (request?.ruleId == GLOBAL_CONFIGURATION_ID) {
+            globalConfiguration()?.takeIf { it.lifecycle in setOf(RuleStrictModeLifecycle.DeactivationCounting, RuleStrictModeLifecycle.DeactivationReady) }
+                ?.copy(lifecycle = RuleStrictModeLifecycle.Active, deactivationStartedAtMillis = null, deactivationAvailableAtMillis = null, updatedAtMillis = nowMillis())
+                ?.also(::putConfiguration)
+        }
+        return ChargerSessionCodec.decode(persistence.readChargerSessions()).firstOrNull { it.requestId == requestId }
+    }
+
+    private fun writeChargerSession(session: ChargerAuthorizationSession) {
+        val all = ChargerSessionCodec.decode(persistence.readChargerSessions()).toMutableList()
+        val index = all.indexOfFirst { it.requestId == session.requestId }
+        if (index >= 0) all[index] = session else all += session
+        persistence.writeChargerSessions(ChargerSessionCodec.encode(all))
+    }
+
+    private fun markChargerSessionTerminal(requestId: String, state: ChargerAuthorizationState) {
+        chargerSession(pendingActions().firstOrNull { it.id == requestId } ?: return)?.let {
+            writeChargerSession(it.copy(state = state, updatedAtMillis = nowMillis()))
+        }
+    }
+
+    private fun activeChargerRequestId(): String? {
+        val activePendingIds = pendingActions().filter { it.authorizationStatus !in terminalStatuses }.mapTo(mutableSetOf()) { it.id }
+        return ChargerSessionCodec.decode(persistence.readChargerSessions()).firstOrNull {
+            it.requestId in activePendingIds && it.state in setOf(ChargerAuthorizationState.WaitingForCharger, ChargerAuthorizationState.Authorized)
+        }?.requestId
+    }
+
+    private fun migrateLegacyChargerSessions(config: RuleStrictModeConfiguration?) {
+        if (config?.protectionMethod != StrictModeProtectionMethod.Charger) return
+        val now = nowMillis()
+        val decoded = decodePending(persistence.readPendingActions())
+        val migrated = decoded.map { action ->
+            if (action.authorizationMethod != StrictModeProtectionMethod.Charger || action.authorizationStatus in terminalStatuses) action
+            else action.copy(
+                originalStrictModeFingerprint = StrictModeFingerprint.configuration(config),
+                authorizationStatus = StrictModeAuthorizationStatus.AwaitingAuthorization,
+                authorizationExpiresAtMillis = null
+            )
+        }
+        savePending(migrated)
+        val sessions = migrated.filter {
+            it.authorizationMethod == StrictModeProtectionMethod.Charger && it.authorizationStatus !in terminalStatuses
+        }.map { action ->
+            ChargerAuthorizationSession(
+                requestId = action.id,
+                state = ChargerAuthorizationState.WaitingForCharger,
+                createdAtMillis = action.createdAtMillis,
+                expiresAtMillis = action.expiresAtMillis,
+                updatedAtMillis = now
+            )
+        }
+        persistence.writeChargerSessions(ChargerSessionCodec.encode(sessions))
+        persistence.clearLegacyChargerWaitSessions()
+    }
+
+    private fun requestExpiry(now: Long): Long =
+        safeAdd(now, REQUEST_EXPIRY_MILLIS) ?: Long.MAX_VALUE
 
     private fun putConfiguration(config: RuleStrictModeConfiguration) {
         val all = configurations().toMutableMap(); all[config.ruleId] = config; saveConfigurations(all.values)
@@ -720,7 +1067,7 @@ private object StrictModeFoundationCodec {
         val f = record.split(FIELD).map(::decode)
         val id = f.getOrNull(0)?.takeIf(String::isNotBlank) ?: return@mapNotNull null
         val lifecycle = f.getOrNull(1)?.let { value -> RuleStrictModeLifecycle.entries.firstOrNull { it.name == value } } ?: RuleStrictModeLifecycle.Invalid
-        val method = f.getOrNull(2)?.let { value -> StrictModeProtectionMethod.entries.firstOrNull { it.name == value } }
+        val method = f.getOrNull(2)?.let(::decodeProtectionMethod)
         id to RuleStrictModeConfiguration(
             ruleId = id,
             lifecycle = lifecycle,
@@ -739,7 +1086,7 @@ private object StrictModeFoundationCodec {
         val payload = when (val d = a.descriptor) {
             is StrictModeActionDescriptor.Pause -> fields(d.durationMillis, d.reason)
             is StrictModeActionDescriptor.Update -> EarnItRuleStore.encodeRules(listOf(d.proposedRule))
-            is StrictModeActionDescriptor.ReplaceMethod -> d.newMethod.name
+            is StrictModeActionDescriptor.ReplaceMethod -> fields(d.newMethod.name, d.newDurationMillis)
             else -> ""
         }
         fields(a.id, a.actionType.name, a.ruleId, payload, a.createdAtMillis, a.expiresAtMillis, a.originalRuleFingerprint, a.originalStrictModeFingerprint, a.authorizationStatus.name, a.authorizationMethod.name, a.authorizationExpiresAtMillis, a.consumedAtMillis, a.cancelledAtMillis)
@@ -752,13 +1099,42 @@ private object StrictModeFoundationCodec {
             PendingStrictModeActionType.PauseRule -> payload.split(FIELD).map(::decode).let { StrictModeActionDescriptor.Pause(ruleId, it.long(0) ?: return@mapNotNull null, it.getOrNull(1)?.takeIf(String::isNotBlank)) }
             PendingStrictModeActionType.DeleteRule -> StrictModeActionDescriptor.Delete(ruleId)
             PendingStrictModeActionType.DisableStrictMode -> StrictModeActionDescriptor.Disable(ruleId)
-            PendingStrictModeActionType.ReplaceProtectionMethod -> StrictModeProtectionMethod.entries.firstOrNull { it.name == payload }?.let { StrictModeActionDescriptor.ReplaceMethod(ruleId, it) } ?: return@mapNotNull null
+            PendingStrictModeActionType.ReplaceProtectionMethod -> payload.split(FIELD).map(::decode).let { replacement ->
+                replacement.getOrNull(0)?.let(::decodeProtectionMethod)
+                    ?.let { StrictModeActionDescriptor.ReplaceMethod(ruleId, it, replacement.long(1)) }
+                    ?: return@mapNotNull null
+            }
             PendingStrictModeActionType.UpdateRule -> EarnItRuleStore.decodeRules(payload).singleOrNull()?.takeIf { it.id == ruleId }?.let { StrictModeActionDescriptor.Update(ruleId, it) } ?: return@mapNotNull null
         }
-        PendingStrictModeAction(id, type, descriptor, f.long(4) ?: return@mapNotNull null, f.long(5) ?: return@mapNotNull null, f.getOrNull(6).orEmpty(), f.getOrNull(7).orEmpty(), f.getOrNull(8)?.let { value -> StrictModeAuthorizationStatus.entries.firstOrNull { it.name == value } } ?: StrictModeAuthorizationStatus.Invalid, f.getOrNull(9)?.let { value -> StrictModeProtectionMethod.entries.firstOrNull { it.name == value } } ?: return@mapNotNull null, f.long(10), f.long(11), f.long(12))
+        PendingStrictModeAction(id, type, descriptor, f.long(4) ?: return@mapNotNull null, f.long(5) ?: return@mapNotNull null, f.getOrNull(6).orEmpty(), f.getOrNull(7).orEmpty(), f.getOrNull(8)?.let { value -> StrictModeAuthorizationStatus.entries.firstOrNull { it.name == value } } ?: StrictModeAuthorizationStatus.Invalid, f.getOrNull(9)?.let(::decodeProtectionMethod) ?: return@mapNotNull null, f.long(10), f.long(11), f.long(12))
     }
     private fun fields(vararg values: Any?) = values.joinToString(FIELD) { encode(it?.toString().orEmpty()) }
     private fun encode(value: String) = URLEncoder.encode(value, StandardCharsets.UTF_8.name())
     private fun decode(value: String) = runCatching { URLDecoder.decode(value, StandardCharsets.UTF_8.name()) }.getOrDefault("")
     private fun List<String>.long(index: Int) = getOrNull(index)?.toLongOrNull()
+    private fun decodeProtectionMethod(value: String): StrictModeProtectionMethod? = when (value) {
+        "ChargerWait" -> StrictModeProtectionMethod.Charger
+        else -> StrictModeProtectionMethod.entries.firstOrNull { it.name == value }
+    }
+}
+
+private object ChargerSessionCodec {
+    private const val RECORD = "\u001E"
+    private const val FIELD = "\u001F"
+    fun encode(sessions: List<ChargerAuthorizationSession>) = sessions.joinToString(RECORD) { s ->
+        listOf(s.requestId, s.state.name, s.createdAtMillis, s.expiresAtMillis, s.updatedAtMillis)
+            .joinToString(FIELD) { URLEncoder.encode(it.toString(), StandardCharsets.UTF_8.name()) }
+    }
+    fun decode(raw: String?): List<ChargerAuthorizationSession> = raw.orEmpty().split(RECORD).mapNotNull { record ->
+        if (record.isBlank()) return@mapNotNull null
+        val f = record.split(FIELD).map { runCatching { URLDecoder.decode(it, StandardCharsets.UTF_8.name()) }.getOrDefault("") }
+        val state = f.getOrNull(1)?.let { value -> ChargerAuthorizationState.entries.firstOrNull { it.name == value } } ?: return@mapNotNull null
+        ChargerAuthorizationSession(
+            requestId = f.getOrNull(0)?.takeIf { it.isNotBlank() } ?: return@mapNotNull null,
+            state = state,
+            createdAtMillis = f.getOrNull(2)?.toLongOrNull() ?: return@mapNotNull null,
+            expiresAtMillis = f.getOrNull(3)?.toLongOrNull() ?: return@mapNotNull null,
+            updatedAtMillis = f.getOrNull(4)?.toLongOrNull() ?: return@mapNotNull null
+        )
+    }
 }

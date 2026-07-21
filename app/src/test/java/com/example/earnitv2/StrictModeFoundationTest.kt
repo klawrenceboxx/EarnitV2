@@ -51,7 +51,7 @@ class StrictModeFoundationTest {
 
     @Test fun activationPersistsAndRestoresAfterClockAdvances() {
         var now = 1_000L; val persistence = MemoryPersistence()
-        RuleStrictModeStore(persistence, completeMethods) { now }.requestActivation("rule", StrictModeProtectionMethod.ChargerWait, 5_000L)
+        RuleStrictModeStore(persistence, completeMethods) { now }.requestActivation("rule", StrictModeProtectionMethod.Charger, 5_000L)
         assertEquals(RuleStrictModeLifecycle.PendingActivation, RuleStrictModeStore(persistence, completeMethods) { now }.configuration("rule")?.lifecycle)
         now = 6_000L
         assertEquals(RuleStrictModeLifecycle.Active, RuleStrictModeStore(persistence, completeMethods) { now }.configuration("rule")?.lifecycle)
@@ -59,7 +59,7 @@ class StrictModeFoundationTest {
 
     @Test fun duplicateActivationDoesNotResetTimestamp() {
         var now = 1_000L; val store = RuleStrictModeStore(MemoryPersistence()) { now }
-        val first = store.requestActivation("rule", StrictModeProtectionMethod.ChargerWait, 5_000L)
+        val first = store.requestActivation("rule", StrictModeProtectionMethod.Charger, 5_000L)
         now = 2_000L
         val duplicate = store.requestActivation("rule", StrictModeProtectionMethod.AccountabilityPin, 50_000L)
         assertEquals(first.activeFromMillis, duplicate.activeFromMillis)
@@ -96,7 +96,7 @@ class StrictModeFoundationTest {
         fixture.store.cancelRequest(action.id)
         assertEquals(StrictModeAuthorizationStatus.Cancelled, fixture.store.pendingActions().single().authorizationStatus)
         var now = 1_000L; val persistence = MemoryPersistence(); val setup = RuleStrictModeStore(persistence) { now }
-        setup.requestActivation("rule", StrictModeProtectionMethod.ChargerWait, 0); setup.configuration("rule")
+        setup.requestActivation("rule", StrictModeProtectionMethod.Charger, 0); setup.configuration("rule")
         setup.createPendingAction(base(), StrictModeActionDescriptor.Delete("rule"))
         now += RuleStrictModeStore.REQUEST_EXPIRY_MILLIS + 1
         assertNull(RuleStrictModeStore(persistence) { now }.activePendingAction("rule"))
@@ -423,7 +423,7 @@ class StrictModeFoundationTest {
     private data class Fixture(val store: RuleStrictModeStore, val rule: EarnItRuleStore.Rule, val persistence: MemoryPersistence)
     private fun fixture(replaceNow: Long? = null): Fixture {
         var now = 1_000L; val persistence = MemoryPersistence(); val rule = base()
-        val setup = RuleStrictModeStore(persistence) { now }; setup.requestActivation(rule.id, StrictModeProtectionMethod.ChargerWait, 0); setup.configuration(rule.id)
+        val setup = RuleStrictModeStore(persistence) { now }; setup.requestActivation(rule.id, StrictModeProtectionMethod.Charger, 0); setup.configuration(rule.id)
         if (replaceNow != null) now = replaceNow + 1_000L
         return Fixture(RuleStrictModeStore(persistence) { now }, rule, persistence)
     }

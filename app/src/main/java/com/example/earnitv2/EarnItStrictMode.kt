@@ -67,15 +67,23 @@ internal enum class StrictModeScreenStep {
 internal fun EarnItStrictModeScreen(
     state: StrictModeState,
     foundationLifecycle: RuleStrictModeLifecycle? = null,
+    globalConfiguration: GlobalStrictModeConfiguration? = null,
+    pendingAction: PendingStrictModeAction? = null,
+    chargerSession: ChargerAuthorizationSession? = null,
+    chargingState: ChargingState = ChargingState(false, false),
     onBack: () -> Unit,
     onSaveConfiguration: (StrictModeConfiguration) -> Unit,
-    onBeginActivation: (StrictModeConfiguration) -> Unit,
+    onBeginActivation: (StrictModeConfiguration, StrictModeProtectionMethod) -> Unit,
     onCancelActivation: () -> Unit,
     onBeginDeactivation: () -> Unit,
     onCancelDeactivation: () -> Unit,
     onConfirmDeactivation: () -> Unit,
     onKeepStrictModeActive: () -> Unit,
     onTick: () -> Unit,
+    onAuthorizeCharger: () -> Unit = {},
+    onConfirmProtectedAction: () -> Unit = {},
+    onCancelProtectedRequest: () -> Unit = {},
+    onRequestMethodChange: (StrictModeProtectionMethod, Long?) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier
 ) {
     var setup by remember(state.lifecycleState) { mutableStateOf(StrictModeSetupState.from(state.configuration)) }
@@ -118,13 +126,23 @@ internal fun EarnItStrictModeScreen(
     ) {
         if (foundationLifecycle == RuleStrictModeLifecycle.Invalid) {
             StrictModeInvalidConfiguration()
+        } else if (pendingAction?.authorizationMethod == StrictModeProtectionMethod.Charger && chargerSession != null) {
+            ChargerAuthorization(
+                session = chargerSession,
+                chargingState = chargingState,
+                action = pendingAction,
+                onAuthorize = onAuthorizeCharger,
+                onConfirm = onConfirmProtectedAction,
+                onCancel = onCancelProtectedRequest,
+                onKeepStrictModeActive = onKeepStrictModeActive
+            )
         } else when (state.lifecycleState) {
             StrictModeLifecycleState.Inactive -> {
                 if (step == StrictModeScreenStep.Review) {
                     StrictModeReview(
-                        configuration = setup.toConfiguration(),
+                        setup = setup,
                         onBack = logicalBack,
-                        onActivate = { onBeginActivation(setup.toConfiguration()) }
+                        onActivate = { onBeginActivation(setup.toConfiguration(), setup.protectionMethod) }
                     )
                 } else {
                     StrictModeSetup(
@@ -152,21 +170,27 @@ internal fun EarnItStrictModeScreen(
                 ),
                 activeFromMillis = state.activationGraceEndsAtMillis,
                 deactivationWaitMillis = state.configuration.deactivationCountdownMillis,
+                protectionMethod = globalConfiguration?.protectionMethod ?: StrictModeProtectionMethod.Countdown,
                 onCancel = onCancelActivation
             )
             StrictModeLifecycleState.Active -> StrictModeActive(
                 state = state,
+                configuration = globalConfiguration,
+                onRequestMethodChange = onRequestMethodChange,
                 onBeginDeactivation = onBeginDeactivation
             )
             StrictModeLifecycleState.DeactivationCounting -> StrictModeDeactivationCountdown(
                 state = state,
+                pendingAction = pendingAction,
                 onCancelDeactivation = onCancelDeactivation,
                 onCountdownComplete = onTick
             )
-            StrictModeLifecycleState.DeactivationReady -> StrictModeDeactivateConfirmation(
-                onConfirmDeactivation = onConfirmDeactivation,
-                onKeepStrictModeActive = onKeepStrictModeActive
-            )
+            StrictModeLifecycleState.DeactivationReady -> if (pendingAction?.actionType == PendingStrictModeActionType.ReplaceProtectionMethod) {
+                StrictModeMethodChangeConfirmation(pendingAction, onConfirmProtectedAction, onCancelProtectedRequest)
+            } else StrictModeDeactivateConfirmation(
+                    onConfirmDeactivation = onConfirmDeactivation,
+                    onKeepStrictModeActive = onKeepStrictModeActive
+                )
         }
     }
 }
@@ -288,13 +312,10 @@ private fun StrictModeSetup(
             description = "Wait for a chosen period before Strict Mode can be deactivated.",
             recommended = true
         )
-        if (!setup.countdownDurationValid) {
+        if (setup.protectionMethod == StrictModeProtectionMethod.Countdown && !setup.countdownDurationValid) {
             Text(text = "Choose a countdown from 1 minute to 24 hours.", style = MaterialTheme.typography.bodySmall)
         }
-        UnavailableMethodRow(
-            title = "Charger + wait",
-            description = "Connect your charger and complete a waiting period."
-        )
+        ChargerMethodCard(setup, onSetupChange)
         UnavailableMethodRow(
             title = "PIN",
             description = "Require a PIN before deactivation."
@@ -525,14 +546,18 @@ private fun CountdownMethodCard(
     description: String,
     recommended: Boolean
 ) {
+    val selected = setup.protectionMethod == StrictModeProtectionMethod.Countdown
     Surface(
+        modifier = Modifier.selectable(selected = selected, role = Role.RadioButton) {
+            onSetupChange(setup.copy(protectionMethod = StrictModeProtectionMethod.Countdown))
+        },
         shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = .12f),
-        border = BorderStroke(2.dp, MaterialTheme.colorScheme.primary)
+        color = if (selected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = .12f) else MaterialTheme.colorScheme.surface,
+        border = BorderStroke(if (selected) 2.dp else 1.dp, if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant)
     ) {
         Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                SymbolBadge(symbol = "\u23F1", selected = true)
+                SymbolBadge(symbol = "\u23F1", selected = selected)
                 Column(modifier = Modifier.weight(1f)) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(text = title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
@@ -545,7 +570,8 @@ private fun CountdownMethodCard(
                     Text(text = description, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
-            Text(text = "Wait time", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
+            if (selected) Text(text = "Wait time", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
+            if (selected) {
             Column(modifier = Modifier.selectableGroup(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 countdownPresets().chunked(2).forEach { rowPicks ->
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -588,6 +614,34 @@ private fun CountdownMethodCard(
                         )
                     }
                 )
+            }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ChargerMethodCard(setup: StrictModeSetupState, onSetupChange: (StrictModeSetupState) -> Unit) {
+    val selected = setup.protectionMethod == StrictModeProtectionMethod.Charger
+    Surface(
+        modifier = Modifier.fillMaxWidth().selectable(selected = selected, role = Role.RadioButton) {
+            onSetupChange(setup.copy(protectionMethod = StrictModeProtectionMethod.Charger))
+        },
+        shape = RoundedCornerShape(16.dp),
+        color = if (selected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = .12f) else MaterialTheme.colorScheme.surface,
+        border = BorderStroke(if (selected) 2.dp else 1.dp, if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant)
+    ) {
+        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                SymbolBadge(symbol = "\u26A1", selected = selected)
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(text = "Charger", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        text = "Connect your phone to a charger before weakening or disabling Strict Mode.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
         }
     }
@@ -634,10 +688,11 @@ private fun ProtectionRow(symbol: String, label: String) {
 
 @Composable
 private fun StrictModeReview(
-    configuration: StrictModeConfiguration,
+    setup: StrictModeSetupState,
     onBack: () -> Unit,
     onActivate: () -> Unit
 ) {
+    val configuration = setup.toConfiguration()
     SectionHeading(
         title = "Review Strict Mode",
         supportingText = "Confirm your settings before activating."
@@ -657,11 +712,15 @@ private fun StrictModeReview(
         )
         HorizontalDivider()
         ReviewRow(
-            symbol = "\u23F1",
+            symbol = if (setup.protectionMethod == StrictModeProtectionMethod.Charger) "\u26A1" else "\u23F1",
             label = "Turn off with",
-            value = "Countdown",
-            supportingValue = durationLabel(configuration.deactivationCountdownMillis)
+            value = if (setup.protectionMethod == StrictModeProtectionMethod.Charger) "Charger" else "Countdown",
+            supportingValue = if (setup.protectionMethod == StrictModeProtectionMethod.Charger) "Physical charger required" else durationLabel(configuration.deactivationCountdownMillis)
         )
+    }
+    if (setup.protectionMethod == StrictModeProtectionMethod.Charger) StrictModeCard {
+        Text(text = "All Rules will be protected.", style = MaterialTheme.typography.titleMedium)
+        Text(text = "1. Connect your phone to a charger.\n2. Press Continue.\n3. Confirm the requested change.")
     }
     StrictModeCard {
         ReviewNoticeRow(symbol = "\u25A1", text = "Strict Mode activates after a 30-second review period.")
@@ -724,6 +783,7 @@ private fun StrictModeActivationCountdown(
     remainingSeconds: Long,
     activeFromMillis: Long?,
     deactivationWaitMillis: Long?,
+    protectionMethod: StrictModeProtectionMethod,
     onCancel: () -> Unit
 ) {
     val seconds = remainingSeconds.coerceIn(0L, 30L)
@@ -774,7 +834,9 @@ private fun StrictModeActivationCountdown(
                     DecorativeSymbol(text = "\u25C7", style = MaterialTheme.typography.displaySmall)
                 }
                 Text(
-                    text = "After activation, all Rules are protected from weaker edits, pausing, and deletion. Countdown \u00B7 ${durationLabel(deactivationWaitMillis)}.",
+                    text = if (protectionMethod == StrictModeProtectionMethod.Charger) {
+                        "After activation, all Rules are protected. A charger will be required for protected changes."
+                    } else "After activation, all Rules are protected from weaker edits, pausing, and deletion. Countdown \u00B7 ${durationLabel(deactivationWaitMillis)}.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -830,10 +892,13 @@ private fun LockGlyph() {
 @Composable
 private fun StrictModeActive(
     state: StrictModeState,
+    configuration: GlobalStrictModeConfiguration?,
+    onRequestMethodChange: (StrictModeProtectionMethod, Long?) -> Unit,
     onBeginDeactivation: () -> Unit
 ) {
     var beginDeactivationDialogOpen by remember { mutableStateOf(false) }
-    val ui = strictModeActiveUiState(state)
+    var changeMethodOpen by remember { mutableStateOf(false) }
+    val ui = strictModeActiveUiState(state, configuration)
     StrictModeCard {
         Text(text = ui.title, style = MaterialTheme.typography.titleLarge)
         Text(text = ui.description)
@@ -843,10 +908,34 @@ private fun StrictModeActive(
         Button(onClick = { beginDeactivationDialogOpen = true }, modifier = Modifier.fillMaxWidth()) {
             Text(text = "Begin Deactivation")
         }
+        OutlinedButton(onClick = { changeMethodOpen = !changeMethodOpen }, modifier = Modifier.fillMaxWidth()) {
+            Text(text = "Change Protection Method")
+        }
+    }
+    if (changeMethodOpen) StrictModeCard {
+        Text(text = "Protection method", style = MaterialTheme.typography.titleMedium)
+        if (configuration?.protectionMethod != StrictModeProtectionMethod.Countdown) {
+            OutlinedButton(
+                onClick = { changeMethodOpen = false; onRequestMethodChange(StrictModeProtectionMethod.Countdown, GlobalStrictModeStore.DEFAULT_COUNTDOWN_MILLIS) },
+                modifier = Modifier.fillMaxWidth()
+            ) { Text(text = "Countdown \u00B7 10 minutes") }
+        }
+        if (configuration?.protectionMethod != StrictModeProtectionMethod.Charger) {
+            OutlinedButton(
+                onClick = { changeMethodOpen = false; onRequestMethodChange(StrictModeProtectionMethod.Charger, null) },
+                modifier = Modifier.fillMaxWidth()
+            ) { Text(text = "Charger") }
+        }
+        Text(
+            text = "Reducing or replacing protection requires your current method first.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
     if (beginDeactivationDialogOpen) {
         BeginDeactivationDialog(
-            countdownLabel = durationLabel(state.configuration.deactivationCountdownMillis),
+            method = configuration?.protectionMethod ?: StrictModeProtectionMethod.Countdown,
+            waitLabel = durationLabel(state.configuration.deactivationCountdownMillis),
             onStartCountdown = {
                 beginDeactivationDialogOpen = false
                 onBeginDeactivation()
@@ -863,16 +952,19 @@ internal data class StrictModeActiveUiState(
     val deactivationWait: String
 )
 
-internal fun strictModeActiveUiState(state: StrictModeState) = StrictModeActiveUiState(
+internal fun strictModeActiveUiState(state: StrictModeState, configuration: GlobalStrictModeConfiguration? = null) = StrictModeActiveUiState(
     title = "Strict Mode is active",
     description = "All Rules are protected from weaker edits, pausing, and deletion.",
-    protectionMethod = "Countdown",
-    deactivationWait = "${durationLabel(state.configuration.deactivationCountdownMillis)} deactivation wait"
+    protectionMethod = if (configuration?.protectionMethod == StrictModeProtectionMethod.Charger) "Charger" else "Countdown",
+    deactivationWait = if (configuration?.protectionMethod == StrictModeProtectionMethod.Charger) {
+        "A charger is required to make protected changes."
+    } else "${durationLabel(state.configuration.deactivationCountdownMillis)} deactivation wait"
 )
 
 @Composable
 private fun BeginDeactivationDialog(
-    countdownLabel: String,
+    method: StrictModeProtectionMethod,
+    waitLabel: String,
     onStartCountdown: () -> Unit,
     onCancel: () -> Unit
 ) {
@@ -881,12 +973,14 @@ private fun BeginDeactivationDialog(
         title = { Text(text = "Begin deactivation?") },
         text = {
             Text(
-                text = "Strict Mode will remain active across all Rules for the next $countdownLabel."
+                text = if (method == StrictModeProtectionMethod.Charger) {
+                    "Connect your phone to a charger, press Continue, then confirm. Strict Mode stays active until you confirm."
+                } else "Strict Mode will remain active across all Rules for the next $waitLabel."
             )
         },
         confirmButton = {
             TextButton(onClick = onStartCountdown) {
-                Text(text = "Start Countdown")
+                Text(text = if (method == StrictModeProtectionMethod.Charger) "Continue" else "Start Countdown")
             }
         },
         dismissButton = {
@@ -900,6 +994,7 @@ private fun BeginDeactivationDialog(
 @Composable
 private fun StrictModeDeactivationCountdown(
     state: StrictModeState,
+    pendingAction: PendingStrictModeAction? = null,
     onCancelDeactivation: () -> Unit,
     onCountdownComplete: () -> Unit
 ) {
@@ -917,19 +1012,20 @@ private fun StrictModeDeactivationCountdown(
             delay(remaining.coerceAtMost(1_000L))
         }
     }
+    val replacingMethod = pendingAction?.actionType == PendingStrictModeActionType.ReplaceProtectionMethod
     StrictModeCard {
-        Text(text = "Deactivation in progress", style = MaterialTheme.typography.titleLarge)
+        Text(text = if (replacingMethod) "Protection change in progress" else "Deactivation in progress", style = MaterialTheme.typography.titleLarge)
         Text(text = "Strict Mode remains active for:", style = MaterialTheme.typography.titleSmall)
         Text(
             text = strictModeTimerLabel(deadline, nowMillis),
             style = MaterialTheme.typography.displaySmall
         )
         Text(
-            text = "You can leave EarnIt. The countdown will continue. Strict Mode will not turn off until you confirm.",
+            text = "You can leave EarnIt. The countdown will continue. No change will be made until you confirm.",
             style = MaterialTheme.typography.bodyMedium
         )
         OutlinedButton(onClick = onCancelDeactivation, modifier = Modifier.fillMaxWidth()) {
-            Text(text = "Cancel Deactivation")
+            Text(text = if (replacingMethod) "Cancel Request" else "Cancel Deactivation")
         }
     }
 }
@@ -953,6 +1049,121 @@ private fun StrictModeDeactivateConfirmation(
         }
     }
 }
+
+@Composable
+private fun StrictModeMethodChangeConfirmation(
+    action: PendingStrictModeAction,
+    onConfirm: () -> Unit,
+    onCancel: () -> Unit
+) {
+    val replacement = action.descriptor as? StrictModeActionDescriptor.ReplaceMethod
+    StrictModeCard {
+        Text(text = "Review protection change", style = MaterialTheme.typography.titleLarge)
+        Text(text = if (replacement?.newMethod == StrictModeProtectionMethod.Charger) {
+            "Strict Mode will remain active. The protection method will change to Charger."
+        } else "Strict Mode will remain active. The protection method will change to Countdown \u00B7 ${durationLabel(replacement?.newDurationMillis)}.")
+        Button(onClick = onConfirm, modifier = Modifier.fillMaxWidth()) { Text(text = "Confirm Change") }
+        OutlinedButton(onClick = onCancel, modifier = Modifier.fillMaxWidth()) { Text(text = "Cancel Request") }
+    }
+}
+
+@Composable
+private fun ChargerAuthorization(
+    session: ChargerAuthorizationSession,
+    chargingState: ChargingState,
+    action: PendingStrictModeAction,
+    onAuthorize: () -> Unit,
+    onConfirm: () -> Unit,
+    onCancel: () -> Unit,
+    onKeepStrictModeActive: () -> Unit
+) {
+    val isGlobalDeactivation = action.actionType == PendingStrictModeActionType.DisableStrictMode
+    if (session.state == ChargerAuthorizationState.Authorized) {
+        ChargerFinalConfirmation(action, onConfirm, {}, onKeepStrictModeActive, onCancel)
+        return
+    }
+    when (session.state) {
+        ChargerAuthorizationState.WaitingForCharger -> StrictModeCard {
+            Text(text = "Charger required", style = MaterialTheme.typography.titleLarge)
+            DecorativeSymbol(text = "\u26A1", style = MaterialTheme.typography.displaySmall)
+            Text(text = "Connect your charger", style = MaterialTheme.typography.titleMedium)
+            Text(text = "Plug in your phone to continue with this change.")
+            Text(text = "Waiting for charger", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+            Text(text = "The button will become available once charging is detected.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Button(onClick = {}, enabled = false, modifier = Modifier.fillMaxWidth()) { Text(text = "Connect charger to continue") }
+            OutlinedButton(onClick = onCancel, modifier = Modifier.fillMaxWidth()) { Text(text = "Cancel Request") }
+        }
+        ChargerAuthorizationState.Ready -> StrictModeCard {
+            Text(text = "Charger connected", style = MaterialTheme.typography.titleLarge)
+            DecorativeSymbol(text = "\u26A1", style = MaterialTheme.typography.displaySmall)
+            Text(text = "You can now continue.")
+            Text(text = "Charging detected", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+            Button(onClick = onAuthorize, enabled = chargingState.isActivelyCharging, modifier = Modifier.fillMaxWidth()) {
+                Text(text = chargerContinueLabel(action.actionType))
+            }
+            OutlinedButton(
+                onClick = if (isGlobalDeactivation) onKeepStrictModeActive else onCancel,
+                modifier = Modifier.fillMaxWidth()
+            ) { Text(text = if (isGlobalDeactivation) "Keep Strict Mode Active" else "Cancel Request") }
+        }
+        ChargerAuthorizationState.Expired -> StrictModeCard {
+            Text(text = "Request expired", style = MaterialTheme.typography.titleLarge)
+            Text(text = "No change was made. Start the protected action again when you're ready.")
+            Button(onClick = onCancel, modifier = Modifier.fillMaxWidth()) { Text(text = "Close") }
+        }
+        ChargerAuthorizationState.Invalid -> StrictModeCard {
+            Text(text = "Charger authorization needs attention", style = MaterialTheme.typography.titleLarge)
+            Text(text = "The request could not be verified. No change was made, and Strict Mode remains active.")
+            Button(onClick = onCancel, modifier = Modifier.fillMaxWidth()) { Text(text = "Close") }
+        }
+        ChargerAuthorizationState.Cancelled, ChargerAuthorizationState.Consumed -> StrictModeCard {
+            Text(text = "Request closed", style = MaterialTheme.typography.titleLarge)
+            Text(text = "This request can no longer be used.")
+            Button(onClick = onCancel, modifier = Modifier.fillMaxWidth()) { Text(text = "Close") }
+        }
+        ChargerAuthorizationState.Authorized -> Unit
+    }
+}
+
+internal fun chargerContinueLabel(type: PendingStrictModeActionType) = when (type) {
+    PendingStrictModeActionType.UpdateRule, PendingStrictModeActionType.ReplaceProtectionMethod -> "Review Change"
+    PendingStrictModeActionType.PauseRule -> "Continue to Pause"
+    PendingStrictModeActionType.DeleteRule -> "Continue to Delete"
+    PendingStrictModeActionType.DisableStrictMode -> "Continue to Disable"
+}
+
+@Composable
+private fun ChargerFinalConfirmation(
+    action: PendingStrictModeAction,
+    onConfirm: () -> Unit,
+    onBack: () -> Unit,
+    onKeepStrictModeActive: () -> Unit,
+    onCancel: () -> Unit
+) {
+    val (title, description, confirmLabel) = when (action.actionType) {
+        PendingStrictModeActionType.DisableStrictMode -> Triple(
+            "Disable Strict Mode?",
+            "All Rules will allow weaker edits, pausing, and deletion without authorization.",
+            "Disable Strict Mode"
+        )
+        PendingStrictModeActionType.UpdateRule -> Triple("Review Rule change", "Apply only the weaker Rule change saved with this request?", "Confirm Change")
+        PendingStrictModeActionType.PauseRule -> Triple("Pause this Rule?", "Only the Rule named in this request will be paused.", "Pause Rule")
+        PendingStrictModeActionType.DeleteRule -> Triple("Delete this Rule?", "Only the Rule named in this request will be deleted.", "Delete Rule")
+        PendingStrictModeActionType.ReplaceProtectionMethod -> Triple("Change protection method?", "Strict Mode stays active with the selected replacement method.", "Confirm Change")
+    }
+    StrictModeCard {
+        Text(text = title, style = MaterialTheme.typography.titleLarge)
+        Text(text = description)
+        Button(onClick = onConfirm, modifier = Modifier.fillMaxWidth()) { Text(text = confirmLabel) }
+        if (action.actionType == PendingStrictModeActionType.DisableStrictMode) {
+            OutlinedButton(onClick = onKeepStrictModeActive, modifier = Modifier.fillMaxWidth()) { Text(text = "Keep Strict Mode Active") }
+        } else {
+            OutlinedButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) { Text(text = "Back") }
+            TextButton(onClick = onCancel, modifier = Modifier.fillMaxWidth()) { Text(text = "Cancel Request") }
+        }
+    }
+}
+
 
 @Composable
 internal fun StrictModeProtectedActionDialog(
@@ -996,6 +1207,7 @@ internal data class StrictModeSetupState(
     val durationType: StrictModeDurationType,
     val timedDurationMillis: Long?,
     val deactivationCountdownMillis: Long?,
+    val protectionMethod: StrictModeProtectionMethod = StrictModeProtectionMethod.Countdown,
     val customTimedHours: String = "",
     val customCountdownMinutes: String = "",
     val timedCustomVisible: Boolean = false,
@@ -1010,7 +1222,12 @@ internal data class StrictModeSetupState(
 
     val isValid: Boolean
         get() {
-            return timedDurationValid && countdownDurationValid
+            val methodValid = when (protectionMethod) {
+                StrictModeProtectionMethod.Countdown -> countdownDurationValid
+                StrictModeProtectionMethod.Charger -> true
+                StrictModeProtectionMethod.AccountabilityPin -> false
+            }
+            return timedDurationValid && methodValid
         }
 
     fun toConfiguration(): StrictModeConfiguration {

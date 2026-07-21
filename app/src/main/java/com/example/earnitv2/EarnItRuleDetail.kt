@@ -352,9 +352,15 @@ internal fun ruleStrictModeStatusUi(
                 "View"
             )
         } else {
-            RuleStrictModeStatusUi("Strict Mode active", "All Rules are protected.", "View")
+            RuleStrictModeStatusUi(
+                "Strict Mode is active",
+                "Charger required for protected changes",
+                "View"
+            )
         }
-        RuleStrictModeLifecycle.DeactivationCounting -> return RuleStrictModeStatusUi(
+        RuleStrictModeLifecycle.DeactivationCounting -> return if (configuration?.protectionMethod == StrictModeProtectionMethod.Charger) {
+            RuleStrictModeStatusUi("Deactivation in progress", "Waiting for charger", "View")
+        } else RuleStrictModeStatusUi(
             "Deactivation in progress", "Strict Mode remains active while the countdown continues.", "View"
         )
         RuleStrictModeLifecycle.DeactivationReady -> return RuleStrictModeStatusUi(
