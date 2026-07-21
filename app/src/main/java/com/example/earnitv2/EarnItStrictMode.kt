@@ -52,6 +52,9 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -63,9 +66,7 @@ internal enum class StrictModeScreenStep {
 @Composable
 internal fun EarnItStrictModeScreen(
     state: StrictModeState,
-    enabledRuleCount: Int,
-    disabledRuleCount: Int,
-    protectionSummary: StrictModeRuleProtectionSummary,
+    foundationLifecycle: RuleStrictModeLifecycle? = null,
     onBack: () -> Unit,
     onSaveConfiguration: (StrictModeConfiguration) -> Unit,
     onBeginActivation: (StrictModeConfiguration) -> Unit,
@@ -115,13 +116,13 @@ internal fun EarnItStrictModeScreen(
         snackbarHostState = snackbarHostState,
         modifier = modifier
     ) {
-        when (state.lifecycleState) {
+        if (foundationLifecycle == RuleStrictModeLifecycle.Invalid) {
+            StrictModeInvalidConfiguration()
+        } else when (state.lifecycleState) {
             StrictModeLifecycleState.Inactive -> {
                 if (step == StrictModeScreenStep.Review) {
                     StrictModeReview(
                         configuration = setup.toConfiguration(),
-                        enabledRuleCount = enabledRuleCount,
-                        disabledRuleCount = disabledRuleCount,
                         onBack = logicalBack,
                         onActivate = { onBeginActivation(setup.toConfiguration()) }
                     )
@@ -149,24 +150,32 @@ internal fun EarnItStrictModeScreen(
                     targetMillis = state.activationGraceEndsAtMillis,
                     nowMillis = activationCountdownNowMillis
                 ),
+                activeFromMillis = state.activationGraceEndsAtMillis,
+                deactivationWaitMillis = state.configuration.deactivationCountdownMillis,
                 onCancel = onCancelActivation
             )
             StrictModeLifecycleState.Active -> StrictModeActive(
                 state = state,
-                enabledRuleCount = enabledRuleCount,
-                disabledRuleCount = disabledRuleCount,
-                protectionSummary = protectionSummary,
                 onBeginDeactivation = onBeginDeactivation
             )
             StrictModeLifecycleState.DeactivationCounting -> StrictModeDeactivationCountdown(
                 state = state,
-                onCancelDeactivation = onCancelDeactivation
+                onCancelDeactivation = onCancelDeactivation,
+                onCountdownComplete = onTick
             )
             StrictModeLifecycleState.DeactivationReady -> StrictModeDeactivateConfirmation(
                 onConfirmDeactivation = onConfirmDeactivation,
                 onKeepStrictModeActive = onKeepStrictModeActive
             )
         }
+    }
+}
+
+@Composable
+private fun StrictModeInvalidConfiguration() {
+    StrictModeCard {
+        Text(text = "Strict Mode needs attention", style = MaterialTheme.typography.titleLarge)
+        Text(text = "Your Rule remains protected. Review the Strict Mode setup before making less-restrictive changes.")
     }
 }
 
@@ -187,12 +196,9 @@ private fun StrictModeScaffold(
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                TextButton(onClick = onBack) {
-                    Text(text = "\u2039", modifier = Modifier.clearAndSetSemantics { })
-                    Text(text = "Back")
-                }
+                EarnItBackButton(onBack)
                 Spacer(modifier = Modifier.width(4.dp))
-                Text(text = title, style = MaterialTheme.typography.headlineMedium)
+                Text(text = title, style = MaterialTheme.typography.headlineSmall)
             }
             content()
         }
@@ -220,7 +226,7 @@ private fun StrictModeSetup(
             StrictModeStatusBadge(active = false)
         }
         Text(
-            text = "Strict Mode protects your Rules inside EarnIt. Android system settings can still affect protection.",
+            text = "Make it harder to weaken your Rules during an impulsive moment.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
@@ -293,29 +299,19 @@ private fun StrictModeSetup(
             title = "PIN",
             description = "Require a PIN before deactivation."
         )
-        UnavailableMethodRow(
-            title = "Email approval",
-            description = "Approve deactivation through a secure email link."
-        )
-        UnavailableMethodRow(
-            title = "NFC tag or security fob",
-            description = "Require a physical tag or compatible security device."
-        )
     }
     StrictModeCard {
         SectionHeading(
             title = "What Strict Mode protects",
-            supportingText = "These actions are locked for every enabled Rule."
+            supportingText = "When enabled, all current and future Rules are protected."
         )
-        ProtectionRow(symbol = "\u270E", label = "Edit Rules")
+        ProtectionRow(symbol = "\u270E", label = "Weaker edits")
         HorizontalDivider()
-        ProtectionRow(symbol = "\u23F8", label = "Pause Rules")
+        ProtectionRow(symbol = "\u23F8", label = "Pausing Rules")
         HorizontalDivider()
-        ProtectionRow(symbol = "\u2298", label = "Disable Rules")
-        HorizontalDivider()
-        ProtectionRow(symbol = "\u232B", label = "Delete Rules")
+        ProtectionRow(symbol = "\u232B", label = "Deleting Rules")
         Text(
-            text = "Disabled and paused Rules stay unchanged. If resumed or enabled later, they become protected immediately.",
+            text = "New Rules are protected automatically while Strict Mode is active.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
@@ -639,8 +635,6 @@ private fun ProtectionRow(symbol: String, label: String) {
 @Composable
 private fun StrictModeReview(
     configuration: StrictModeConfiguration,
-    enabledRuleCount: Int,
-    disabledRuleCount: Int,
     onBack: () -> Unit,
     onActivate: () -> Unit
 ) {
@@ -668,10 +662,6 @@ private fun StrictModeReview(
             value = "Countdown",
             supportingValue = durationLabel(configuration.deactivationCountdownMillis)
         )
-        HorizontalDivider()
-        ReviewRow(symbol = "\u25A3", label = "Protected Rules", value = ruleCountLabel(enabledRuleCount))
-        HorizontalDivider()
-        ReviewRow(symbol = "\u2298", label = "Not protected", value = ruleCountLabel(disabledRuleCount))
     }
     StrictModeCard {
         ReviewNoticeRow(symbol = "\u25A1", text = "Strict Mode activates after a 30-second review period.")
@@ -730,7 +720,12 @@ private fun ReviewNoticeRow(symbol: String, text: String) {
 }
 
 @Composable
-private fun StrictModeActivationCountdown(remainingSeconds: Long, onCancel: () -> Unit) {
+private fun StrictModeActivationCountdown(
+    remainingSeconds: Long,
+    activeFromMillis: Long?,
+    deactivationWaitMillis: Long?,
+    onCancel: () -> Unit
+) {
     val seconds = remainingSeconds.coerceIn(0L, 30L)
     val progress = seconds / 30f
     val trackColor = MaterialTheme.colorScheme.surfaceVariant
@@ -745,7 +740,12 @@ private fun StrictModeActivationCountdown(remainingSeconds: Long, onCancel: () -
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
-                Text(text = "Strict Mode activates in", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    text = activeFromMillis?.let {
+                        "Strict Mode starts at ${SimpleDateFormat("MMM d 'at' h:mm a", Locale.getDefault()).format(Date(it))}"
+                    } ?: "Strict Mode activates in",
+                    style = MaterialTheme.typography.titleMedium
+                )
                 Text(
                     text = seconds.toString(),
                     style = MaterialTheme.typography.displayLarge,
@@ -774,7 +774,7 @@ private fun StrictModeActivationCountdown(remainingSeconds: Long, onCancel: () -
                     DecorativeSymbol(text = "\u25C7", style = MaterialTheme.typography.displaySmall)
                 }
                 Text(
-                    text = "This is your final opportunity to cancel before Strict Mode becomes active.",
+                    text = "After activation, all Rules are protected from weaker edits, pausing, and deletion. Countdown \u00B7 ${durationLabel(deactivationWaitMillis)}.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -830,26 +830,16 @@ private fun LockGlyph() {
 @Composable
 private fun StrictModeActive(
     state: StrictModeState,
-    enabledRuleCount: Int,
-    disabledRuleCount: Int,
-    protectionSummary: StrictModeRuleProtectionSummary,
     onBeginDeactivation: () -> Unit
 ) {
     var beginDeactivationDialogOpen by remember { mutableStateOf(false) }
+    val ui = strictModeActiveUiState(state)
     StrictModeCard {
-        Text(text = "Strict Mode Active", style = MaterialTheme.typography.titleLarge)
-        Text(
-            text = if (state.configuration.durationType == StrictModeDurationType.Timed) {
-                "Remaining: ${durationLabel(strictModeRemainingMillis(state.expiresAtMillis))}"
-            } else {
-                "Duration: Indefinite"
-            }
-        )
-        Text(text = "Deactivation method: Countdown")
-        Text(text = "Configured countdown: ${durationLabel(state.configuration.deactivationCountdownMillis)}")
-        Text(text = "Enabled Rules: $enabledRuleCount")
-        Text(text = "Disabled or paused Rules: $disabledRuleCount")
-        Text(text = "Protected Rules cannot be edited, paused, disabled, or deleted. Enable and Resume stay available.")
+        Text(text = ui.title, style = MaterialTheme.typography.titleLarge)
+        Text(text = ui.description)
+        HorizontalDivider()
+        Text(text = ui.protectionMethod, style = MaterialTheme.typography.titleMedium)
+        Text(text = ui.deactivationWait, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Button(onClick = { beginDeactivationDialogOpen = true }, modifier = Modifier.fillMaxWidth()) {
             Text(text = "Begin Deactivation")
         }
@@ -864,24 +854,21 @@ private fun StrictModeActive(
             onCancel = { beginDeactivationDialogOpen = false }
         )
     }
-    StrictModeRuleListCard(
-        title = "Protected Rules",
-        emptyText = "No Rules are currently protected.",
-        rules = protectionSummary.protectedRules
-    )
-    if (protectionSummary.unprotectedRules.isNotEmpty()) {
-        StrictModeRuleListCard(
-            title = "Not currently protected",
-            emptyText = "",
-            rules = protectionSummary.unprotectedRules,
-            pausedRuleIds = protectionSummary.pausedRuleIds,
-            includeState = true
-        )
-        StrictModeCard {
-            Text(text = "Disabled and paused Rules become protected automatically when enabled or resumed.")
-        }
-    }
 }
+
+internal data class StrictModeActiveUiState(
+    val title: String,
+    val description: String,
+    val protectionMethod: String,
+    val deactivationWait: String
+)
+
+internal fun strictModeActiveUiState(state: StrictModeState) = StrictModeActiveUiState(
+    title = "Strict Mode is active",
+    description = "All Rules are protected from weaker edits, pausing, and deletion.",
+    protectionMethod = "Countdown",
+    deactivationWait = "${durationLabel(state.configuration.deactivationCountdownMillis)} deactivation wait"
+)
 
 @Composable
 private fun BeginDeactivationDialog(
@@ -894,7 +881,7 @@ private fun BeginDeactivationDialog(
         title = { Text(text = "Begin deactivation?") },
         text = {
             Text(
-                text = "Strict Mode will remain active for the next $countdownLabel. Your protected Rules cannot be changed during this time."
+                text = "Strict Mode will remain active across all Rules for the next $countdownLabel."
             )
         },
         confirmButton = {
@@ -913,18 +900,32 @@ private fun BeginDeactivationDialog(
 @Composable
 private fun StrictModeDeactivationCountdown(
     state: StrictModeState,
-    onCancelDeactivation: () -> Unit
+    onCancelDeactivation: () -> Unit,
+    onCountdownComplete: () -> Unit
 ) {
+    val deadline = state.deactivationAvailableAtMillis
+    var nowMillis by remember(deadline) { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(deadline) {
+        while (deadline != null) {
+            val now = System.currentTimeMillis()
+            nowMillis = now
+            val remaining = strictModeRemainingMillis(deadline, now)
+            if (remaining == 0L) {
+                onCountdownComplete()
+                break
+            }
+            delay(remaining.coerceAtMost(1_000L))
+        }
+    }
     StrictModeCard {
-        Text(text = "Strict Mode Active", style = MaterialTheme.typography.titleLarge)
-        Text(text = "Deactivation in progress", style = MaterialTheme.typography.titleSmall)
+        Text(text = "Deactivation in progress", style = MaterialTheme.typography.titleLarge)
+        Text(text = "Strict Mode remains active for:", style = MaterialTheme.typography.titleSmall)
         Text(
-            text = "${durationLabel(strictModeRemainingMillis(state.deactivationAvailableAtMillis))} remaining",
-            style = MaterialTheme.typography.headlineSmall
+            text = strictModeTimerLabel(deadline, nowMillis),
+            style = MaterialTheme.typography.displaySmall
         )
-        Text(text = "Deactivate with: Countdown")
         Text(
-            text = "Your Rules are still protected. Strict Mode will not turn off automatically when this timer reaches zero. You will need to confirm deactivation.",
+            text = "You can leave EarnIt. The countdown will continue. Strict Mode will not turn off until you confirm.",
             style = MaterialTheme.typography.bodyMedium
         )
         OutlinedButton(onClick = onCancelDeactivation, modifier = Modifier.fillMaxWidth()) {
@@ -939,13 +940,13 @@ private fun StrictModeDeactivateConfirmation(
     onKeepStrictModeActive: () -> Unit
 ) {
     StrictModeCard {
-        Text(text = "Deactivate Strict Mode?", style = MaterialTheme.typography.titleLarge)
+        Text(text = "Deactivation ready", style = MaterialTheme.typography.titleLarge)
         Text(
-            text = "The waiting period is complete. Deactivating Strict Mode will allow your Rules to be edited, paused, disabled, or deleted again.",
+            text = "You can now turn off Strict Mode. Disabling it will allow weaker edits, pausing, and deletion across all Rules without authorization.",
             style = MaterialTheme.typography.bodyMedium
         )
         Button(onClick = onConfirmDeactivation, modifier = Modifier.fillMaxWidth()) {
-            Text(text = "Deactivate Strict Mode")
+            Text(text = "Disable Strict Mode")
         }
         OutlinedButton(onClick = onKeepStrictModeActive, modifier = Modifier.fillMaxWidth()) {
             Text(text = "Keep Strict Mode Active")
@@ -954,41 +955,16 @@ private fun StrictModeDeactivateConfirmation(
 }
 
 @Composable
-private fun StrictModeRuleListCard(
-    title: String,
-    emptyText: String,
-    rules: List<EarnItRuleStore.Rule>,
-    pausedRuleIds: Set<String> = emptySet(),
-    includeState: Boolean = false
-) {
-    StrictModeCard {
-        Text(text = title, style = MaterialTheme.typography.titleSmall)
-        if (rules.isEmpty()) {
-            Text(text = emptyText, style = MaterialTheme.typography.bodyMedium)
-        } else {
-            rules.forEach { rule ->
-                Text(
-                    text = if (includeState) {
-                        "${strictModeRuleLabel(rule)} - ${strictModeRuleStateLabel(rule, pausedRuleIds)}"
-                    } else {
-                        strictModeRuleLabel(rule)
-                    },
-                    style = MaterialTheme.typography.bodyMedium
-                )
-            }
-        }
-    }
-}
-
-@Composable
 internal fun StrictModeProtectedActionDialog(
+    message: String = "This Rule cannot be changed while Strict Mode is active.",
+    dismissLabel: String = "Close",
     onViewStrictMode: () -> Unit,
     onClose: () -> Unit
 ) {
     AlertDialog(
         onDismissRequest = onClose,
         title = { Text(text = "Protected by Strict Mode") },
-        text = { Text(text = "This Rule cannot be changed while Strict Mode is active.") },
+        text = { Text(text = message) },
         confirmButton = {
             TextButton(onClick = onViewStrictMode) {
                 Text(text = "View Strict Mode")
@@ -996,7 +972,7 @@ internal fun StrictModeProtectedActionDialog(
         },
         dismissButton = {
             TextButton(onClick = onClose) {
-                Text(text = "Close")
+                Text(text = dismissLabel)
             }
         }
     )
@@ -1087,6 +1063,18 @@ internal fun strictModeRemainingMillis(targetMillis: Long?, nowMillis: Long = Sy
     return ((targetMillis ?: nowMillis) - nowMillis).coerceAtLeast(0L)
 }
 
+internal fun strictModeTimerLabel(targetMillis: Long?, nowMillis: Long = System.currentTimeMillis()): String {
+    val totalSeconds = strictModeRemainingSeconds(targetMillis, nowMillis)
+    val hours = totalSeconds / 3_600L
+    val minutes = (totalSeconds % 3_600L) / 60L
+    val seconds = totalSeconds % 60L
+    return if (hours > 0L) {
+        "%02d:%02d:%02d".format(hours, minutes, seconds)
+    } else {
+        "%02d:%02d".format(minutes, seconds)
+    }
+}
+
 internal fun durationLabel(durationMillis: Long?): String {
     val millis = durationMillis ?: return "Indefinite"
     if (millis in 1L until 60_000L) return "Less than 1 minute"
@@ -1124,8 +1112,6 @@ private const val COUNTDOWN_REFRESH_MILLIS = 250L
 private fun plural(value: Long, unit: String): String {
     return "$value $unit${if (value == 1L) "" else "s"}"
 }
-
-private fun ruleCountLabel(count: Int): String = "$count ${if (count == 1) "rule" else "rules"}"
 
 internal fun strictModeRuleLabel(rule: EarnItRuleStore.Rule): String {
     return when (rule.type) {

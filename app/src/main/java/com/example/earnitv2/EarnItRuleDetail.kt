@@ -5,6 +5,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.DateRange
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -12,6 +13,7 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
@@ -42,10 +44,14 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import java.util.Calendar
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import kotlinx.coroutines.delay
 
 internal enum class RuleDetailTone {
@@ -57,6 +63,7 @@ internal enum class RuleDetailOverflowAction {
     Edit,
     QuickPause,
     MorePauseOptions,
+    StrictMode,
     Delete
 }
 
@@ -89,7 +96,7 @@ internal data class RuleDetailStatusCardState(
 )
 
 @Composable
-fun EarnItRuleDetail(
+internal fun EarnItRuleDetail(
     homeRule: HomeRuleUiState,
     detail: RuleDetailUiState,
     pausedUntilMillis: Long?,
@@ -102,6 +109,9 @@ fun EarnItRuleDetail(
     onPauseRuleFor: (EarnItRuleStore.Rule, Long, String?) -> Unit,
     onResumeRule: (EarnItRuleStore.Rule) -> Unit,
     isProtectedByStrictMode: Boolean,
+    strictModeConfiguration: GlobalStrictModeConfiguration?,
+    onOpenStrictMode: () -> Unit,
+    onStrictModeTick: () -> Unit,
     onProtectedActionBlocked: () -> Unit,
     onDeleteRule: (EarnItRuleStore.Rule) -> Unit,
     modifier: Modifier = Modifier
@@ -220,15 +230,10 @@ fun EarnItRuleDetail(
         RuleDetailTopBar(
             rule = rule,
             onBack = logicalBack,
-            onEditRule = {
-                if (isProtectedByStrictMode) onProtectedActionBlocked() else editGateState = EditGateState.Confirm
-            },
-            onQuickPause = {
-                if (isProtectedByStrictMode) onProtectedActionBlocked() else onPauseRuleFor(rule, FIVE_MINUTES_MILLIS, null)
-            },
-            onMorePauseOptions = {
-                if (isProtectedByStrictMode) onProtectedActionBlocked() else pauseSheetState = PauseSheetState.Options
-            },
+            onEditRule = { editGateState = EditGateState.Confirm },
+            onQuickPause = { onPauseRuleFor(rule, FIVE_MINUTES_MILLIS, null) },
+            onMorePauseOptions = { pauseSheetState = PauseSheetState.Options },
+            onOpenStrictMode = onOpenStrictMode,
             onDeleteRule = onDeleteRule
         )
 
@@ -240,9 +245,7 @@ fun EarnItRuleDetail(
             )
         }
 
-        if (isProtectedByStrictMode) {
-            RuleStrictModeStatusRow()
-        }
+        RuleStrictModeStatusRow(strictModeConfiguration, onOpenStrictMode, onStrictModeTick)
 
         RuleStatusCard(
             ruleType = rule.type,
@@ -283,13 +286,82 @@ fun EarnItRuleDetail(
 }
 
 @Composable
-private fun RuleStrictModeStatusRow() {
-    SectionContainer {
-        Text(text = "Protected by Strict Mode", style = MaterialTheme.typography.titleSmall)
-        Text(
-            text = "This Rule cannot be edited, paused, disabled, or deleted while Strict Mode is active.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+private fun RuleStrictModeStatusRow(
+    configuration: GlobalStrictModeConfiguration?,
+    onOpenStrictMode: () -> Unit,
+    onStrictModeTick: () -> Unit
+) {
+    val deadline = configuration?.deactivationAvailableAtMillis
+    var nowMillis by remember(deadline) { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(configuration?.lifecycle, deadline) {
+        while (configuration?.lifecycle == RuleStrictModeLifecycle.DeactivationCounting && deadline != null) {
+            val now = System.currentTimeMillis()
+            nowMillis = now
+            val remaining = strictModeRemainingMillis(deadline, now)
+            if (remaining == 0L) {
+                onStrictModeTick()
+                break
+            }
+            delay(remaining.coerceAtMost(1_000L))
+        }
+    }
+    val baseStatus = ruleStrictModeStatusUi(configuration)
+    val status = if (configuration?.lifecycle == RuleStrictModeLifecycle.DeactivationCounting) {
+        baseStatus.copy(detail = "${strictModeTimerLabel(deadline, nowMillis)} remaining")
+    } else baseStatus
+    SectionContainer(
+        modifier = Modifier
+            .clickable(onClick = onOpenStrictMode)
+            .semantics(mergeDescendants = true) {
+                contentDescription = "${status.title}. ${status.detail}. ${status.actionLabel}"
+            }
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Text(text = "\u25C7", modifier = Modifier.clearAndSetSemantics { }, style = MaterialTheme.typography.titleLarge)
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(text = status.title, style = MaterialTheme.typography.titleSmall)
+                Text(text = status.detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Text(text = status.actionLabel, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+        }
+    }
+}
+
+internal data class RuleStrictModeStatusUi(val title: String, val detail: String, val actionLabel: String)
+
+internal fun ruleStrictModeStatusUi(
+    configuration: GlobalStrictModeConfiguration?,
+    formatActivationTime: (Long) -> String = { SimpleDateFormat("MMM d 'at' h:mm a", Locale.getDefault()).format(Date(it)) }
+): RuleStrictModeStatusUi {
+    when (configuration?.lifecycle ?: RuleStrictModeLifecycle.Disabled) {
+        RuleStrictModeLifecycle.Disabled -> return RuleStrictModeStatusUi(
+            "Strict Mode", "Protect all Rules from weaker changes.", "Set up"
+        )
+        RuleStrictModeLifecycle.PendingActivation -> {
+            val date = configuration?.activeFromMillis?.let(formatActivationTime) ?: "the saved activation time"
+            return RuleStrictModeStatusUi("Strict Mode starts soon", "All Rules will be protected at $date.", "View")
+        }
+        RuleStrictModeLifecycle.Active -> return if (configuration?.protectionMethod == StrictModeProtectionMethod.Countdown) {
+            RuleStrictModeStatusUi(
+                "Strict Mode is active",
+                "All Rules are protected.",
+                "View"
+            )
+        } else {
+            RuleStrictModeStatusUi("Strict Mode active", "All Rules are protected.", "View")
+        }
+        RuleStrictModeLifecycle.DeactivationCounting -> return RuleStrictModeStatusUi(
+            "Deactivation in progress", "Strict Mode remains active while the countdown continues.", "View"
+        )
+        RuleStrictModeLifecycle.DeactivationReady -> return RuleStrictModeStatusUi(
+            "Deactivation ready", "Confirmation required.", "View"
+        )
+        RuleStrictModeLifecycle.Invalid -> return RuleStrictModeStatusUi(
+            "Strict Mode needs attention", "Your Rules remain protected.", "Review"
         )
     }
 }
@@ -301,6 +373,7 @@ private fun RuleDetailTopBar(
     onEditRule: (EarnItRuleStore.Rule) -> Unit,
     onQuickPause: () -> Unit,
     onMorePauseOptions: () -> Unit,
+    onOpenStrictMode: () -> Unit,
     onDeleteRule: (EarnItRuleStore.Rule) -> Unit
 ) {
     Row(
@@ -308,15 +381,14 @@ private fun RuleDetailTopBar(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        TextButton(onClick = onBack) {
-            Text(text = "< Back")
-        }
+        EarnItBackButton(onBack)
         Text(text = "Rule Detail", style = MaterialTheme.typography.headlineSmall)
         RuleDetailOverflowMenu(
             actions = ruleDetailOverflowActions(rule),
             onEdit = { onEditRule(rule) },
             onQuickPause = onQuickPause,
             onMorePauseOptions = onMorePauseOptions,
+            onOpenStrictMode = onOpenStrictMode,
             onDelete = { onDeleteRule(rule) }
         )
     }
@@ -328,6 +400,7 @@ private fun RuleDetailOverflowMenu(
     onEdit: () -> Unit,
     onQuickPause: () -> Unit,
     onMorePauseOptions: () -> Unit,
+    onOpenStrictMode: () -> Unit,
     onDelete: () -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
@@ -354,6 +427,7 @@ private fun RuleDetailOverflowMenu(
                             RuleDetailOverflowAction.Edit -> onEdit()
                             RuleDetailOverflowAction.QuickPause -> onQuickPause()
                             RuleDetailOverflowAction.MorePauseOptions -> onMorePauseOptions()
+                            RuleDetailOverflowAction.StrictMode -> onOpenStrictMode()
                             RuleDetailOverflowAction.Delete -> onDelete()
                         }
                     }
@@ -446,15 +520,22 @@ private fun RuleManagementSurface(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            TextButton(onClick = onBack) {
-                Text(text = "< Back")
-            }
+            EarnItBackButton(onBack)
             Text(text = title, style = MaterialTheme.typography.headlineSmall)
             Box(modifier = Modifier.size(64.dp))
         }
         content()
     }
 }
+
+@Composable
+internal fun EarnItBackButton(onBack: () -> Unit) {
+    TextButton(onClick = onBack, modifier = Modifier.heightIn(min = 48.dp)) {
+        Text(text = EARNIT_BACK_LABEL)
+    }
+}
+
+internal const val EARNIT_BACK_LABEL = "< Back"
 
 @Composable
 private fun EditRuleGateCard(
@@ -899,6 +980,7 @@ internal fun ruleDetailOverflowActions(rule: EarnItRuleStore.Rule): List<RuleDet
             add(RuleDetailOverflowAction.QuickPause)
             add(RuleDetailOverflowAction.MorePauseOptions)
         }
+        add(RuleDetailOverflowAction.StrictMode)
         add(RuleDetailOverflowAction.Delete)
     }
 }
@@ -908,6 +990,7 @@ internal fun ruleDetailOverflowActionLabel(action: RuleDetailOverflowAction): St
         RuleDetailOverflowAction.Edit -> "Edit Rule"
         RuleDetailOverflowAction.QuickPause -> "Pause for 5 minutes"
         RuleDetailOverflowAction.MorePauseOptions -> "More pause options"
+        RuleDetailOverflowAction.StrictMode -> "Strict Mode"
         RuleDetailOverflowAction.Delete -> "Delete Rule"
     }
 }

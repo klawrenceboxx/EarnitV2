@@ -64,6 +64,36 @@ internal data class RuleBuilderExitDestination(
     val ruleDetailId: String? = null
 )
 
+internal enum class BlockedReviewAction { ViewStrictMode, CancelRequest, SystemBack }
+
+internal data class BlockedReviewNavigation(
+    val affectedRuleId: String?,
+    val discardUnsavedEdit: Boolean,
+    val removePendingRequest: Boolean,
+    val openStrictMode: Boolean,
+    val returnToRuleDetail: Boolean
+)
+
+internal fun blockedReviewNavigation(
+    action: BlockedReviewAction,
+    pendingRuleId: String?,
+    editingRuleId: String?
+): BlockedReviewNavigation {
+    val ruleId = pendingRuleId ?: editingRuleId
+    return when (action) {
+        BlockedReviewAction.ViewStrictMode -> BlockedReviewNavigation(ruleId, true, false, true, false)
+        BlockedReviewAction.CancelRequest, BlockedReviewAction.SystemBack -> BlockedReviewNavigation(ruleId, true, true, false, true)
+    }
+}
+
+internal enum class StrictModeReturnTarget { Settings, RuleDetail, Home }
+
+internal fun strictModeReturnTarget(returnToSettings: Boolean, returnRuleId: String?): StrictModeReturnTarget = when {
+    returnToSettings -> StrictModeReturnTarget.Settings
+    returnRuleId != null -> StrictModeReturnTarget.RuleDetail
+    else -> StrictModeReturnTarget.Home
+}
+
 internal fun firstStageBuilderExitDestination(
     entryContext: RuleBuilderEntryContext?,
     editingRuleId: String?
@@ -92,6 +122,12 @@ class MainActivity : ComponentActivity() {
     private var pauseExpirations by mutableStateOf(emptyMap<String, Long>())
     private lateinit var strictModeStore: StrictModeStore
     private var strictModeState by mutableStateOf(StrictModeState())
+    private lateinit var ruleStrictModeStore: GlobalStrictModeStore
+    private var globalStrictModeConfiguration by mutableStateOf<GlobalStrictModeConfiguration?>(null)
+    private var strictModeReturnRuleId by mutableStateOf<String?>(null)
+    private var strictModeReturnToSettings by mutableStateOf(false)
+    private var pendingStrictModeAction by mutableStateOf<PendingStrictModeAction?>(null)
+    private var strictModeActionMessage by mutableStateOf("Protection method not available yet. Your Rule was not changed.")
     private var editingRuleTemplate by mutableStateOf<EarnItRuleStore.Rule?>(null)
     private var builderEntryContext by mutableStateOf<RuleBuilderEntryContext?>(null)
     private var builderReturnRuleDetailId by mutableStateOf<String?>(null)
@@ -150,9 +186,39 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         strictModeStore = StrictModeStore(SharedPreferencesStrictModePersistence(this))
+        ruleStrictModeStore = GlobalStrictModeStore(SharedPreferencesStrictModeFoundationPersistence(this))
         deepWorkSession = DeepWorkStore.load(this)
-        firstLaunchComplete = isFirstLaunchComplete() || EarnItRuleStore.getRules(this).isNotEmpty()
+        val existingRules = EarnItRuleStore.getRules(this)
+        val legacyStrictMode = strictModeStore.state()
+        val migratedGlobal = ruleStrictModeStore.migrateToGlobal(legacyStrictMode)
+        if (migratedGlobal.lifecycle in setOf(RuleStrictModeLifecycle.DeactivationCounting, RuleStrictModeLifecycle.DeactivationReady) &&
+            ruleStrictModeStore.activePendingAction(GlobalStrictModeStore.GLOBAL_CONFIGURATION_ID) == null
+        ) ruleStrictModeStore.beginGlobalCountdownDeactivation()
+        firstLaunchComplete = isFirstLaunchComplete() || existingRules.isNotEmpty()
         refreshDashboardState()
+        val restorablePendingActions = ruleStrictModeStore.pendingActions().filter {
+            it.authorizationStatus !in setOf(
+                StrictModeAuthorizationStatus.Consumed,
+                StrictModeAuthorizationStatus.Cancelled,
+                StrictModeAuthorizationStatus.Expired,
+                StrictModeAuthorizationStatus.Invalid
+            )
+        }
+        (restorablePendingActions.firstOrNull { it.ruleId == GlobalStrictModeStore.GLOBAL_CONFIGURATION_ID }
+            ?: restorablePendingActions.firstOrNull())?.let { restored ->
+            pendingStrictModeAction = restored
+            strictModeReturnRuleId = restored.ruleId.takeUnless { it == GlobalStrictModeStore.GLOBAL_CONFIGURATION_ID }
+            refreshStrictModeState()
+            val restoredLifecycle = ruleStrictModeStore.globalConfiguration()?.lifecycle
+            if (restored.actionType == PendingStrictModeActionType.DisableStrictMode &&
+                restoredLifecycle in setOf(RuleStrictModeLifecycle.DeactivationCounting, RuleStrictModeLifecycle.DeactivationReady)
+            ) {
+                strictModeOpen = true
+            } else {
+                strictModeActionMessage = "A protected change is still in progress. Protection method not available yet; your Rule has not changed."
+                strictModeBlockedActionOpen = true
+            }
+        }
         handleNavigationIntent(intent)
         setContent {
             EarnitV2Theme {
@@ -213,6 +279,7 @@ class MainActivity : ComponentActivity() {
                             analyticsAppPackage = analyticsAppPackage,
                             strictModeOpen = strictModeOpen,
                             strictModeState = strictModeState,
+                            globalStrictModeConfiguration = globalStrictModeConfiguration,
                             ruleTypeSelectionOpen = ruleTypeSelectionOpen,
                             unavailableRuleType = unavailableRuleType,
                             deepWorkSession = deepWorkSession,
@@ -233,12 +300,19 @@ class MainActivity : ComponentActivity() {
                             onBackFromAnalyticsApp = { analyticsAppPackage = null },
                             onCloseSettings = { settingsOpen = false },
                             onOpenStrictMode = {
+                                strictModeReturnToSettings = settingsOpen
+                                strictModeReturnRuleId = selectedRuleDetailId
                                 settingsOpen = false
+                                refreshStrictModeState()
                                 strictModeOpen = true
                             },
                             onCloseStrictMode = {
                                 strictModeOpen = false
-                                settingsOpen = true
+                                when (strictModeReturnTarget(strictModeReturnToSettings, strictModeReturnRuleId)) {
+                                    StrictModeReturnTarget.Settings -> { settingsOpen = true; selectedRuleDetailId = null }
+                                    StrictModeReturnTarget.RuleDetail -> { settingsOpen = false; selectedRuleDetailId = strictModeReturnRuleId }
+                                    StrictModeReturnTarget.Home -> { settingsOpen = false; selectedRuleDetailId = null }
+                                }
                             },
                             onSaveStrictModeConfiguration = ::saveStrictModeConfiguration,
                             onBeginStrictModeActivation = ::beginStrictModeActivation,
@@ -305,13 +379,35 @@ class MainActivity : ComponentActivity() {
                         )
                         if (strictModeBlockedActionOpen) {
                             StrictModeProtectedActionDialog(
+                                message = strictModeActionMessage,
+                                dismissLabel = if (pendingStrictModeAction != null) "Cancel request" else "Close",
                                 onViewStrictMode = {
+                                    val navigation = blockedReviewNavigation(
+                                        BlockedReviewAction.ViewStrictMode,
+                                        pendingStrictModeAction?.ruleId ?: strictModeReturnRuleId,
+                                        editingRuleTemplate?.id
+                                    )
                                     strictModeBlockedActionOpen = false
+                                    if (navigation.discardUnsavedEdit && editingRuleTemplate != null) cancelEditingRule()
                                     selectedRuleDetailId = null
+                                    strictModeReturnRuleId = navigation.affectedRuleId
+                                    strictModeReturnToSettings = false
+                                    refreshStrictModeState()
                                     settingsOpen = false
-                                    strictModeOpen = true
+                                    strictModeOpen = navigation.openStrictMode
                                 },
-                                onClose = { strictModeBlockedActionOpen = false }
+                                onClose = {
+                                    val navigation = blockedReviewNavigation(
+                                        BlockedReviewAction.CancelRequest,
+                                        pendingStrictModeAction?.ruleId,
+                                        editingRuleTemplate?.id
+                                    )
+                                    if (navigation.removePendingRequest) pendingStrictModeAction?.let { ruleStrictModeStore.removeRequest(it.id) }
+                                    pendingStrictModeAction = null
+                                    strictModeBlockedActionOpen = false
+                                    if (navigation.discardUnsavedEdit && editingRuleTemplate != null) cancelEditingRule()
+                                    selectedRuleDetailId = if (navigation.returnToRuleDetail) navigation.affectedRuleId else null
+                                }
                             )
                         }
                     }
@@ -408,36 +504,67 @@ class MainActivity : ComponentActivity() {
 
     private fun refreshStrictModeState() {
         if (::strictModeStore.isInitialized) {
-            strictModeState = strictModeStore.state()
+            globalStrictModeConfiguration = ruleStrictModeStore.globalConfiguration()
+            strictModeState = globalStrictModeConfiguration?.toLegacyStrictModeState() ?: strictModeStore.state()
+            pendingStrictModeAction = ruleStrictModeStore.activePendingAction(GlobalStrictModeStore.GLOBAL_CONFIGURATION_ID)
+                ?: strictModeReturnRuleId?.let { ruleStrictModeStore.activePendingAction(it) }
         }
     }
 
     private fun saveStrictModeConfiguration(configuration: StrictModeConfiguration) {
-        strictModeState = strictModeStore.saveConfiguration(configuration)
+        // Setup is a draft until activation; the migrated global record is the only persisted source of truth.
+        strictModeState = strictModeState.copy(configuration = configuration)
     }
 
     private fun beginStrictModeActivation(configuration: StrictModeConfiguration) {
-        strictModeState = strictModeStore.beginActivation(configuration)
+        ruleStrictModeStore.requestGlobalActivation(
+            method = StrictModeProtectionMethod.Countdown,
+            delayMillis = StrictModeStore.ACTIVATION_GRACE_MILLIS,
+            deactivationWaitMillis = configuration.deactivationCountdownMillis
+        )
+        refreshStrictModeState()
     }
 
     private fun cancelStrictModeActivation() {
-        strictModeState = strictModeStore.cancelActivation()
+        ruleStrictModeStore.cancelGlobalActivation()
+        refreshStrictModeState()
     }
 
     private fun beginStrictModeDeactivation() {
-        strictModeState = strictModeStore.beginDeactivation()
+        when (val result = ruleStrictModeStore.beginGlobalCountdownDeactivation()) {
+            is PendingActionCreationResult.Created -> pendingStrictModeAction = result.action
+            is PendingActionCreationResult.AlreadyPending -> pendingStrictModeAction = result.action
+            is PendingActionCreationResult.Rejected -> {
+                strictModeActionMessage = result.message
+                strictModeBlockedActionOpen = true
+            }
+        }
+        refreshStrictModeState()
     }
 
     private fun cancelStrictModeDeactivation() {
-        strictModeState = strictModeStore.cancelDeactivation()
+        ruleStrictModeStore.cancelGlobalCountdownDeactivation()
+        pendingStrictModeAction = null
+        refreshStrictModeState()
     }
 
     private fun confirmStrictModeDeactivation() {
-        strictModeState = strictModeStore.confirmDeactivation()
+        when (val result = ruleStrictModeStore.confirmGlobalCountdownDeactivation()) {
+            is PendingActionValidation.Valid -> {
+                pendingStrictModeAction = null
+                refreshStrictModeState()
+            }
+            is PendingActionValidation.Invalid -> {
+                strictModeActionMessage = result.message
+                strictModeBlockedActionOpen = true
+            }
+        }
     }
 
     private fun keepStrictModeActive() {
-        strictModeState = strictModeStore.keepStrictModeActive()
+        ruleStrictModeStore.keepGlobalStrictModeActive()
+        pendingStrictModeAction = null
+        refreshStrictModeState()
     }
 
     private fun refreshLaunchableApps(force: Boolean = false) {
@@ -551,23 +678,11 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun startEditingRule(rule: EarnItRuleStore.Rule) {
-        refreshStrictModeState()
-        if (!StrictModePolicy.canEditRule(strictModeState, rule, pauseExpirations)) {
-            showStrictModeBlockedAction()
-            return
-        }
         startBuilder(rule = rule, entryContext = RuleBuilderEntryContext.Edit)
     }
 
     private fun startBuilder(rule: EarnItRuleStore.Rule, entryContext: RuleBuilderEntryContext) {
         if (entryContext == RuleBuilderEntryContext.Edit) refreshStrictModeState()
-        if (entryContext == RuleBuilderEntryContext.Edit &&
-            !StrictModePolicy.canEditRule(strictModeState, rule, pauseExpirations)
-        ) {
-            showStrictModeBlockedAction()
-            selectedRuleDetailId = rule.id
-            return
-        }
         settingsOpen = false
         selectedRuleDetailId = null
         ruleTypeSelectionOpen = false
@@ -790,8 +905,8 @@ class MainActivity : ComponentActivity() {
 
     private fun toggleRuleEnabled(rule: EarnItRuleStore.Rule) {
         refreshStrictModeState()
-        if (rule.enabled && !StrictModePolicy.canDisableRule(strictModeState, rule, pauseExpirations)) {
-            showStrictModeBlockedAction()
+        if (rule.enabled && isRuleProtected(rule)) {
+            createProtectedAction(rule, StrictModeActionDescriptor.Update(rule.id, rule.copy(enabled = false)))
             return
         }
         if (!rule.enabled) {
@@ -803,8 +918,8 @@ class MainActivity : ComponentActivity() {
 
     private fun pauseRuleFor(rule: EarnItRuleStore.Rule, durationMillis: Long, reason: String? = null) {
         refreshStrictModeState()
-        if (!StrictModePolicy.canPauseRule(strictModeState, rule, pauseExpirations)) {
-            showStrictModeBlockedAction()
+        if (isRuleProtected(rule)) {
+            createProtectedAction(rule, StrictModeActionDescriptor.Pause(rule.id, durationMillis, reason))
             return
         }
         val expiresAt = System.currentTimeMillis() + durationMillis.coerceAtLeast(1L)
@@ -832,8 +947,8 @@ class MainActivity : ComponentActivity() {
 
     private fun deleteRule(rule: EarnItRuleStore.Rule) {
         refreshStrictModeState()
-        if (!StrictModePolicy.canDeleteRule(strictModeState, rule, pauseExpirations)) {
-            showStrictModeBlockedAction()
+        if (isRuleProtected(rule)) {
+            createProtectedAction(rule, StrictModeActionDescriptor.Delete(rule.id))
             return
         }
         if (selectedRuleDetailId == rule.id) {
@@ -849,6 +964,27 @@ class MainActivity : ComponentActivity() {
 
     private fun showStrictModeBlockedAction() {
         refreshStrictModeState()
+        strictModeActionMessage = "Less-restrictive changes require the selected protection method. No change has been applied."
+        strictModeBlockedActionOpen = true
+    }
+
+    private fun isRuleProtected(rule: EarnItRuleStore.Rule): Boolean {
+        return globalStrictModeConfiguration?.protectsLessRestrictiveChanges() == true
+    }
+
+    private fun createProtectedAction(rule: EarnItRuleStore.Rule, descriptor: StrictModeActionDescriptor) {
+        when (val result = ruleStrictModeStore.createPendingAction(rule, descriptor)) {
+            is PendingActionCreationResult.Created -> {
+                pendingStrictModeAction = result.action
+                strictModeActionMessage = "Your change is saved as a pending request. Protection method not available yet, so the Rule was not changed."
+            }
+            is PendingActionCreationResult.AlreadyPending -> {
+                pendingStrictModeAction = result.action
+                strictModeActionMessage = "Another change is already in progress for this Rule. Cancel it before starting a different change."
+            }
+            is PendingActionCreationResult.Rejected -> strictModeActionMessage = result.message
+        }
+        strictModeReturnRuleId = rule.id
         strictModeBlockedActionOpen = true
     }
 
@@ -968,6 +1104,13 @@ class MainActivity : ComponentActivity() {
             productiveApps = if (editingRule.type == EarnItRuleStore.RuleType.EarnRewardTime) productiveApps else emptyList(),
             requirements = if (editingRule.type == EarnItRuleStore.RuleType.CompleteToUnlock) selectedRequirements else emptyList()
         )
+        if (builderEntryContext == RuleBuilderEntryContext.Edit && isRuleProtected(editingRule)) {
+            val comparison = RuleRestrictionPolicy.compare(editingRule, rule)
+            if (comparison.classification == RestrictionClassification.LessRestrictive) {
+                createProtectedAction(editingRule, StrictModeActionDescriptor.Update(editingRule.id, rule))
+                return
+            }
+        }
         EarnItRuleStore.saveRule(this, rule)
         editingRuleTemplate = null
         builderEntryContext = null
@@ -1060,6 +1203,29 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+private fun GlobalStrictModeConfiguration.toLegacyStrictModeState(): StrictModeState {
+    return StrictModeState(
+        lifecycleState = when (lifecycle) {
+            RuleStrictModeLifecycle.Disabled -> StrictModeLifecycleState.Inactive
+            RuleStrictModeLifecycle.PendingActivation -> StrictModeLifecycleState.Activating
+            RuleStrictModeLifecycle.Active, RuleStrictModeLifecycle.Invalid -> StrictModeLifecycleState.Active
+            RuleStrictModeLifecycle.DeactivationCounting -> StrictModeLifecycleState.DeactivationCounting
+            RuleStrictModeLifecycle.DeactivationReady -> StrictModeLifecycleState.DeactivationReady
+        },
+        configuration = StrictModeConfiguration(
+            durationType = StrictModeDurationType.Indefinite,
+            timedDurationMillis = null,
+            deactivationMethod = StrictModeDeactivationMethod.Countdown,
+            deactivationCountdownMillis = deactivationWaitMillis ?: GlobalStrictModeStore.DEFAULT_COUNTDOWN_MILLIS
+        ),
+        activationGraceStartedAtMillis = activationRequestedAtMillis,
+        activationGraceEndsAtMillis = activeFromMillis,
+        activatedAtMillis = activeFromMillis?.takeIf { lifecycle != RuleStrictModeLifecycle.PendingActivation },
+        deactivationStartedAtMillis = deactivationStartedAtMillis,
+        deactivationAvailableAtMillis = deactivationAvailableAtMillis
+    )
+}
+
 internal fun resolveRewardAppPickerSelection(
     originalPackages: Set<String>,
     stagedPackages: Set<String>,
@@ -1102,6 +1268,7 @@ internal fun Dashboard(
     pauseExpirations: Map<String, Long>,
     strictModeOpen: Boolean,
     strictModeState: StrictModeState,
+    globalStrictModeConfiguration: GlobalStrictModeConfiguration?,
     selectedRuleDetailId: String?,
     settingsOpen: Boolean,
     analyticsOpen: Boolean,
@@ -1198,8 +1365,7 @@ internal fun Dashboard(
     }
     LaunchedEffect(strictModeState.lifecycleState, strictModeState.activationGraceEndsAtMillis, strictModeState.expiresAtMillis) {
         while (strictModeState.lifecycleState == StrictModeLifecycleState.Activating ||
-            (strictModeState.lifecycleState.isStrictModeProtecting() && strictModeState.expiresAtMillis != null) ||
-            strictModeState.lifecycleState == StrictModeLifecycleState.DeactivationCounting
+            (strictModeState.lifecycleState.isStrictModeProtecting() && strictModeState.expiresAtMillis != null)
         ) {
             delay(1_000)
             onStrictModeTick()
@@ -1233,13 +1399,7 @@ internal fun Dashboard(
         } else if (strictModeOpen) {
             EarnItStrictModeScreen(
                 state = strictModeState,
-                enabledRuleCount = ruleStates.count { it.rule.enabled },
-                disabledRuleCount = ruleStates.count { !it.rule.enabled },
-                protectionSummary = strictModeRuleProtectionSummary(
-                    strictModeState = strictModeState,
-                    rules = ruleStates.map { it.rule },
-                    pauseExpirations = pauseExpirations
-                ),
+                foundationLifecycle = globalStrictModeConfiguration?.lifecycle,
                 onBack = onCloseStrictMode,
                 onSaveConfiguration = onSaveStrictModeConfiguration,
                 onBeginActivation = onBeginStrictModeActivation,
@@ -1296,10 +1456,13 @@ internal fun Dashboard(
                 onPauseRuleFor = onPauseRuleFor,
                 onResumeRule = onResumeRule,
                 isProtectedByStrictMode = StrictModePolicy.isRuleProtected(
-                    strictModeState = strictModeState,
-                    rule = selectedHomeRule.rule,
-                    pauseExpirations = pauseExpirations
+                    strictModeState = globalStrictModeConfiguration?.toLegacyStrictModeState()
+                        ?: StrictModeState(),
+                    rule = selectedHomeRule.rule
                 ),
+                strictModeConfiguration = globalStrictModeConfiguration,
+                onOpenStrictMode = onOpenStrictMode,
+                onStrictModeTick = onStrictModeTick,
                 onProtectedActionBlocked = onStrictModeBlockedAction,
                 onDeleteRule = { rule ->
                     onBackFromRuleDetail()
@@ -1771,6 +1934,7 @@ fun DashboardPreview() {
             pauseExpirations = emptyMap(),
             strictModeOpen = false,
             strictModeState = StrictModeState(),
+            globalStrictModeConfiguration = null,
             selectedRuleDetailId = null,
             settingsOpen = false,
             analyticsOpen = false,

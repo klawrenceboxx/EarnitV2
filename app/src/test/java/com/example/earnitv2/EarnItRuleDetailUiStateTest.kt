@@ -14,6 +14,7 @@ class EarnItRuleDetailUiStateTest {
                 RuleDetailOverflowAction.Edit,
                 RuleDetailOverflowAction.QuickPause,
                 RuleDetailOverflowAction.MorePauseOptions,
+                RuleDetailOverflowAction.StrictMode,
                 RuleDetailOverflowAction.Delete
             ),
             ruleDetailOverflowActions(earnRule(enabled = true))
@@ -25,13 +26,14 @@ class EarnItRuleDetailUiStateTest {
         assertEquals("Edit Rule", ruleDetailOverflowActionLabel(RuleDetailOverflowAction.Edit))
         assertEquals("Pause for 5 minutes", ruleDetailOverflowActionLabel(RuleDetailOverflowAction.QuickPause))
         assertEquals("More pause options", ruleDetailOverflowActionLabel(RuleDetailOverflowAction.MorePauseOptions))
+        assertEquals("Strict Mode", ruleDetailOverflowActionLabel(RuleDetailOverflowAction.StrictMode))
         assertEquals("Delete Rule", ruleDetailOverflowActionLabel(RuleDetailOverflowAction.Delete))
     }
 
     @Test
     fun pausedOverflowMenu_containsEditDeleteOnly() {
         assertEquals(
-            listOf(RuleDetailOverflowAction.Edit, RuleDetailOverflowAction.Delete),
+            listOf(RuleDetailOverflowAction.Edit, RuleDetailOverflowAction.StrictMode, RuleDetailOverflowAction.Delete),
             ruleDetailOverflowActions(earnRule(enabled = false))
         )
     }
