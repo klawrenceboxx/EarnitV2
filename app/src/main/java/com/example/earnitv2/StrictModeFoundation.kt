@@ -115,7 +115,14 @@ internal object RuleRestrictionPolicy {
 }
 
 internal enum class RuleStrictModeLifecycle { Disabled, PendingActivation, Active, DeactivationCounting, DeactivationReady, Invalid }
-internal enum class StrictModeProtectionMethod { Countdown, Charger, AccountabilityPin }
+internal enum class StrictModeProtectionMethod {
+    Countdown, Charger, Pin;
+
+    companion object {
+        @Deprecated("Use Pin", ReplaceWith("Pin"))
+        val AccountabilityPin = Pin
+    }
+}
 
 internal data class GlobalStrictModeConfiguration(
     val ruleId: String,
@@ -133,6 +140,7 @@ internal data class GlobalStrictModeConfiguration(
     val configurationComplete: Boolean get() = when (protectionMethod) {
         StrictModeProtectionMethod.Countdown -> (deactivationWaitMillis ?: 0L) > 0L
         StrictModeProtectionMethod.Charger -> true
+        StrictModeProtectionMethod.Pin -> (deactivationWaitMillis ?: 0L) > 0L
         else -> false
     }
     fun protectsLessRestrictiveChanges(): Boolean = lifecycle in setOf(
@@ -194,7 +202,7 @@ internal class DefaultStrictModeAuthorizationMethodProvider : StrictModeAuthoriz
         when (method) {
             StrictModeProtectionMethod.Countdown -> CountdownStrictModeMethodHandler
             StrictModeProtectionMethod.Charger -> ChargerStrictModeMethodHandler
-            StrictModeProtectionMethod.AccountabilityPin -> UnavailableStrictModeMethodHandler(method)
+            StrictModeProtectionMethod.Pin -> PinStrictModeMethodHandler
         }
     }
     override fun handlerFor(method: StrictModeProtectionMethod): StrictModeAuthorizationMethodHandler? = handlers[method]
@@ -211,6 +219,15 @@ private object ChargerStrictModeMethodHandler : StrictModeAuthorizationMethodHan
 
 private object CountdownStrictModeMethodHandler : StrictModeAuthorizationMethodHandler {
     override val method = StrictModeProtectionMethod.Countdown
+    override fun isConfigurationComplete(configuration: RuleStrictModeConfiguration) =
+        configuration.protectionMethod == method && (configuration.deactivationWaitMillis ?: 0L) > 0L
+    override fun begin(request: PendingStrictModeAction) = StrictModeAuthorizationStatus.AwaitingAuthorization
+    override fun restore(request: PendingStrictModeAction) = request.authorizationStatus
+    override fun cancel(request: PendingStrictModeAction) = Unit
+}
+
+private object PinStrictModeMethodHandler : StrictModeAuthorizationMethodHandler {
+    override val method = StrictModeProtectionMethod.Pin
     override fun isConfigurationComplete(configuration: RuleStrictModeConfiguration) =
         configuration.protectionMethod == method && (configuration.deactivationWaitMillis ?: 0L) > 0L
     override fun begin(request: PendingStrictModeAction) = StrictModeAuthorizationStatus.AwaitingAuthorization
@@ -268,6 +285,7 @@ internal sealed class StrictModeMethodChangeResult {
 internal class GlobalStrictModeStore(
     private val persistence: StrictModeFoundationPersistence,
     private val authorizationMethods: StrictModeAuthorizationMethodProvider = DefaultStrictModeAuthorizationMethodProvider(),
+    private val pinStore: StrictModePinStore? = null,
     private val nowMillis: () -> Long = System::currentTimeMillis
 ) {
     fun configurations(): Map<String, RuleStrictModeConfiguration> {
@@ -396,12 +414,13 @@ internal class GlobalStrictModeStore(
         ruleId: String,
         method: StrictModeProtectionMethod,
         delayMillis: Long,
-        deactivationWaitMillis: Long? = if (method == StrictModeProtectionMethod.Countdown) DEFAULT_COUNTDOWN_MILLIS else null
+        deactivationWaitMillis: Long? = if (method in setOf(StrictModeProtectionMethod.Countdown, StrictModeProtectionMethod.Pin)) DEFAULT_COUNTDOWN_MILLIS else null
     ): RuleStrictModeConfiguration {
         require(delayMillis >= 0L)
-        require(method != StrictModeProtectionMethod.Countdown || (deactivationWaitMillis ?: 0L) > 0L)
         val existing = configuration(ruleId)
         if (existing?.lifecycle == RuleStrictModeLifecycle.Active || existing?.lifecycle == RuleStrictModeLifecycle.PendingActivation) return existing
+        require(method !in setOf(StrictModeProtectionMethod.Countdown, StrictModeProtectionMethod.Pin) || (deactivationWaitMillis ?: 0L) > 0L)
+        require(method != StrictModeProtectionMethod.Pin || pinStore?.hasPin() == true)
         val now = nowMillis()
         val activeFrom = safeAdd(now, delayMillis) ?: Long.MAX_VALUE
         val config = RuleStrictModeConfiguration(
@@ -506,6 +525,13 @@ internal class GlobalStrictModeStore(
     fun beginGlobalDeactivation(chargingState: ChargingState? = null): PendingActionCreationResult {
         val config = globalConfiguration() ?: return PendingActionCreationResult.Rejected("Strict Mode is not configured.")
         if (config.protectionMethod == StrictModeProtectionMethod.Countdown) return beginGlobalCountdownDeactivation()
+        if (config.protectionMethod == StrictModeProtectionMethod.Pin) {
+            if (config.lifecycle != RuleStrictModeLifecycle.Active) {
+                return activePendingAction(GLOBAL_CONFIGURATION_ID)?.let(PendingActionCreationResult::AlreadyPending)
+                    ?: PendingActionCreationResult.Rejected("Strict Mode is not ready to deactivate.")
+            }
+            return createGlobalPendingAction(StrictModeActionDescriptor.Disable(GLOBAL_CONFIGURATION_ID))
+        }
         if (config.protectionMethod != StrictModeProtectionMethod.Charger) {
             return PendingActionCreationResult.Rejected("This protection method is not available.")
         }
@@ -527,6 +553,69 @@ internal class GlobalStrictModeStore(
         return result
     }
 
+    fun verifyPin(requestId: String, pin: CharArray): PinVerificationResult {
+        val action = pendingActions().firstOrNull { it.id == requestId }
+            ?: return PinVerificationResult.Rejected("This request no longer exists. Begin again.")
+        val config = globalConfiguration() ?: configuration(action.ruleId)
+            ?: return PinVerificationResult.Rejected("Strict Mode is not configured.")
+        val requestValid = action.authorizationMethod == StrictModeProtectionMethod.Pin &&
+            action.authorizationStatus == StrictModeAuthorizationStatus.AwaitingAuthorization &&
+            action.expiresAtMillis > nowMillis() && config.protectionMethod == StrictModeProtectionMethod.Pin &&
+            config.protectsLessRestrictiveChanges() &&
+            StrictModeFingerprint.configuration(config) == action.originalStrictModeFingerprint
+        if (!requestValid || pinStore?.hasPin() != true) {
+            cancelRequest(requestId)
+            return PinVerificationResult.Rejected("The PIN request could not be verified. Begin again.")
+        }
+        if (!pinStore.verify(pin)) return PinVerificationResult.Incorrect
+
+        if (action.actionType == PendingStrictModeActionType.DisableStrictMode && action.ruleId == GLOBAL_CONFIGURATION_ID) {
+            val wait = config.deactivationWaitMillis?.takeIf { it > 0L }
+                ?: return PinVerificationResult.Rejected("The deactivation countdown needs attention.")
+            val now = nowMillis()
+            val deadline = safeAdd(now, wait)
+                ?: return PinVerificationResult.Rejected("The deactivation countdown needs attention.")
+            val completionWindow = safeAdd(deadline, PIN_COUNTDOWN_COMPLETION_GRACE_MILLIS) ?: Long.MAX_VALUE
+            updatePending(requestId) {
+                it.copy(
+                    authorizationStatus = StrictModeAuthorizationStatus.Authorized,
+                    expiresAtMillis = maxOf(it.expiresAtMillis, completionWindow)
+                )
+            }
+            putConfiguration(config.copy(
+                lifecycle = RuleStrictModeLifecycle.DeactivationCounting,
+                deactivationStartedAtMillis = now,
+                deactivationAvailableAtMillis = deadline,
+                updatedAtMillis = now
+            ))
+            return PinVerificationResult.Verified(action, countdownStarted = true)
+        }
+
+        val authorized = markAuthorized(requestId)
+            ?: return PinVerificationResult.Rejected("This request no longer exists. Begin again.")
+        return PinVerificationResult.Verified(authorized, countdownStarted = false)
+    }
+
+    fun completePinDeactivationIfReady(): PendingActionValidation? {
+        val config = globalConfiguration() ?: return null
+        if (config.protectionMethod != StrictModeProtectionMethod.Pin ||
+            config.lifecycle != RuleStrictModeLifecycle.DeactivationReady) return null
+        val action = activePendingAction(GLOBAL_CONFIGURATION_ID)
+        val valid = action?.actionType == PendingStrictModeActionType.DisableStrictMode &&
+            action.authorizationMethod == StrictModeProtectionMethod.Pin &&
+            action.authorizationStatus == StrictModeAuthorizationStatus.Authorized &&
+            action.expiresAtMillis > nowMillis() &&
+            StrictModeFingerprint.configuration(config) == action.originalStrictModeFingerprint
+        if (!valid) {
+            action?.let { cancelRequest(it.id) }
+            return PendingActionValidation.Invalid("The deactivation request could not be completed. Strict Mode remains active.")
+        }
+        disableAfterConfirmation(GLOBAL_CONFIGURATION_ID)
+        updatePending(action.id) { it.copy(authorizationStatus = StrictModeAuthorizationStatus.Consumed, consumedAtMillis = nowMillis()) }
+        cancelOutstandingProtectedActions(action.id)
+        return PendingActionValidation.Valid(action)
+    }
+
     fun requestGlobalMethodChange(
         newMethod: StrictModeProtectionMethod,
         newDurationMillis: Long?,
@@ -539,7 +628,7 @@ internal class GlobalStrictModeStore(
         val proposedValid = when (newMethod) {
             StrictModeProtectionMethod.Countdown -> (newDurationMillis ?: 0L) > 0L
             StrictModeProtectionMethod.Charger -> newDurationMillis == null
-            StrictModeProtectionMethod.AccountabilityPin -> false
+            StrictModeProtectionMethod.Pin -> (newDurationMillis ?: 0L) > 0L && pinStore?.hasPin() == true
         }
         if (!proposedValid) return StrictModeMethodChangeResult.Rejected("That protection method is not available.")
         val currentDuration = current.deactivationWaitMillis
@@ -849,7 +938,7 @@ internal class GlobalStrictModeStore(
         putConfiguration(config.copy(
             protectionMethod = method,
             lifecycle = RuleStrictModeLifecycle.Active,
-            deactivationWaitMillis = if (method == StrictModeProtectionMethod.Countdown) durationMillis ?: config.deactivationWaitMillis ?: DEFAULT_COUNTDOWN_MILLIS else null,
+            deactivationWaitMillis = if (method in setOf(StrictModeProtectionMethod.Countdown, StrictModeProtectionMethod.Pin)) durationMillis ?: config.deactivationWaitMillis ?: DEFAULT_COUNTDOWN_MILLIS else null,
             deactivationStartedAtMillis = null,
             deactivationAvailableAtMillis = null,
             configurationVersion = config.configurationVersion + 1,
@@ -888,7 +977,7 @@ internal class GlobalStrictModeStore(
         if (config.lifecycle == RuleStrictModeLifecycle.PendingActivation && now >= requireNotNull(config.activeFromMillis)) {
             return normalize(config.copy(lifecycle = RuleStrictModeLifecycle.Active, updatedAtMillis = now))
         }
-        if (config.lifecycle == RuleStrictModeLifecycle.DeactivationCounting && config.protectionMethod == StrictModeProtectionMethod.Countdown) {
+        if (config.lifecycle == RuleStrictModeLifecycle.DeactivationCounting && config.protectionMethod in setOf(StrictModeProtectionMethod.Countdown, StrictModeProtectionMethod.Pin)) {
             val started = config.deactivationStartedAtMillis
             val available = config.deactivationAvailableAtMillis
             if (started == null || available == null || available < started) return config.copy(lifecycle = RuleStrictModeLifecycle.Invalid, updatedAtMillis = now)
@@ -896,7 +985,8 @@ internal class GlobalStrictModeStore(
         }
         if (config.lifecycle == RuleStrictModeLifecycle.Active || config.lifecycle == RuleStrictModeLifecycle.DeactivationCounting || config.lifecycle == RuleStrictModeLifecycle.DeactivationReady) {
             val handler = config.protectionMethod?.let(authorizationMethods::handlerFor)
-            if (handler == null || !handler.isConfigurationComplete(config)) {
+            if (handler == null || !handler.isConfigurationComplete(config) ||
+                (config.protectionMethod == StrictModeProtectionMethod.Pin && pinStore?.hasPin() != true)) {
                 return config.copy(lifecycle = RuleStrictModeLifecycle.Invalid, updatedAtMillis = now)
             }
         }
@@ -1032,6 +1122,7 @@ internal class GlobalStrictModeStore(
         const val REQUEST_EXPIRY_MILLIS = 7L * 24L * 60L * 60_000L
         const val AUTHORIZATION_VALIDITY_MILLIS = 5L * 60_000L
         const val DEFAULT_COUNTDOWN_MILLIS = 10L * 60_000L
+        private const val PIN_COUNTDOWN_COMPLETION_GRACE_MILLIS = 24L * 60L * 60_000L
         private val terminalStatuses = setOf(StrictModeAuthorizationStatus.Consumed, StrictModeAuthorizationStatus.Cancelled, StrictModeAuthorizationStatus.Expired, StrictModeAuthorizationStatus.Invalid)
     }
 }
@@ -1114,6 +1205,7 @@ private object StrictModeFoundationCodec {
     private fun List<String>.long(index: Int) = getOrNull(index)?.toLongOrNull()
     private fun decodeProtectionMethod(value: String): StrictModeProtectionMethod? = when (value) {
         "ChargerWait" -> StrictModeProtectionMethod.Charger
+        "AccountabilityPin" -> StrictModeProtectionMethod.Pin
         else -> StrictModeProtectionMethod.entries.firstOrNull { it.name == value }
     }
 }

@@ -316,7 +316,7 @@ internal class StrictModeStore(
     companion object {
         const val ACTIVATION_GRACE_MILLIS = 30_000L
         const val MAX_TIMED_DURATION_MILLIS = 30L * 24L * 60L * 60_000L
-        const val MAX_DEACTIVATION_COUNTDOWN_MILLIS = 24L * 60L * 60_000L
+        const val MAX_DEACTIVATION_COUNTDOWN_MILLIS = 30L * 24L * 60L * 60_000L
         private const val KEY_LIFECYCLE = "lifecycle"
         private const val KEY_DURATION_TYPE = "duration_type"
         private const val KEY_TIMED_DURATION_MILLIS = "timed_duration_millis"

@@ -3,6 +3,7 @@ package com.example.earnitv2
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.layout.Arrangement
@@ -50,6 +51,8 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import java.text.SimpleDateFormat
@@ -73,7 +76,7 @@ internal fun EarnItStrictModeScreen(
     chargingState: ChargingState = ChargingState(false, false),
     onBack: () -> Unit,
     onSaveConfiguration: (StrictModeConfiguration) -> Unit,
-    onBeginActivation: (StrictModeConfiguration, StrictModeProtectionMethod) -> Unit,
+    onBeginActivation: (StrictModeConfiguration, StrictModeProtectionMethod, String?) -> Unit,
     onCancelActivation: () -> Unit,
     onBeginDeactivation: () -> Unit,
     onCancelDeactivation: () -> Unit,
@@ -81,12 +84,17 @@ internal fun EarnItStrictModeScreen(
     onKeepStrictModeActive: () -> Unit,
     onTick: () -> Unit,
     onAuthorizeCharger: () -> Unit = {},
+    onVerifyPin: (String) -> PinVerificationResult = { PinVerificationResult.Rejected("PIN verification is unavailable.") },
     onConfirmProtectedAction: () -> Unit = {},
     onCancelProtectedRequest: () -> Unit = {},
-    onRequestMethodChange: (StrictModeProtectionMethod, Long?) -> Unit = { _, _ -> },
+    onRequestMethodChange: (StrictModeProtectionMethod, Long?, String?) -> Unit = { _, _, _ -> },
     modifier: Modifier = Modifier
 ) {
-    var setup by remember(state.lifecycleState) { mutableStateOf(StrictModeSetupState.from(state.configuration)) }
+    var setup by remember(state.lifecycleState) {
+        mutableStateOf(StrictModeSetupState.from(state.configuration).copy(
+            protectionMethod = globalConfiguration?.protectionMethod ?: StrictModeProtectionMethod.Charger
+        ))
+    }
     var step by remember(state.lifecycleState) { mutableStateOf(StrictModeScreenStep.Setup) }
     var activationCountdownNowMillis by remember(state.activationGraceEndsAtMillis) {
         mutableStateOf(System.currentTimeMillis())
@@ -136,13 +144,29 @@ internal fun EarnItStrictModeScreen(
                 onCancel = onCancelProtectedRequest,
                 onKeepStrictModeActive = onKeepStrictModeActive
             )
+        } else if (pendingAction?.authorizationMethod == StrictModeProtectionMethod.Pin &&
+            pendingAction.authorizationStatus == StrictModeAuthorizationStatus.AwaitingAuthorization) {
+            PinAuthorization(
+                action = pendingAction,
+                onVerify = onVerifyPin,
+                onCancel = onCancelProtectedRequest
+            )
+        } else if (pendingAction?.authorizationMethod == StrictModeProtectionMethod.Pin &&
+            pendingAction.authorizationStatus == StrictModeAuthorizationStatus.AwaitingFinalConfirmation) {
+            ChargerFinalConfirmation(
+                action = pendingAction,
+                onConfirm = onConfirmProtectedAction,
+                onBack = {},
+                onKeepStrictModeActive = onKeepStrictModeActive,
+                onCancel = onCancelProtectedRequest
+            )
         } else when (state.lifecycleState) {
             StrictModeLifecycleState.Inactive -> {
                 if (step == StrictModeScreenStep.Review) {
                     StrictModeReview(
                         setup = setup,
                         onBack = logicalBack,
-                        onActivate = { onBeginActivation(setup.toConfiguration(), setup.protectionMethod) }
+                        onActivate = { onBeginActivation(setup.toConfiguration(), setup.protectionMethod, setup.pin.takeIf { setup.protectionMethod == StrictModeProtectionMethod.Pin }) }
                     )
                 } else {
                     StrictModeSetup(
@@ -305,21 +329,8 @@ private fun StrictModeSetup(
             title = "Turn off with",
             supportingText = "Choose how you'll be able to deactivate Strict Mode."
         )
-        CountdownMethodCard(
-            setup = setup,
-            onSetupChange = onSetupChange,
-            title = "Countdown",
-            description = "Wait for a chosen period before Strict Mode can be deactivated.",
-            recommended = true
-        )
-        if (setup.protectionMethod == StrictModeProtectionMethod.Countdown && !setup.countdownDurationValid) {
-            Text(text = "Choose a countdown from 1 minute to 24 hours.", style = MaterialTheme.typography.bodySmall)
-        }
         ChargerMethodCard(setup, onSetupChange)
-        UnavailableMethodRow(
-            title = "PIN",
-            description = "Require a PIN before deactivation."
-        )
+        PinMethodCard(setup, onSetupChange)
     }
     StrictModeCard {
         SectionHeading(
@@ -625,7 +636,11 @@ private fun ChargerMethodCard(setup: StrictModeSetupState, onSetupChange: (Stric
     val selected = setup.protectionMethod == StrictModeProtectionMethod.Charger
     Surface(
         modifier = Modifier.fillMaxWidth().selectable(selected = selected, role = Role.RadioButton) {
-            onSetupChange(setup.copy(protectionMethod = StrictModeProtectionMethod.Charger))
+            onSetupChange(setup.copy(
+                protectionMethod = StrictModeProtectionMethod.Charger,
+                pin = "",
+                pinConfirmation = ""
+            ))
         },
         shape = RoundedCornerShape(16.dp),
         color = if (selected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = .12f) else MaterialTheme.colorScheme.surface,
@@ -646,6 +661,103 @@ private fun ChargerMethodCard(setup: StrictModeSetupState, onSetupChange: (Stric
         }
     }
 }
+
+@Composable
+private fun PinMethodCard(setup: StrictModeSetupState, onSetupChange: (StrictModeSetupState) -> Unit) {
+    val selected = setup.protectionMethod == StrictModeProtectionMethod.Pin
+    Surface(
+        modifier = Modifier.fillMaxWidth().selectable(selected = selected, role = Role.RadioButton) {
+            val duration = setup.deactivationCountdownMillis.takeIf { current ->
+                pinCountdownPresets().any { it.second == current }
+            } ?: pinCountdownPresets().first().second
+            onSetupChange(setup.copy(
+                protectionMethod = StrictModeProtectionMethod.Pin,
+                deactivationCountdownMillis = duration,
+                countdownCustomVisible = false
+            ))
+        },
+        shape = RoundedCornerShape(16.dp),
+        color = if (selected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = .12f) else MaterialTheme.colorScheme.surface,
+        border = BorderStroke(if (selected) 2.dp else 1.dp, if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant)
+    ) {
+        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                SymbolBadge(symbol = "#", selected = selected)
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(text = "Enter PIN", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        text = "Verify your PIN before the deactivation countdown begins.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            if (selected) {
+                OutlinedTextField(
+                    value = setup.pin,
+                    onValueChange = { onSetupChange(setup.copy(pin = it.numericPinInput())) },
+                    label = { Text("Create PIN") },
+                    supportingText = { Text("4–8 digits") },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = setup.pinConfirmation,
+                    onValueChange = { onSetupChange(setup.copy(pinConfirmation = it.numericPinInput())) },
+                    label = { Text("Confirm PIN") },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                    isError = setup.pinConfirmation.isNotEmpty() && setup.pin != setup.pinConfirmation,
+                    supportingText = {
+                        if (setup.pinConfirmation.isNotEmpty() && setup.pin != setup.pinConfirmation) Text("PINs do not match")
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Text(text = "Deactivation wait", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    pinCountdownPresets().forEach { (label, millis) ->
+                        ChoiceChip(
+                            label = label,
+                            selected = setup.deactivationCountdownMillis == millis && !setup.countdownCustomVisible,
+                            onClick = { onSetupChange(setup.copy(deactivationCountdownMillis = millis, countdownCustomVisible = false)) },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+                ChoiceChip(
+                    label = "Custom",
+                    selected = setup.countdownCustomVisible,
+                    onClick = { if (!setup.countdownCustomVisible) onSetupChange(setup.chooseCustomCountdown()) },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                if (setup.countdownCustomVisible) {
+                    CustomDurationInput(
+                        value = setup.customCountdownMinutes,
+                        label = "Custom minutes",
+                        maxValue = StrictModeStore.MAX_DEACTIVATION_COUNTDOWN_MILLIS / 60_000L,
+                        onValueChange = { onSetupChange(setup.editCustomCountdownDraft(it)) },
+                        onUse = { minutes -> onSetupChange(setup.copy(
+                            deactivationCountdownMillis = minutes * 60_000L,
+                            customCountdownMinutes = minutes.toString(),
+                            countdownCustomVisible = true
+                        )) }
+                    )
+                }
+            }
+        }
+    }
+}
+
+private fun String.numericPinInput(): String = filter(Char::isDigit).take(8)
+
+internal fun pinCountdownPresets() = listOf(
+    "1 hr" to 60L * 60_000L,
+    "24 hrs" to 24L * 60L * 60_000L,
+    "7 days" to 7L * 24L * 60L * 60_000L
+)
 
 @Composable
 private fun UnavailableMethodRow(
@@ -712,15 +824,18 @@ private fun StrictModeReview(
         )
         HorizontalDivider()
         ReviewRow(
-            symbol = if (setup.protectionMethod == StrictModeProtectionMethod.Charger) "\u26A1" else "\u23F1",
+            symbol = if (setup.protectionMethod == StrictModeProtectionMethod.Charger) "\u26A1" else "#",
             label = "Turn off with",
-            value = if (setup.protectionMethod == StrictModeProtectionMethod.Charger) "Charger" else "Countdown",
-            supportingValue = if (setup.protectionMethod == StrictModeProtectionMethod.Charger) "Physical charger required" else durationLabel(configuration.deactivationCountdownMillis)
+            value = if (setup.protectionMethod == StrictModeProtectionMethod.Charger) "Plug in charger" else "Enter PIN",
+            supportingValue = if (setup.protectionMethod == StrictModeProtectionMethod.Charger) "Physical charger required" else "${durationLabel(configuration.deactivationCountdownMillis)} wait after verification"
         )
     }
     if (setup.protectionMethod == StrictModeProtectionMethod.Charger) StrictModeCard {
         Text(text = "All Rules will be protected.", style = MaterialTheme.typography.titleMedium)
         Text(text = "1. Connect your phone to a charger.\n2. Press Continue.\n3. Confirm the requested change.")
+    } else if (setup.protectionMethod == StrictModeProtectionMethod.Pin) StrictModeCard {
+        Text(text = "All Rules will be protected.", style = MaterialTheme.typography.titleMedium)
+        Text(text = "1. Enter your PIN once.\n2. Wait for the countdown.\n3. Strict Mode turns off automatically.")
     }
     StrictModeCard {
         ReviewNoticeRow(symbol = "\u25A1", text = "Strict Mode activates after a 30-second review period.")
@@ -834,9 +949,11 @@ private fun StrictModeActivationCountdown(
                     DecorativeSymbol(text = "\u25C7", style = MaterialTheme.typography.displaySmall)
                 }
                 Text(
-                    text = if (protectionMethod == StrictModeProtectionMethod.Charger) {
-                        "After activation, all Rules are protected. A charger will be required for protected changes."
-                    } else "After activation, all Rules are protected from weaker edits, pausing, and deletion. Countdown \u00B7 ${durationLabel(deactivationWaitMillis)}.",
+                    text = when (protectionMethod) {
+                        StrictModeProtectionMethod.Charger -> "After activation, all Rules are protected. A charger will be required for protected changes."
+                        StrictModeProtectionMethod.Pin -> "After activation, all Rules are protected. Your PIN starts a ${durationLabel(deactivationWaitMillis)} deactivation countdown."
+                        else -> "After activation, all Rules are protected from weaker edits, pausing, and deletion. Countdown \u00B7 ${durationLabel(deactivationWaitMillis)}."
+                    },
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -893,11 +1010,14 @@ private fun LockGlyph() {
 private fun StrictModeActive(
     state: StrictModeState,
     configuration: GlobalStrictModeConfiguration?,
-    onRequestMethodChange: (StrictModeProtectionMethod, Long?) -> Unit,
+    onRequestMethodChange: (StrictModeProtectionMethod, Long?, String?) -> Unit,
     onBeginDeactivation: () -> Unit
 ) {
     var beginDeactivationDialogOpen by remember { mutableStateOf(false) }
     var changeMethodOpen by remember { mutableStateOf(false) }
+    var replacementPin by remember { mutableStateOf("") }
+    var replacementPinConfirmation by remember { mutableStateOf("") }
+    var replacementWait by remember { mutableStateOf(pinCountdownPresets().first().second) }
     val ui = strictModeActiveUiState(state, configuration)
     StrictModeCard {
         Text(text = ui.title, style = MaterialTheme.typography.titleLarge)
@@ -914,17 +1034,48 @@ private fun StrictModeActive(
     }
     if (changeMethodOpen) StrictModeCard {
         Text(text = "Protection method", style = MaterialTheme.typography.titleMedium)
-        if (configuration?.protectionMethod != StrictModeProtectionMethod.Countdown) {
-            OutlinedButton(
-                onClick = { changeMethodOpen = false; onRequestMethodChange(StrictModeProtectionMethod.Countdown, GlobalStrictModeStore.DEFAULT_COUNTDOWN_MILLIS) },
-                modifier = Modifier.fillMaxWidth()
-            ) { Text(text = "Countdown \u00B7 10 minutes") }
-        }
         if (configuration?.protectionMethod != StrictModeProtectionMethod.Charger) {
             OutlinedButton(
-                onClick = { changeMethodOpen = false; onRequestMethodChange(StrictModeProtectionMethod.Charger, null) },
+                onClick = { changeMethodOpen = false; onRequestMethodChange(StrictModeProtectionMethod.Charger, null, null) },
                 modifier = Modifier.fillMaxWidth()
-            ) { Text(text = "Charger") }
+            ) { Text(text = "Plug in charger") }
+        }
+        if (configuration?.protectionMethod != StrictModeProtectionMethod.Pin) {
+            Text(text = "Enter PIN", style = MaterialTheme.typography.titleSmall)
+            OutlinedTextField(
+                value = replacementPin,
+                onValueChange = { replacementPin = it.numericPinInput() },
+                label = { Text("Create PIN") },
+                singleLine = true,
+                visualTransformation = PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                modifier = Modifier.fillMaxWidth()
+            )
+            OutlinedTextField(
+                value = replacementPinConfirmation,
+                onValueChange = { replacementPinConfirmation = it.numericPinInput() },
+                label = { Text("Confirm PIN") },
+                singleLine = true,
+                visualTransformation = PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                isError = replacementPinConfirmation.isNotEmpty() && replacementPin != replacementPinConfirmation,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                pinCountdownPresets().forEach { (label, millis) ->
+                    ChoiceChip(label, replacementWait == millis, { replacementWait = millis }, Modifier.weight(1f))
+                }
+            }
+            Button(
+                onClick = {
+                    onRequestMethodChange(StrictModeProtectionMethod.Pin, replacementWait, replacementPin)
+                    replacementPin = ""
+                    replacementPinConfirmation = ""
+                    changeMethodOpen = false
+                },
+                enabled = replacementPin.length in 4..8 && replacementPin == replacementPinConfirmation,
+                modifier = Modifier.fillMaxWidth()
+            ) { Text("Use Enter PIN") }
         }
         Text(
             text = "Reducing or replacing protection requires your current method first.",
@@ -955,10 +1106,16 @@ internal data class StrictModeActiveUiState(
 internal fun strictModeActiveUiState(state: StrictModeState, configuration: GlobalStrictModeConfiguration? = null) = StrictModeActiveUiState(
     title = "Strict Mode is active",
     description = "All Rules are protected from weaker edits, pausing, and deletion.",
-    protectionMethod = if (configuration?.protectionMethod == StrictModeProtectionMethod.Charger) "Charger" else "Countdown",
-    deactivationWait = if (configuration?.protectionMethod == StrictModeProtectionMethod.Charger) {
-        "A charger is required to make protected changes."
-    } else "${durationLabel(state.configuration.deactivationCountdownMillis)} deactivation wait"
+    protectionMethod = when (configuration?.protectionMethod) {
+        StrictModeProtectionMethod.Charger -> "Charger"
+        StrictModeProtectionMethod.Pin -> "Enter PIN"
+        else -> "Countdown"
+    },
+    deactivationWait = when (configuration?.protectionMethod) {
+        StrictModeProtectionMethod.Charger -> "A charger is required to make protected changes."
+        StrictModeProtectionMethod.Pin -> "PIN verification, then a ${durationLabel(state.configuration.deactivationCountdownMillis)} wait"
+        else -> "${durationLabel(state.configuration.deactivationCountdownMillis)} deactivation wait"
+    }
 )
 
 @Composable
@@ -973,14 +1130,16 @@ private fun BeginDeactivationDialog(
         title = { Text(text = "Begin deactivation?") },
         text = {
             Text(
-                text = if (method == StrictModeProtectionMethod.Charger) {
-                    "Connect your phone to a charger, press Continue, then confirm. Strict Mode stays active until you confirm."
-                } else "Strict Mode will remain active across all Rules for the next $waitLabel."
+                text = when (method) {
+                    StrictModeProtectionMethod.Charger -> "Connect your phone to a charger, press Continue, then confirm. Strict Mode stays active until you confirm."
+                    StrictModeProtectionMethod.Pin -> "Enter your PIN once, then Strict Mode will remain active across all Rules for the next $waitLabel."
+                    else -> "Strict Mode will remain active across all Rules for the next $waitLabel."
+                }
             )
         },
         confirmButton = {
             TextButton(onClick = onStartCountdown) {
-                Text(text = if (method == StrictModeProtectionMethod.Charger) "Continue" else "Start Countdown")
+                Text(text = if (method == StrictModeProtectionMethod.Charger) "Continue" else if (method == StrictModeProtectionMethod.Pin) "Enter PIN" else "Start Countdown")
             }
         },
         dismissButton = {
@@ -1021,7 +1180,9 @@ private fun StrictModeDeactivationCountdown(
             style = MaterialTheme.typography.displaySmall
         )
         Text(
-            text = "You can leave EarnIt. The countdown will continue. No change will be made until you confirm.",
+            text = if (pendingAction?.authorizationMethod == StrictModeProtectionMethod.Pin && !replacingMethod) {
+                "You can leave EarnIt. The countdown will continue, and Strict Mode will turn off automatically at zero."
+            } else "You can leave EarnIt. The countdown will continue. No change will be made until you confirm.",
             style = MaterialTheme.typography.bodyMedium
         )
         OutlinedButton(onClick = onCancelDeactivation, modifier = Modifier.fillMaxWidth()) {
@@ -1059,12 +1220,68 @@ private fun StrictModeMethodChangeConfirmation(
     val replacement = action.descriptor as? StrictModeActionDescriptor.ReplaceMethod
     StrictModeCard {
         Text(text = "Review protection change", style = MaterialTheme.typography.titleLarge)
-        Text(text = if (replacement?.newMethod == StrictModeProtectionMethod.Charger) {
-            "Strict Mode will remain active. The protection method will change to Charger."
-        } else "Strict Mode will remain active. The protection method will change to Countdown \u00B7 ${durationLabel(replacement?.newDurationMillis)}.")
+        Text(text = when (replacement?.newMethod) {
+            StrictModeProtectionMethod.Charger -> "Strict Mode will remain active. The protection method will change to Charger."
+            StrictModeProtectionMethod.Pin -> "Strict Mode will remain active. The protection method will change to Enter PIN with a ${durationLabel(replacement.newDurationMillis)} deactivation wait."
+            else -> "Strict Mode will remain active. The protection method will change to Countdown \u00B7 ${durationLabel(replacement?.newDurationMillis)}."
+        })
         Button(onClick = onConfirm, modifier = Modifier.fillMaxWidth()) { Text(text = "Confirm Change") }
         OutlinedButton(onClick = onCancel, modifier = Modifier.fillMaxWidth()) { Text(text = "Cancel Request") }
     }
+}
+
+@Composable
+private fun PinAuthorization(
+    action: PendingStrictModeAction,
+    onVerify: (String) -> PinVerificationResult,
+    onCancel: () -> Unit
+) {
+    var pin by remember(action.id) { mutableStateOf("") }
+    var error by remember(action.id) { mutableStateOf<String?>(null) }
+    var forgotPinOpen by remember { mutableStateOf(false) }
+    StrictModeCard {
+        Text(text = "Enter your PIN", style = MaterialTheme.typography.titleLarge)
+        Text(text = "Enter the PIN you created to begin the Strict Mode deactivation process.")
+        OutlinedTextField(
+            value = pin,
+            onValueChange = {
+                pin = it.numericPinInput()
+                error = null
+            },
+            label = { Text("PIN") },
+            singleLine = true,
+            visualTransformation = PasswordVisualTransformation(),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+            isError = error != null,
+            supportingText = { error?.let { Text(it) } },
+            modifier = Modifier.fillMaxWidth()
+        )
+        Button(
+            onClick = {
+                when (val result = onVerify(pin)) {
+                    PinVerificationResult.Incorrect -> {
+                        pin = ""
+                        error = "Incorrect PIN. Try again."
+                    }
+                    is PinVerificationResult.Rejected -> {
+                        pin = ""
+                        error = result.message
+                    }
+                    is PinVerificationResult.Verified -> pin = ""
+                }
+            },
+            enabled = pin.length in 4..8,
+            modifier = Modifier.fillMaxWidth()
+        ) { Text("Verify PIN") }
+        OutlinedButton(onClick = onCancel, modifier = Modifier.fillMaxWidth()) { Text("Cancel") }
+        TextButton(onClick = { forgotPinOpen = true }, modifier = Modifier.fillMaxWidth()) { Text("Forgot PIN?") }
+    }
+    if (forgotPinOpen) AlertDialog(
+        onDismissRequest = { forgotPinOpen = false },
+        title = { Text("Forgot PIN?") },
+        text = { Text("To preserve the purpose of Strict Mode, forgotten PINs cannot be reset from within the app. You'll need to reinstall EarnIt.") },
+        confirmButton = { TextButton(onClick = { forgotPinOpen = false }) { Text("Understood") } }
+    )
 }
 
 @Composable
@@ -1211,7 +1428,9 @@ internal data class StrictModeSetupState(
     val customTimedHours: String = "",
     val customCountdownMinutes: String = "",
     val timedCustomVisible: Boolean = false,
-    val countdownCustomVisible: Boolean = false
+    val countdownCustomVisible: Boolean = false,
+    val pin: String = "",
+    val pinConfirmation: String = ""
 ) {
     val timedDurationValid: Boolean
         get() = durationType == StrictModeDurationType.Indefinite ||
@@ -1225,7 +1444,7 @@ internal data class StrictModeSetupState(
             val methodValid = when (protectionMethod) {
                 StrictModeProtectionMethod.Countdown -> countdownDurationValid
                 StrictModeProtectionMethod.Charger -> true
-                StrictModeProtectionMethod.AccountabilityPin -> false
+                StrictModeProtectionMethod.Pin -> countdownDurationValid && pin.length in 4..8 && pin.all(Char::isDigit) && pin == pinConfirmation
             }
             return timedDurationValid && methodValid
         }

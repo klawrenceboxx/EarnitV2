@@ -115,7 +115,15 @@ internal object StrictModeProtectionStrengthPolicy {
                     }
                 }
                 StrictModeProtectionMethod.Charger -> RestrictionClassification.Equivalent
-                StrictModeProtectionMethod.AccountabilityPin -> RestrictionClassification.LessRestrictive
+                StrictModeProtectionMethod.Pin -> {
+                    val current = currentDurationMillis ?: return RestrictionClassification.LessRestrictive
+                    val proposed = proposedDurationMillis ?: return RestrictionClassification.LessRestrictive
+                    when {
+                        proposed > current -> RestrictionClassification.Stricter
+                        proposed == current -> RestrictionClassification.Equivalent
+                        else -> RestrictionClassification.LessRestrictive
+                    }
+                }
             }
         }
         // Cross-method strength is intentionally incomparable; replacement is protected.

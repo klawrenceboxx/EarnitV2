@@ -123,6 +123,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var strictModeStore: StrictModeStore
     private var strictModeState by mutableStateOf(StrictModeState())
     private lateinit var ruleStrictModeStore: GlobalStrictModeStore
+    private lateinit var strictModePinStore: StrictModePinStore
     private var globalStrictModeConfiguration by mutableStateOf<GlobalStrictModeConfiguration?>(null)
     private var strictModeReturnRuleId by mutableStateOf<String?>(null)
     private var strictModeReturnToSettings by mutableStateOf(false)
@@ -195,7 +196,11 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         strictModeStore = StrictModeStore(SharedPreferencesStrictModePersistence(this))
         chargingStateObserver = AndroidChargingStateObserver(applicationContext)
-        ruleStrictModeStore = GlobalStrictModeStore(SharedPreferencesStrictModeFoundationPersistence(this))
+        strictModePinStore = SharedPreferencesStrictModePinStore(this)
+        ruleStrictModeStore = GlobalStrictModeStore(
+            persistence = SharedPreferencesStrictModeFoundationPersistence(this),
+            pinStore = strictModePinStore
+        )
         chargingState = chargingStateObserver.currentState()
         deepWorkSession = DeepWorkStore.load(this)
         val existingRules = EarnItRuleStore.getRules(this)
@@ -339,6 +344,7 @@ class MainActivity : ComponentActivity() {
                             onKeepStrictModeActive = ::keepStrictModeActive,
                             onStrictModeTick = ::refreshStrictModeState,
                             onAuthorizeCharger = ::authorizeCurrentChargerRequest,
+                            onVerifyPin = ::verifyCurrentPinRequest,
                             onConfirmProtectedAction = ::confirmProtectedAction,
                             onCancelProtectedRequest = ::cancelProtectedRequest,
                             onRequestStrictModeMethodChange = ::requestStrictModeMethodChange,
@@ -536,6 +542,7 @@ class MainActivity : ComponentActivity() {
         if (::strictModeStore.isInitialized) {
             globalStrictModeConfiguration = ruleStrictModeStore.globalConfiguration()
             ruleStrictModeStore.restoreCountdownAuthorization()
+            ruleStrictModeStore.completePinDeactivationIfReady()
             globalStrictModeConfiguration = ruleStrictModeStore.globalConfiguration()
             strictModeState = globalStrictModeConfiguration?.toLegacyStrictModeState() ?: strictModeStore.state()
             pendingStrictModeAction = ruleStrictModeStore.activePendingAction(GlobalStrictModeStore.GLOBAL_CONFIGURATION_ID)
@@ -551,11 +558,22 @@ class MainActivity : ComponentActivity() {
         strictModeState = strictModeState.copy(configuration = configuration)
     }
 
-    private fun beginStrictModeActivation(configuration: StrictModeConfiguration, method: StrictModeProtectionMethod) {
+    private fun beginStrictModeActivation(configuration: StrictModeConfiguration, method: StrictModeProtectionMethod, pin: String?) {
+        if (method == StrictModeProtectionMethod.Pin) {
+            val characters = pin?.toCharArray() ?: return
+            val saved = try { strictModePinStore.save(characters) } finally { characters.fill('\u0000') }
+            if (!saved) {
+                strictModeActionMessage = "Choose a numeric PIN between 4 and 8 digits."
+                strictModeBlockedActionOpen = true
+                return
+            }
+        }
         ruleStrictModeStore.requestGlobalActivation(
             method = method,
             delayMillis = StrictModeStore.ACTIVATION_GRACE_MILLIS,
-            deactivationWaitMillis = configuration.deactivationCountdownMillis.takeIf { method == StrictModeProtectionMethod.Countdown }
+            deactivationWaitMillis = configuration.deactivationCountdownMillis.takeIf {
+                method in setOf(StrictModeProtectionMethod.Countdown, StrictModeProtectionMethod.Pin)
+            }
         )
         refreshStrictModeState()
     }
@@ -630,6 +648,15 @@ class MainActivity : ComponentActivity() {
                 strictModeBlockedActionOpen = true
             }
         }
+    }
+
+    private fun verifyCurrentPinRequest(pin: String): PinVerificationResult {
+        val pending = pendingStrictModeAction
+            ?: return PinVerificationResult.Rejected("This request no longer exists. Begin again.")
+        val characters = pin.toCharArray()
+        val result = try { ruleStrictModeStore.verifyPin(pending.id, characters) } finally { characters.fill('\u0000') }
+        if (result is PinVerificationResult.Verified) refreshStrictModeState()
+        return result
     }
 
     private fun confirmProtectedAction() {
@@ -707,7 +734,16 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun requestStrictModeMethodChange(method: StrictModeProtectionMethod, durationMillis: Long?) {
+    private fun requestStrictModeMethodChange(method: StrictModeProtectionMethod, durationMillis: Long?, pin: String?) {
+        if (method == StrictModeProtectionMethod.Pin) {
+            val characters = pin?.toCharArray() ?: return
+            val saved = try { strictModePinStore.save(characters) } finally { characters.fill('\u0000') }
+            if (!saved) {
+                strictModeActionMessage = "Choose a numeric PIN between 4 and 8 digits."
+                strictModeBlockedActionOpen = true
+                return
+            }
+        }
         chargingState = chargingStateObserver.currentState()
         when (val result = ruleStrictModeStore.requestGlobalMethodChange(method, durationMillis, chargingState)) {
             is StrictModeMethodChangeResult.Applied -> {
@@ -1140,6 +1176,8 @@ class MainActivity : ComponentActivity() {
                 if (result.action.authorizationMethod == StrictModeProtectionMethod.Charger) {
                     chargerSession = ruleStrictModeStore.beginOrRestoreCharger(result.action.id, chargingState)
                     strictModeActionMessage = "Connect your charger to review this change."
+                } else if (result.action.authorizationMethod == StrictModeProtectionMethod.Pin) {
+                    strictModeActionMessage = "Enter your PIN to review this change."
                 } else strictModeActionMessage = "Your change is saved as a pending request. Complete the protection method to continue."
             }
             is PendingActionCreationResult.AlreadyPending -> {
@@ -1149,7 +1187,7 @@ class MainActivity : ComponentActivity() {
             is PendingActionCreationResult.Rejected -> strictModeActionMessage = result.message
         }
         strictModeReturnRuleId = rule.id
-        if (pendingStrictModeAction?.authorizationMethod == StrictModeProtectionMethod.Charger) {
+        if (pendingStrictModeAction?.authorizationMethod in setOf(StrictModeProtectionMethod.Charger, StrictModeProtectionMethod.Pin)) {
             settingsOpen = false
             selectedRuleDetailId = null
             strictModeOpen = true
@@ -1469,7 +1507,7 @@ internal fun Dashboard(
     onOpenStrictMode: () -> Unit,
     onCloseStrictMode: () -> Unit,
     onSaveStrictModeConfiguration: (StrictModeConfiguration) -> Unit,
-    onBeginStrictModeActivation: (StrictModeConfiguration, StrictModeProtectionMethod) -> Unit,
+    onBeginStrictModeActivation: (StrictModeConfiguration, StrictModeProtectionMethod, String?) -> Unit,
     onCancelStrictModeActivation: () -> Unit,
     onBeginStrictModeDeactivation: () -> Unit,
     onCancelStrictModeDeactivation: () -> Unit,
@@ -1477,9 +1515,10 @@ internal fun Dashboard(
     onKeepStrictModeActive: () -> Unit,
     onStrictModeTick: () -> Unit,
     onAuthorizeCharger: () -> Unit,
+    onVerifyPin: (String) -> PinVerificationResult,
     onConfirmProtectedAction: () -> Unit,
     onCancelProtectedRequest: () -> Unit,
-    onRequestStrictModeMethodChange: (StrictModeProtectionMethod, Long?) -> Unit,
+    onRequestStrictModeMethodChange: (StrictModeProtectionMethod, Long?, String?) -> Unit,
     onStrictModeBlockedAction: () -> Unit,
     onOpenEarnApp: (String) -> Unit,
     onAddRule: () -> Unit,
@@ -1589,6 +1628,7 @@ internal fun Dashboard(
                 onKeepStrictModeActive = onKeepStrictModeActive,
                 onTick = onStrictModeTick,
                 onAuthorizeCharger = onAuthorizeCharger,
+                onVerifyPin = onVerifyPin,
                 onConfirmProtectedAction = onConfirmProtectedAction,
                 onCancelProtectedRequest = onCancelProtectedRequest,
                 onRequestMethodChange = onRequestStrictModeMethodChange,
@@ -2150,7 +2190,7 @@ fun DashboardPreview() {
             onOpenStrictMode = {},
             onCloseStrictMode = {},
             onSaveStrictModeConfiguration = {},
-            onBeginStrictModeActivation = { _, _ -> },
+            onBeginStrictModeActivation = { _, _, _ -> },
             onCancelStrictModeActivation = {},
             onBeginStrictModeDeactivation = {},
             onCancelStrictModeDeactivation = {},
@@ -2158,9 +2198,10 @@ fun DashboardPreview() {
             onKeepStrictModeActive = {},
             onStrictModeTick = {},
             onAuthorizeCharger = {},
+            onVerifyPin = { PinVerificationResult.Rejected("Unavailable") },
             onConfirmProtectedAction = {},
             onCancelProtectedRequest = {},
-            onRequestStrictModeMethodChange = { _, _ -> },
+            onRequestStrictModeMethodChange = { _, _, _ -> },
             onStrictModeBlockedAction = {},
             onOpenEarnApp = {},
             onAddRule = {},
