@@ -14,6 +14,7 @@ import android.text.format.DateFormat
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.viewModels
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -118,6 +119,11 @@ internal fun unavailableRequirementAppPackages(
 }
 
 class MainActivity : ComponentActivity() {
+    private val feedbackViewModel: FeedbackViewModel by viewModels()
+    private var feedbackOpen by mutableStateOf(false)
+    private var feedbackCrashPrompt by mutableStateOf<CrashDiagnostics?>(null)
+    private lateinit var feedbackPreferences: FeedbackPreferences
+    private lateinit var shakeController: ForegroundShakeController
     private var rules by mutableStateOf(emptyList<EarnItRuleStore.Rule>())
     private var ruleStates by mutableStateOf(emptyList<RuleDashboardState>())
     private var pauseExpirations by mutableStateOf(emptyMap<String, Long>())
@@ -199,6 +205,14 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        CrashMarkerStore.install(this)
+        feedbackPreferences = FeedbackPreferences(this)
+        shakeController = ForegroundShakeController(this) {
+            runOnUiThread {
+                if (!feedbackOpen && !onboardingActive) openFeedback(FeedbackEntrySource.SHAKE)
+            }
+        }
+        feedbackCrashPrompt = CrashMarkerStore.consume(this)
         strictModeStore = StrictModeStore(SharedPreferencesStrictModePersistence(this))
         chargingStateObserver = AndroidChargingStateObserver(applicationContext)
         strictModePinStore = SharedPreferencesStrictModePinStore(this)
@@ -260,7 +274,14 @@ class MainActivity : ComponentActivity() {
         setContent {
             EarnitV2Theme {
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    if (onboardingActive) {
+                    if (feedbackOpen) {
+                        FeedbackScreen(
+                            viewModel = feedbackViewModel,
+                            strictModeEnabled = strictModeState.lifecycleState.isStrictModeProtecting(),
+                            onClose = ::closeFeedback,
+                            modifier = Modifier.padding(innerPadding)
+                        )
+                    } else if (onboardingActive) {
                         EarnItOnboarding(
                             currentStep = onboardingStep,
                             permissions = currentOnboardingPermissions(),
@@ -342,6 +363,15 @@ class MainActivity : ComponentActivity() {
                             onOpenAnalyticsApp = { analyticsAppPackage = it },
                             onBackFromAnalyticsApp = { analyticsAppPackage = null },
                             onCloseSettings = { settingsOpen = false },
+                            pendingFeedbackCount = feedbackViewModel.pendingCount(),
+                            shakeToReportEnabled = feedbackPreferences.shakeEnabled,
+                            onOpenFeedback = { openFeedback(FeedbackEntrySource.SETTINGS) },
+                            onShakeToReportChange = {
+                                feedbackPreferences.shakeEnabled = it
+                                if (it) shakeController.register() else shakeController.unregister()
+                            },
+                            onDebugShakeFeedback = { openFeedback(FeedbackEntrySource.SHAKE) },
+                            onClearDebugFeedback = { feedbackViewModel.clearDebugQueue() },
                             onReplayOnboarding = ::replayOnboarding,
                             onOpenStrictMode = {
                                 strictModeReturnToSettings = settingsOpen
@@ -459,12 +489,22 @@ class MainActivity : ComponentActivity() {
                                     if (navigation.discardUnsavedEdit && editingRuleTemplate != null) cancelEditingRule()
                                     selectedRuleDetailId = if (navigation.returnToRuleDetail) navigation.affectedRuleId else null
                                 }
-                            )
-                        }
+                        )
+                    }
+                    feedbackCrashPrompt?.let { crash ->
+                        CrashFollowUpPrompt(
+                            onReview = {
+                                feedbackCrashPrompt = null
+                                openFeedback(FeedbackEntrySource.CRASH_FOLLOW_UP, crash)
+                            },
+                            onDismiss = { feedbackCrashPrompt = null }
+                        )
                     }
                 }
             }
         }
+    }
+
     }
 
     override fun onResume() {
@@ -473,6 +513,31 @@ class MainActivity : ComponentActivity() {
         refreshDashboardState()
         reconcileOnboardingWithPermissions()
         if (analyticsOpen) loadAnalytics(forceRefresh = true)
+        if (::feedbackPreferences.isInitialized && feedbackPreferences.shakeEnabled && !feedbackOpen) shakeController.register()
+    }
+
+    override fun onPause() {
+        if (::shakeController.isInitialized) shakeController.unregister()
+        super.onPause()
+    }
+
+    private fun openFeedback(source: FeedbackEntrySource, crash: CrashDiagnostics? = null) {
+        val route = when {
+            settingsOpen -> "Settings"
+            analyticsOpen -> "Analytics"
+            selectedRuleDetailId != null -> "Rule detail"
+            else -> "Home"
+        }
+        CrashMarkerStore.saveLastRoute(this, route)
+        feedbackViewModel.begin(source, route, crash)
+        feedbackOpen = true
+        shakeController.unregister()
+    }
+
+    private fun closeFeedback() {
+        feedbackOpen = false
+        shakeController.detector.rearm()
+        if (feedbackPreferences.shakeEnabled) shakeController.register()
     }
 
     override fun onStart() {
@@ -1615,6 +1680,12 @@ internal fun Dashboard(
     onOpenAnalyticsApp: (String) -> Unit,
     onBackFromAnalyticsApp: () -> Unit,
     onCloseSettings: () -> Unit,
+    pendingFeedbackCount: Int,
+    shakeToReportEnabled: Boolean,
+    onOpenFeedback: () -> Unit,
+    onShakeToReportChange: (Boolean) -> Unit,
+    onDebugShakeFeedback: () -> Unit,
+    onClearDebugFeedback: () -> Unit,
     onReplayOnboarding: () -> Unit,
     onOpenStrictMode: () -> Unit,
     onCloseStrictMode: () -> Unit,
@@ -1778,6 +1849,12 @@ internal fun Dashboard(
                 onCreateFirstRule = onAddRule,
                 showDeveloperTools = showDeveloperTools,
                 onReplayOnboarding = onReplayOnboarding,
+                pendingFeedbackCount = pendingFeedbackCount,
+                shakeToReportEnabled = shakeToReportEnabled,
+                onOpenFeedback = onOpenFeedback,
+                onShakeToReportChange = onShakeToReportChange,
+                onDebugShakeFeedback = onDebugShakeFeedback,
+                onClearDebugFeedback = onClearDebugFeedback,
                 modifier = modifier
             )
         } else if (selectedHomeRule != null) {
@@ -2314,6 +2391,12 @@ fun DashboardPreview() {
             onOpenAnalyticsApp = {},
             onBackFromAnalyticsApp = {},
             onCloseSettings = {},
+            pendingFeedbackCount = 0,
+            shakeToReportEnabled = false,
+            onOpenFeedback = {},
+            onShakeToReportChange = {},
+            onDebugShakeFeedback = {},
+            onClearDebugFeedback = {},
             onReplayOnboarding = {},
             onOpenStrictMode = {},
             onCloseStrictMode = {},

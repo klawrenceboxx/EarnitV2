@@ -23,11 +23,13 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
@@ -246,6 +248,12 @@ internal fun EarnItSettings(
     onCreateFirstRule: () -> Unit,
     showDeveloperTools: Boolean,
     onReplayOnboarding: () -> Unit,
+    pendingFeedbackCount: Int,
+    shakeToReportEnabled: Boolean,
+    onOpenFeedback: () -> Unit,
+    onShakeToReportChange: (Boolean) -> Unit,
+    onDebugShakeFeedback: () -> Unit,
+    onClearDebugFeedback: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     BackHandler(onBack = onBack)
@@ -298,6 +306,50 @@ internal fun EarnItSettings(
         }
 
         Card(
+            modifier = Modifier.fillMaxWidth().clickable(onClick = onOpenFeedback),
+            shape = RoundedCornerShape(18.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth().heightIn(min = 78.dp).padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                SettingsSymbolBadge(symbol = "□", emphasized = true)
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                    Text("Send Feedback", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        if (pendingFeedbackCount > 0) "$pendingFeedbackCount report${if (pendingFeedbackCount == 1) "" else "s"} waiting to send" else "Help improve EarnIt",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Text("\u203A", modifier = Modifier.clearAndSetSemantics { }, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.titleLarge)
+            }
+        }
+
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(18.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth().heightIn(min = 78.dp).padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                SettingsSymbolBadge(symbol = "≈")
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                    Text("Shake to Report", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    Text("Quickly open feedback while using EarnIt", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Switch(checked = shakeToReportEnabled, onCheckedChange = onShakeToReportChange)
+            }
+        }
+
+        Card(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(18.dp),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -346,6 +398,7 @@ internal fun EarnItSettings(
         }
 
         if (showDeveloperTools) {
+            val context = LocalContext.current
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(18.dp),
@@ -364,6 +417,18 @@ internal fun EarnItSettings(
                     )
                     OutlinedButton(onClick = onReplayOnboarding, modifier = Modifier.fillMaxWidth()) {
                         Text("Replay onboarding")
+                    }
+                    OutlinedButton(onClick = onOpenFeedback, modifier = Modifier.fillMaxWidth()) {
+                        Text("Open feedback")
+                    }
+                    OutlinedButton(onClick = onDebugShakeFeedback, modifier = Modifier.fillMaxWidth()) {
+                        Text("Simulate shake report")
+                    }
+                    OutlinedButton(onClick = { CrashMarkerStore.markFake(context) }, modifier = Modifier.fillMaxWidth()) {
+                        Text("Create next-launch crash marker")
+                    }
+                    OutlinedButton(onClick = onClearDebugFeedback, modifier = Modifier.fillMaxWidth()) {
+                        Text("Clear queued debug reports ($pendingFeedbackCount)")
                     }
                 }
             }
