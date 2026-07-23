@@ -12,6 +12,8 @@ val WarmText = Color(0xFFF7ECE6)
 val WarmTextMuted = Color(0xFFCDBDB5)
 val WarmSuccess = Color(0xFF67D58A)
 val WarmSuccessContainer = Color(0xFF183E27)
+val OnboardingSuccessContainer = Color(0xFFFFC978)
+val OnboardingSuccessIcon = WarmInk
 
 val CreamBackground = Color(0xFFFFF8F3)
 val CreamSurface = Color(0xFFFFFBF8)

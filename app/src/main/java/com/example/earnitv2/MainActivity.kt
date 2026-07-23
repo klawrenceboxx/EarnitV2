@@ -6,6 +6,7 @@ import android.app.usage.UsageStatsManager
 import android.content.ActivityNotFoundException
 import android.content.ComponentName
 import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.os.Bundle
 import android.provider.Settings
 import android.text.TextUtils
@@ -171,6 +172,7 @@ class MainActivity : ComponentActivity() {
     private var productiveSearch by mutableStateOf("")
     private var blockedSearch by mutableStateOf("")
     private var usageAccessGranted by mutableStateOf(false)
+    private var settingsLaunchInProgress = false
     private var usageStatusMessage by mutableStateOf("")
     private var ruleStatusMessage by mutableStateOf("")
     private var accessibilityServiceEnabled by mutableStateOf(false)
@@ -187,8 +189,9 @@ class MainActivity : ComponentActivity() {
     private var strictModeBlockedActionOpen by mutableStateOf(false)
     private var ruleTypeSelectionOpen by mutableStateOf(false)
     private var unavailableRuleType by mutableStateOf<RuleTypeOption?>(null)
-    private var firstLaunchComplete by mutableStateOf(false)
-    private var firstLaunchStep by mutableStateOf(FirstLaunchStep.ValueIntroduction)
+    private lateinit var onboardingStore: EarnItOnboardingStore
+    private var onboardingActive by mutableStateOf(false)
+    private var onboardingStep by mutableStateOf(OnboardingStep.Value)
     private var builderStep by mutableStateOf(RuleBuilderStep.Earn)
     private var deepWorkSession by mutableStateOf(DeepWorkSession())
     private var deepWorkSetupOpen by mutableStateOf(false)
@@ -205,14 +208,18 @@ class MainActivity : ComponentActivity() {
         )
         chargingState = chargingStateObserver.currentState()
         deepWorkSession = DeepWorkStore.load(this)
+        onboardingStore = EarnItOnboardingStore(this)
+        val onboardingSeen = onboardingStore.initialize(EarnItRuleStore.hasDurablePriorUse(this))
         val existingRules = EarnItRuleStore.getRules(this)
         val legacyStrictMode = strictModeStore.state()
         val migratedGlobal = ruleStrictModeStore.migrateToGlobal(legacyStrictMode)
         if (migratedGlobal.lifecycle in setOf(RuleStrictModeLifecycle.DeactivationCounting, RuleStrictModeLifecycle.DeactivationReady) &&
             ruleStrictModeStore.activePendingAction(GlobalStrictModeStore.GLOBAL_CONFIGURATION_ID) == null
         ) ruleStrictModeStore.beginGlobalCountdownDeactivation()
-        firstLaunchComplete = isFirstLaunchComplete() || existingRules.isNotEmpty()
+        onboardingStep = onboardingStore.step()
+        onboardingActive = !onboardingSeen || (isDebugBuild() && onboardingStore.replayActive())
         refreshDashboardState()
+        reconcileOnboardingWithPermissions()
         val restorablePendingActions = ruleStrictModeStore.pendingActions().filter {
             it.authorizationStatus !in setOf(
                 StrictModeAuthorizationStatus.Consumed,
@@ -243,17 +250,17 @@ class MainActivity : ComponentActivity() {
         setContent {
             EarnitV2Theme {
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    if (!firstLaunchComplete && editingRuleTemplate == null) {
-                        EarnItFirstLaunch(
-                            currentStep = firstLaunchStep,
-                            permissionState = EarnItUiStateAdapters.permissionSetup(
-                                usageAccessGranted = usageAccessGranted,
-                                appBlockingEnabled = accessibilityServiceEnabled
-                            ),
-                            onStepChange = { firstLaunchStep = it },
+                    if (onboardingActive) {
+                        EarnItOnboarding(
+                            currentStep = onboardingStep,
+                            permissions = currentOnboardingPermissions(),
+                            onBack = ::backOnboarding,
+                            onContinue = ::continueOnboarding,
+                            onNotNow = ::leaveOnboardingIncomplete,
                             onOpenUsageAccessSettings = ::openUsageAccessSettings,
                             onOpenAccessibilitySettings = ::openAccessibilitySettings,
                             onCreateFirstRule = ::completeFirstLaunchAndCreateRule,
+                            onGoHome = ::completeOnboardingAndGoHome,
                             modifier = Modifier.padding(innerPadding)
                         )
                     } else {
@@ -289,6 +296,7 @@ class MainActivity : ComponentActivity() {
                             usageStatusMessage = usageStatusMessage,
                             ruleStatusMessage = ruleStatusMessage,
                             accessibilityServiceEnabled = accessibilityServiceEnabled,
+                            showDeveloperTools = isDebugBuild(),
                             manageRulesOpen = manageRulesOpen,
                             pauseExpirations = pauseExpirations,
                             selectedRuleDetailId = selectedRuleDetailId,
@@ -316,6 +324,7 @@ class MainActivity : ComponentActivity() {
                             onFinishDeepWork = { elapsed -> DeepWorkStore.finish(this, deepWorkSession, elapsed); deepWorkSession = DeepWorkSession(); refreshDashboardState() },
                             onOpenUsageAccessSettings = ::openUsageAccessSettings,
                             onOpenAccessibilitySettings = ::openAccessibilitySettings,
+                            onContinueSetup = ::continueOnboardingSetup,
                             onOpenSettings = { settingsOpen = true },
                             onOpenAnalytics = ::openAnalytics,
                             onCloseAnalytics = { analyticsOpen = false; analyticsAppPackage = null },
@@ -323,6 +332,7 @@ class MainActivity : ComponentActivity() {
                             onOpenAnalyticsApp = { analyticsAppPackage = it },
                             onBackFromAnalyticsApp = { analyticsAppPackage = null },
                             onCloseSettings = { settingsOpen = false },
+                            onReplayOnboarding = ::replayOnboarding,
                             onOpenStrictMode = {
                                 strictModeReturnToSettings = settingsOpen
                                 strictModeReturnRuleId = selectedRuleDetailId
@@ -448,7 +458,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        settingsLaunchInProgress = false
         refreshDashboardState()
+        reconcileOnboardingWithPermissions()
         if (analyticsOpen) loadAnalytics(forceRefresh = true)
     }
 
@@ -851,6 +863,10 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun startAddingRule() {
+        if (!currentOnboardingPermissions().isReady) {
+            continueOnboardingSetup()
+            return
+        }
         settingsOpen = false
         analyticsOpen = false
         analyticsAppPackage = null
@@ -1112,6 +1128,10 @@ class MainActivity : ComponentActivity() {
 
     private fun toggleRuleEnabled(rule: EarnItRuleStore.Rule) {
         refreshStrictModeState()
+        if (!rule.enabled && !currentOnboardingPermissions().isReady) {
+            continueOnboardingSetup()
+            return
+        }
         if (rule.enabled && isRuleProtected(rule)) {
             createProtectedAction(rule, StrictModeActionDescriptor.Update(rule.id, rule.copy(enabled = false)))
             return
@@ -1338,6 +1358,9 @@ class MainActivity : ComponentActivity() {
         blockedPickerOpen = false
         blockedPickerOriginalPackages = null
         refreshDashboardState()
+        if (!currentOnboardingPermissions().isReady) {
+            continueOnboardingSetup()
+        }
     }
 
     private fun hasUsageAccess(): Boolean {
@@ -1374,14 +1397,22 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun openUsageAccessSettings() {
+        if (settingsLaunchInProgress) return
+        settingsLaunchInProgress = true
         startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
     }
 
     private fun openAccessibilitySettings() {
+        if (settingsLaunchInProgress) return
+        settingsLaunchInProgress = true
         startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
     }
 
     private fun openEarnApp(packageName: String) {
+        if (!currentOnboardingPermissions().isReady) {
+            continueOnboardingSetup()
+            return
+        }
         val launchIntent = packageManager.getLaunchIntentForPackage(packageName) ?: return
         TrackedAppLaunchStore.registerPendingLaunch(
             context = this,
@@ -1396,27 +1427,67 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun completeFirstLaunchAndCreateRule() {
-        setFirstLaunchComplete()
+        finishOnboarding()
         startAddingRule()
     }
 
-    private fun setFirstLaunchComplete() {
-        getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-            .edit()
-            .putBoolean(KEY_FIRST_LAUNCH_COMPLETE, true)
-            .apply()
-        firstLaunchComplete = true
+    private fun completeOnboardingAndGoHome() {
+        finishOnboarding()
     }
 
-    private fun isFirstLaunchComplete(): Boolean {
-        return getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-            .getBoolean(KEY_FIRST_LAUNCH_COMPLETE, false)
+    private fun leaveOnboardingIncomplete() {
+        finishOnboarding()
     }
+
+    private fun finishOnboarding() {
+        onboardingStore.markSeen()
+        onboardingActive = false
+        settingsOpen = false
+    }
+
+    private fun continueOnboarding() {
+        persistOnboardingStep(nextOnboardingStep(onboardingStep, currentOnboardingPermissions()))
+    }
+
+    private fun backOnboarding() {
+        previousOnboardingStep(onboardingStep)?.let(::persistOnboardingStep)
+    }
+
+    private fun persistOnboardingStep(step: OnboardingStep) {
+        onboardingStep = step
+        onboardingStore.saveStep(step)
+    }
+
+    private fun currentOnboardingPermissions() = OnboardingPermissionState(
+        earningProgressAllowed = usageAccessGranted,
+        appBlockingAllowed = accessibilityServiceEnabled
+    )
+
+    private fun reconcileOnboardingWithPermissions() {
+        if (!onboardingActive) return
+        val reconciled = reconcileOnboardingStep(onboardingStep, currentOnboardingPermissions())
+        if (reconciled != onboardingStep) persistOnboardingStep(reconciled)
+    }
+
+    private fun continueOnboardingSetup() {
+        settingsOpen = false
+        onboardingActive = true
+        persistOnboardingStep(focusedRepairStep(currentOnboardingPermissions()))
+    }
+
+    private fun replayOnboarding() {
+        if (!isDebugBuild()) return
+        settingsOpen = false
+        onboardingStore.beginReplay()
+        onboardingActive = true
+        onboardingStep = OnboardingStep.Value
+    }
+
+    private fun isDebugBuild(): Boolean =
+        applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0
 
     companion object {
         internal const val EXTRA_OPEN_RULE_DETAIL_ID = "com.example.earnitv2.extra.OPEN_RULE_DETAIL_ID"
-        private const val PREFS_NAME = "earnit_setup"
-        private const val KEY_FIRST_LAUNCH_COMPLETE = "first_launch_complete"
         private const val APP_LIST_REFRESH_INTERVAL_MS = 60_000L
     }
 }
@@ -1482,6 +1553,7 @@ internal fun Dashboard(
     usageStatusMessage: String,
     ruleStatusMessage: String,
     accessibilityServiceEnabled: Boolean,
+    showDeveloperTools: Boolean,
     manageRulesOpen: Boolean,
     pauseExpirations: Map<String, Long>,
     strictModeOpen: Boolean,
@@ -1509,6 +1581,7 @@ internal fun Dashboard(
     onFinishDeepWork: (Long) -> Unit,
     onOpenUsageAccessSettings: () -> Unit,
     onOpenAccessibilitySettings: () -> Unit,
+    onContinueSetup: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenAnalytics: () -> Unit,
     onCloseAnalytics: () -> Unit,
@@ -1516,6 +1589,7 @@ internal fun Dashboard(
     onOpenAnalyticsApp: (String) -> Unit,
     onBackFromAnalyticsApp: () -> Unit,
     onCloseSettings: () -> Unit,
+    onReplayOnboarding: () -> Unit,
     onOpenStrictMode: () -> Unit,
     onCloseStrictMode: () -> Unit,
     onSaveStrictModeConfiguration: (StrictModeConfiguration) -> Unit,
@@ -1674,6 +1748,8 @@ internal fun Dashboard(
                 onOpenUsageAccessSettings = onOpenUsageAccessSettings,
                 onOpenAccessibilitySettings = onOpenAccessibilitySettings,
                 onCreateFirstRule = onAddRule,
+                showDeveloperTools = showDeveloperTools,
+                onReplayOnboarding = onReplayOnboarding,
                 modifier = modifier
             )
         } else if (selectedHomeRule != null) {
@@ -1718,6 +1794,7 @@ internal fun Dashboard(
                 onOpenEarnApp = onOpenEarnApp,
                 onOpenUsageAccessSettings = onOpenUsageAccessSettings,
                 onOpenAccessibilitySettings = onOpenAccessibilitySettings,
+                onContinueSetup = onContinueSetup,
                 onOpenSettings = onOpenSettings,
                 onToggleManageRules = onToggleManageRules,
                 onOpenRuleDetail = onOpenRuleDetail,
@@ -2173,6 +2250,7 @@ fun DashboardPreview() {
             usageStatusMessage = "Tracking enabled rules today.",
             ruleStatusMessage = "1 rule saved. Enabled.",
             accessibilityServiceEnabled = true,
+            showDeveloperTools = true,
             manageRulesOpen = false,
             pauseExpirations = emptyMap(),
             strictModeOpen = false,
@@ -2200,6 +2278,7 @@ fun DashboardPreview() {
             onFinishDeepWork = {},
             onOpenUsageAccessSettings = {},
             onOpenAccessibilitySettings = {},
+            onContinueSetup = {},
             onOpenSettings = {},
             onOpenAnalytics = {},
             onCloseAnalytics = {},
@@ -2207,6 +2286,7 @@ fun DashboardPreview() {
             onOpenAnalyticsApp = {},
             onBackFromAnalyticsApp = {},
             onCloseSettings = {},
+            onReplayOnboarding = {},
             onOpenStrictMode = {},
             onCloseStrictMode = {},
             onSaveStrictModeConfiguration = {},

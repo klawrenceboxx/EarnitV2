@@ -31,7 +31,7 @@ class AnalyticsScreenTest {
                 EarnItHome(
                     rules = emptyList(), permissionState = permissionReady, manageRulesOpen = false,
                     deepWorkActive = false, onOpenDeepWork = {}, onAddRule = {}, onOpenEarnApp = {},
-                    onOpenUsageAccessSettings = {}, onOpenAccessibilitySettings = {}, onOpenSettings = {},
+                    onOpenUsageAccessSettings = {}, onOpenAccessibilitySettings = {}, onContinueSetup = {}, onOpenSettings = {},
                     onToggleManageRules = {}, onOpenRuleDetail = {}, onEditRule = {},
                     onToggleRuleEnabled = {}, onDeleteRule = {}
                 )
@@ -49,7 +49,8 @@ class AnalyticsScreenTest {
                 EarnItSettings(
                     permissionState = permissionReady, hasRules = true, strictModeState = StrictModeState(),
                     onBack = {}, onOpenAnalytics = { opened = true }, onOpenStrictMode = {},
-                    onOpenUsageAccessSettings = {}, onOpenAccessibilitySettings = {}, onCreateFirstRule = {}
+                    onOpenUsageAccessSettings = {}, onOpenAccessibilitySettings = {}, onCreateFirstRule = {},
+                    showDeveloperTools = false, onReplayOnboarding = {}
                 )
             }
         }

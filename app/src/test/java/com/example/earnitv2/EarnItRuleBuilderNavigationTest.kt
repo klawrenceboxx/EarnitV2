@@ -6,6 +6,16 @@ import org.junit.Test
 
 class EarnItRuleBuilderNavigationTest {
     @Test
+    fun appAndWebsiteCountsUseCorrectGrammarForAllRequestedCombinations() {
+        assertEquals("0 apps · 0 websites", appsAndWebsitesCountLabel(0, 0))
+        assertEquals("1 app · 0 websites", appsAndWebsitesCountLabel(1, 0))
+        assertEquals("1 app · 1 website", appsAndWebsitesCountLabel(1, 1))
+        assertEquals("2 apps · 1 website", appsAndWebsitesCountLabel(2, 1))
+        assertEquals("10 apps · 12 websites", appsAndWebsitesCountLabel(10, 12))
+        assertEquals("1 app, 1 website", appsAndWebsitesAccessibleCountLabel(1, 1))
+    }
+
+    @Test
     fun rewardPickerUsesRuleSpecificFullScreenCopyForBothRewardFlows() {
         assertEquals(
             "Choose Reward Apps",

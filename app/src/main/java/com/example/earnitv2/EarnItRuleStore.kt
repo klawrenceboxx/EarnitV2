@@ -148,10 +148,33 @@ object EarnItRuleStore {
             resumedRules
         }
         if (savedRules.isNotEmpty() || prefs.getBoolean(KEY_RULES_INITIALIZED, false)) return savedRules
+        if (!hasLegacySingleRuleState(context)) return emptyList()
 
         val migratedRule = migratedSingleRule(context)
         saveRules(context, listOf(migratedRule))
         return listOf(migratedRule)
+    }
+
+    fun hasDurablePriorUse(context: Context): Boolean {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        return prefs.getBoolean(KEY_RULES_INITIALIZED, false) ||
+            !prefs.getString(KEY_RULES, null).isNullOrBlank() ||
+            hasLegacySingleRuleState(context)
+    }
+
+    private fun hasLegacySingleRuleState(context: Context): Boolean {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        return listOf(
+            KEY_PRODUCTIVE_PACKAGE,
+            KEY_PRODUCTIVE_NAME,
+            KEY_BLOCKED_PACKAGE,
+            KEY_BLOCKED_NAME,
+            KEY_BLOCKED_APPS,
+            KEY_REWARD_SECONDS_PER_PRODUCTIVE_SECOND,
+            KEY_ACTIVE_DAYS,
+            KEY_START_MINUTE,
+            KEY_END_MINUTE
+        ).any(prefs::contains)
     }
 
     fun getRule(context: Context): Rule {
@@ -197,7 +220,6 @@ object EarnItRuleStore {
     }
 
     fun newRuleFromDefault(context: Context, type: RuleType = RuleType.EarnRewardTime): Rule {
-        val baseRule = getRule(context)
         return Rule(
             id = newRuleId(),
             productivePackage = "",

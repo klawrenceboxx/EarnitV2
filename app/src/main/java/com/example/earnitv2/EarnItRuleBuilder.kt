@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -42,6 +43,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 enum class RuleBuilderStep(val label: String) {
@@ -357,7 +361,7 @@ internal fun RewardTargetPickerSurface(
                     }
                 }
             }
-            Text("${selectedPackages.size} apps · ${selectedDomains.size} websites selected")
+            Text("${appsAndWebsitesCountLabel(selectedPackages.size, selectedDomains.size)} selected")
             Button(onSave, Modifier.fillMaxWidth(), enabled = selectedPackages.isNotEmpty() || selectedDomains.isNotEmpty()) { Text(saveLabel) }
         }
     }
@@ -1126,25 +1130,70 @@ private fun RewardStep(
             EarnItRuleStore.RuleType.EarnRewardTime -> "Choose one or more Reward Apps that share this Rule balance."
         }
     ) {
-        OutlinedButton(onClick = onOpenBlockedPicker, modifier = Modifier.fillMaxWidth()) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                val total = selectedApps.size + selectedBlockedDomains.size
-                Text(text = if (total == 0) "Choose Apps & Websites" else "Manage Apps & Websites")
-                if (total > 0) {
+        OutlinedButton(
+            onClick = onOpenBlockedPicker,
+            modifier = Modifier.fillMaxWidth(),
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
+        ) {
+            val label = "Manage Apps & Websites"
+            val countLabel = appsAndWebsitesCountLabel(selectedApps.size, selectedBlockedDomains.size)
+            val accessibilityCount = appsAndWebsitesAccessibleCountLabel(selectedApps.size, selectedBlockedDomains.size)
+            val stackSummary = LocalDensity.current.fontScale >= 1.3f
+            if (stackSummary) {
+                Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(text = label, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = countLabel,
+                            modifier = Modifier.clearAndSetSemantics { contentDescription = accessibilityCount },
+                            maxLines = 1,
+                            softWrap = false,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(Modifier.size(4.dp))
+                        Text(text = ">", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            } else {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(text = label, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Spacer(Modifier.size(4.dp))
                     Text(
-                        text = "${selectedApps.size} apps · ${selectedBlockedDomains.size} websites",
+                        text = countLabel,
+                        modifier = Modifier.clearAndSetSemantics { contentDescription = accessibilityCount },
+                        maxLines = 1,
+                        softWrap = false,
+                        style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    Spacer(Modifier.size(4.dp))
+                    Text(text = ">", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                Text(text = ">", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
 
     }
+}
+
+internal fun appsAndWebsitesCountLabel(appCount: Int, websiteCount: Int): String {
+    return "${pluralizedCount(appCount, "app")} · ${pluralizedCount(websiteCount, "website")}"
+}
+
+internal fun appsAndWebsitesAccessibleCountLabel(appCount: Int, websiteCount: Int): String {
+    return "${pluralizedCount(appCount, "app")}, ${pluralizedCount(websiteCount, "website")}"
+}
+
+private fun pluralizedCount(count: Int, singular: String): String {
+    val safeCount = count.coerceAtLeast(0)
+    return "$safeCount ${if (safeCount == 1) singular else "${singular}s"}"
 }
 
 internal fun rewardAppPickerTitle(ruleType: EarnItRuleStore.RuleType): String {

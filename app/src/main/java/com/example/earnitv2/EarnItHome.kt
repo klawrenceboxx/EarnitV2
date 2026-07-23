@@ -52,6 +52,7 @@ fun EarnItHome(
     onOpenEarnApp: (String) -> Unit,
     onOpenUsageAccessSettings: () -> Unit,
     onOpenAccessibilitySettings: () -> Unit,
+    onContinueSetup: () -> Unit,
     onOpenSettings: () -> Unit,
     onToggleManageRules: () -> Unit,
     onOpenRuleDetail: (String) -> Unit,
@@ -76,8 +77,7 @@ fun EarnItHome(
             if (permissionState.needsAttention) {
                 HomeAttentionBanner(
                     permissionState = permissionState,
-                    onOpenUsageAccessSettings = onOpenUsageAccessSettings,
-                    onOpenAccessibilitySettings = onOpenAccessibilitySettings
+                    onContinueSetup = onContinueSetup
                 )
             }
 
@@ -306,8 +306,7 @@ private fun HomeTopBar(onOpenSettings: () -> Unit) {
 @Composable
 private fun HomeAttentionBanner(
     permissionState: PermissionSetupUiState,
-    onOpenUsageAccessSettings: () -> Unit,
-    onOpenAccessibilitySettings: () -> Unit
+    onContinueSetup: () -> Unit
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -318,22 +317,27 @@ private fun HomeAttentionBanner(
             modifier = Modifier.padding(14.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Text(text = "EarnIt needs attention", style = MaterialTheme.typography.titleSmall)
+            val title = when {
+                permissionState.earningProgressStatus == EarnItPermissionStatus.NeedsAttention &&
+                    permissionState.appBlockingStatus == EarnItPermissionStatus.Granted -> "Finish earning setup"
+                permissionState.appBlockingStatus == EarnItPermissionStatus.NeedsAttention &&
+                    permissionState.earningProgressStatus == EarnItPermissionStatus.Granted -> "Finish app-blocking setup"
+                else -> "Finish setup"
+            }
+            val body = when {
+                permissionState.earningProgressStatus == EarnItPermissionStatus.NeedsAttention &&
+                    permissionState.appBlockingStatus == EarnItPermissionStatus.Granted -> "EarnIt cannot count time in your Earn Apps yet."
+                permissionState.appBlockingStatus == EarnItPermissionStatus.NeedsAttention &&
+                    permissionState.earningProgressStatus == EarnItPermissionStatus.Granted -> "EarnIt cannot stop Reward Apps yet."
+                else -> "EarnIt needs access before earning progress and app blocking can work correctly."
+            }
+            Text(text = title, style = MaterialTheme.typography.titleSmall)
             Text(
-                text = permissionState.repairTargetLabels.joinToString(" and ") + " needs setup",
+                text = body,
                 style = MaterialTheme.typography.bodyMedium
             )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (permissionState.earningProgressStatus == EarnItPermissionStatus.NeedsAttention) {
-                    Button(onClick = onOpenUsageAccessSettings) {
-                        Text(text = "Fix earning")
-                    }
-                }
-                if (permissionState.appBlockingStatus == EarnItPermissionStatus.NeedsAttention) {
-                    Button(onClick = onOpenAccessibilitySettings) {
-                        Text(text = "Fix blocking")
-                    }
-                }
+            Button(onClick = onContinueSetup) {
+                Text(text = "Continue setup")
             }
         }
     }
