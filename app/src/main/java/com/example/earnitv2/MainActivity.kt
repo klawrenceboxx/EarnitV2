@@ -166,6 +166,8 @@ class MainActivity : ComponentActivity() {
     private var productivePickerOpen by mutableStateOf(false)
     private var blockedPickerOpen by mutableStateOf(false)
     private var blockedPickerOriginalPackages by mutableStateOf<Set<String>?>(null)
+    private var selectedBlockedDomains by mutableStateOf<List<String>>(emptyList())
+    private var blockedPickerOriginalDomains by mutableStateOf<List<String>?>(null)
     private var productiveSearch by mutableStateOf("")
     private var blockedSearch by mutableStateOf("")
     private var usageAccessGranted by mutableStateOf(false)
@@ -263,6 +265,7 @@ class MainActivity : ComponentActivity() {
                             selectedProductivePackage = selectedProductivePackage,
                             selectedProductivePackages = selectedProductivePackages,
                             selectedBlockedPackages = selectedBlockedPackages,
+                            selectedBlockedDomains = selectedBlockedDomains,
                             selectedRequirements = selectedRequirements,
                             requirementPickerOpen = requirementPickerOpen,
                             requirementSearch = requirementSearch,
@@ -386,6 +389,7 @@ class MainActivity : ComponentActivity() {
                             onEditRequirement = ::editRequirement,
                             onDeleteRequirement = ::deleteRequirement,
                             onToggleBlockedApp = ::toggleBlockedApp,
+                            onBlockedDomainsChange = { selectedBlockedDomains = it },
                             onSelectRatio = { selectedRatio = it },
                             onToggleActiveDay = ::toggleActiveDay,
                             onSelectActiveDays = { selectedActiveDays = it },
@@ -900,6 +904,7 @@ class MainActivity : ComponentActivity() {
             emptySet()
         }
         selectedBlockedPackages = rule.blockedApps.map { it.packageName }.toSet()
+        selectedBlockedDomains = rule.normalizedBlockedDomains
         selectedRequirements = rule.requirements
         requirementPickerOpen = false
         requirementSearch = ""
@@ -919,6 +924,7 @@ class MainActivity : ComponentActivity() {
         productivePickerOpen = false
         blockedPickerOpen = false
         blockedPickerOriginalPackages = null
+        blockedPickerOriginalDomains = null
         productiveSearch = ""
         blockedSearch = ""
     }
@@ -932,6 +938,7 @@ class MainActivity : ComponentActivity() {
         productivePickerOpen = false
         blockedPickerOpen = false
         blockedPickerOriginalPackages = null
+        blockedPickerOriginalDomains = null
         requirementPickerOpen = false
         cancelScheduleWindow()
     }
@@ -1072,6 +1079,7 @@ class MainActivity : ComponentActivity() {
 
     private fun openBlockedPicker() {
         blockedPickerOriginalPackages = selectedBlockedPackages
+        blockedPickerOriginalDomains = selectedBlockedDomains
         blockedPickerOpen = true
         blockedSearch = ""
         refreshLaunchableApps()
@@ -1084,6 +1092,7 @@ class MainActivity : ComponentActivity() {
             applyChanges = true
         )
         blockedPickerOriginalPackages = null
+        blockedPickerOriginalDomains = null
         blockedPickerOpen = false
         blockedSearch = ""
     }
@@ -1094,7 +1103,9 @@ class MainActivity : ComponentActivity() {
             stagedPackages = selectedBlockedPackages,
             applyChanges = false
         )
+        selectedBlockedDomains = blockedPickerOriginalDomains ?: selectedBlockedDomains
         blockedPickerOriginalPackages = null
+        blockedPickerOriginalDomains = null
         blockedPickerOpen = false
         blockedSearch = ""
     }
@@ -1293,7 +1304,7 @@ class MainActivity : ComponentActivity() {
                 EarnItRuleStore.RuleApp(packageName = it.packageName, name = it.name)
             } ?: savedBlockedApps[packageName]
         }
-        if (blockedApps.isEmpty()) return
+        if (blockedApps.isEmpty() && selectedBlockedDomains.isEmpty()) return
 
         val rule = EarnItRuleStore.Rule(
             id = editingRule.id,
@@ -1308,7 +1319,8 @@ class MainActivity : ComponentActivity() {
             enabled = editingRule.enabled,
             type = editingRule.type,
             productiveApps = if (editingRule.type == EarnItRuleStore.RuleType.EarnRewardTime) productiveApps else emptyList(),
-            requirements = if (editingRule.type == EarnItRuleStore.RuleType.CompleteToUnlock) selectedRequirements else emptyList()
+            requirements = if (editingRule.type == EarnItRuleStore.RuleType.CompleteToUnlock) selectedRequirements else emptyList(),
+            blockedDomains = selectedBlockedDomains
         )
         if (builderEntryContext == RuleBuilderEntryContext.Edit && isRuleProtected(editingRule)) {
             val comparison = RuleRestrictionPolicy.compare(editingRule, rule)
@@ -1569,6 +1581,8 @@ internal fun Dashboard(
     builderStep: RuleBuilderStep,
     onBuilderStepChange: (RuleBuilderStep) -> Unit,
     onSaveRule: () -> Unit,
+    selectedBlockedDomains: List<String> = emptyList(),
+    onBlockedDomainsChange: (List<String>) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     LaunchedEffect(pauseExpirations) {
@@ -1749,7 +1763,7 @@ internal fun Dashboard(
             modifier = modifier
         )
     } else if (blockedPickerOpen) {
-        BuilderAppPickerSurface(
+        RewardTargetPickerSurface(
             title = rewardAppPickerTitle(editingRule.type),
             supportingText = rewardAppPickerSupportingText(editingRule.type),
             searchLabel = rewardAppPickerSearchLabel(editingRule.type),
@@ -1763,6 +1777,9 @@ internal fun Dashboard(
             onBack = onDismissBlockedPicker,
             multiSelect = true,
             saveLabel = "Save",
+            selectedDomains = selectedBlockedDomains,
+            onDomainsChange = onBlockedDomainsChange,
+            accessibilityEnabled = accessibilityServiceEnabled,
             modifier = modifier
         )
     } else {
@@ -1779,6 +1796,7 @@ internal fun Dashboard(
                 selectedProductivePackage = selectedProductivePackage,
                 selectedProductivePackages = selectedProductivePackages,
                 selectedBlockedPackages = selectedBlockedPackages,
+                selectedBlockedDomains = selectedBlockedDomains,
                 selectedRequirements = selectedRequirements,
                 selectedRequirementPackage = selectedRequirementPackage,
                 selectedRequirementMinutes = selectedRequirementMinutes,
@@ -1905,7 +1923,8 @@ private fun RuleEditor(
     builderStep: RuleBuilderStep,
     onBuilderStepChange: (RuleBuilderStep) -> Unit,
     onSaveRule: () -> Unit,
-    onCancel: () -> Unit
+    onCancel: () -> Unit,
+    selectedBlockedDomains: List<String> = emptyList()
 ) {
     EarnItRuleBuilder(
         rule = rule,
@@ -1913,6 +1932,7 @@ private fun RuleEditor(
         selectedProductivePackage = selectedProductivePackage,
         selectedProductivePackages = selectedProductivePackages,
         selectedBlockedPackages = selectedBlockedPackages,
+        selectedBlockedDomains = selectedBlockedDomains,
         selectedRequirements = selectedRequirements,
         selectedRequirementPackage = selectedRequirementPackage,
         selectedRequirementMinutes = selectedRequirementMinutes,

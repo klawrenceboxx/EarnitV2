@@ -26,6 +26,7 @@ object EarnItRuleStore {
     private const val DAY_SEPARATOR = ","
     private const val RULE_FIELD_SEPARATOR = "\u001F"
     private const val RULE_RECORD_SEPARATOR = "\u001E"
+    private const val DOMAIN_SERIALIZATION_VERSION = "v1"
     private const val MIGRATED_RULE_ID = "default"
 
     val allowedRatios = listOf(1, 2, 5)
@@ -60,8 +61,14 @@ object EarnItRuleStore {
         val type: RuleType = RuleType.EarnRewardTime,
         val productiveApps: List<RuleApp> = emptyList(),
         val requirements: List<RuleRequirement> = emptyList(),
-        val timeWindows: List<TimeWindow> = emptyList()
+        val timeWindows: List<TimeWindow> = emptyList(),
+        /** Versioned by its serialized field position; values are canonical hostnames only. */
+        val blockedDomains: List<String> = emptyList()
     ) {
+        val normalizedBlockedDomains: List<String> = blockedDomains
+            .mapNotNull(DomainNormalizer::normalize)
+            .distinct()
+            .sorted()
         val earnApps: List<RuleApp> = productiveApps
             .ifEmpty { listOf(RuleApp(productivePackage, productiveName)) }
             .filter { it.packageName.isNotBlank() }
@@ -72,15 +79,20 @@ object EarnItRuleStore {
         )
         val ratioLabel: String = "10:$rewardSecondsPerProductiveSecond min"
         val blockedAppCount: Int = blockedApps.size
-        val blockedSummary: String = if (blockedApps.size == 1) {
+        val protectedTargetCount: Int = blockedApps.size + normalizedBlockedDomains.size
+        val blockedSummary: String = if (protectedTargetCount == 1 && blockedApps.size == 1) {
             blockedApps.first().name
         } else {
-            "${blockedApps.size} blocked apps"
+            "$protectedTargetCount protected items"
         }
         val scheduleLabel: String = scheduleSummary(activeDays, effectiveTimeWindows)
 
         fun blockedAppForPackage(packageName: String): RuleApp? {
             return blockedApps.firstOrNull { it.packageName == packageName }
+        }
+
+        fun blockedDomainForHost(host: String): String? {
+            return normalizedBlockedDomains.firstOrNull { DomainMatcher.matches(it, host) }
         }
 
         fun earnAppForPackage(packageName: String): RuleApp? {
@@ -152,7 +164,8 @@ object EarnItRuleStore {
 
     fun saveRules(context: Context, rules: List<Rule>) {
         val cleanRules = rules
-            .filter { it.blockedApps.isNotEmpty() }
+            .map { it.copy(blockedDomains = it.normalizedBlockedDomains) }
+            .filter { it.blockedApps.isNotEmpty() || it.normalizedBlockedDomains.isNotEmpty() }
             .distinctBy { it.id }
             .withoutEnabledEarnRewardConflicts()
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -355,6 +368,18 @@ object EarnItRuleStore {
             .ifEmpty { listOf(TimeWindow(0, 1_440)) }
     }
 
+    private fun encodeBlockedDomains(domains: List<String>): String = buildList {
+        add(DOMAIN_SERIALIZATION_VERSION)
+        addAll(domains.mapNotNull(DomainNormalizer::normalize).distinct().sorted())
+    }.joinToString(APP_RECORD_SEPARATOR)
+
+    private fun decodeBlockedDomains(rawValue: String?): List<String> {
+        if (rawValue.isNullOrBlank()) return emptyList()
+        val lines = rawValue.lines()
+        val values = if (lines.firstOrNull() == DOMAIN_SERIALIZATION_VERSION) lines.drop(1) else lines
+        return values.mapNotNull(DomainNormalizer::normalize).distinct().sorted()
+    }
+
     fun normalizeActiveDays(activeDays: Set<Int>): Set<Int> {
         val validDays = activeDays.filter { it in allDays }.toSet()
         return when (validDays) {
@@ -425,7 +450,8 @@ object EarnItRuleStore {
                 rule.type.name,
                 encodeBlockedApps(rule.earnApps),
                 encodeRequirements(rule.requirements),
-                encodeTimeWindows(rule.effectiveTimeWindows)
+                encodeTimeWindows(rule.effectiveTimeWindows),
+                encodeBlockedDomains(rule.normalizedBlockedDomains)
             ).joinToString(RULE_FIELD_SEPARATOR) { encodeField(it) }
         }
     }
@@ -443,7 +469,9 @@ object EarnItRuleStore {
                     ?: if (type == RuleType.EarnRewardTime) return@mapNotNull null else ""
                 val productiveName = fields.getOrNull(2)?.takeIf { it.isNotBlank() }
                     ?: productivePackage.takeIf { it.isNotBlank() }.orEmpty()
-                val blockedApps = decodeBlockedApps(fields.getOrNull(3)).ifEmpty { return@mapNotNull null }
+                val blockedApps = decodeBlockedApps(fields.getOrNull(3))
+                val blockedDomains = decodeBlockedDomains(fields.getOrNull(13))
+                if (blockedApps.isEmpty() && blockedDomains.isEmpty()) return@mapNotNull null
                 val ratio = fields.getOrNull(4)?.toIntOrNull()?.takeIf { it > 0 } ?: 2
                 val activeDays = decodeActiveDays(fields.getOrNull(5))
                 val startMinute = fields.getOrNull(6)?.toIntOrNull()?.coerceIn(0, 1_439) ?: 0
@@ -469,7 +497,8 @@ object EarnItRuleStore {
                     type = type,
                     productiveApps = productiveApps,
                     requirements = requirements,
-                    timeWindows = timeWindows
+                    timeWindows = timeWindows,
+                    blockedDomains = blockedDomains
                 )
             }
             .distinctBy { it.id }
@@ -477,10 +506,17 @@ object EarnItRuleStore {
 
     private fun List<Rule>.withoutEnabledEarnRewardConflicts(): List<Rule> {
         val claimedRewardPackages = mutableSetOf<String>()
+        val claimedRewardDomains = mutableSetOf<String>()
         return map { rule ->
             if (!rule.enabled || rule.type != RuleType.EarnRewardTime) return@map rule
-            val conflicts = rule.blockedApps.any { it.packageName in claimedRewardPackages }
+            val conflicts = rule.blockedApps.any { it.packageName in claimedRewardPackages } ||
+                rule.normalizedBlockedDomains.any { domain ->
+                    claimedRewardDomains.any { claimed ->
+                        DomainMatcher.matches(claimed, domain) || DomainMatcher.matches(domain, claimed)
+                    }
+                }
             rule.blockedApps.forEach { claimedRewardPackages += it.packageName }
+            claimedRewardDomains += rule.normalizedBlockedDomains
             if (conflicts) rule.copy(enabled = false) else rule
         }
     }

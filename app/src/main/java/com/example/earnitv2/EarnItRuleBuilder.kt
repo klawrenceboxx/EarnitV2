@@ -105,7 +105,8 @@ fun EarnItRuleBuilder(
     onEditStartTime: () -> Unit,
     onEditEndTime: () -> Unit,
     onSaveRule: () -> Unit,
-    onCancel: () -> Unit
+    onCancel: () -> Unit,
+    selectedBlockedDomains: List<String> = emptyList()
 ) {
     val steps = builderStepsFor(rule.type)
     val currentStep = if (builderStep in steps) builderStep else steps.first()
@@ -125,7 +126,8 @@ fun EarnItRuleBuilder(
         selectedActiveDays = selectedActiveDays,
         selectedStartMinute = selectedStartMinute,
         selectedEndMinute = selectedEndMinute,
-        selectedTimeWindows = selectedTimeWindows
+        selectedTimeWindows = selectedTimeWindows,
+        selectedBlockedDomains = selectedBlockedDomains
     )
     BackHandler(onBack = logicalBack)
 
@@ -175,6 +177,7 @@ fun EarnItRuleBuilder(
                 rule = rule,
                 apps = apps,
                 selectedBlockedPackages = selectedBlockedPackages,
+                selectedBlockedDomains = selectedBlockedDomains,
                 onOpenBlockedPicker = onOpenBlockedPicker,
                 ruleType = rule.type
             )
@@ -233,7 +236,8 @@ fun ruleDraftUiState(
     selectedActiveDays: Set<Int>,
     selectedStartMinute: Int,
     selectedEndMinute: Int,
-    selectedTimeWindows: List<EarnItRuleStore.TimeWindow> = listOf(EarnItRuleStore.TimeWindow(selectedStartMinute, selectedEndMinute))
+    selectedTimeWindows: List<EarnItRuleStore.TimeWindow> = listOf(EarnItRuleStore.TimeWindow(selectedStartMinute, selectedEndMinute)),
+    selectedBlockedDomains: List<String> = rule.normalizedBlockedDomains
 ): RuleDraftUiState {
     val savedEarnApps = rule.earnApps.associateBy { it.packageName }
     val launchableApps = apps.associateBy { it.packageName }
@@ -253,8 +257,110 @@ fun ruleDraftUiState(
         selectedRewardApps = selectedRewardApps,
         exchangeSelection = selectedRatio,
         activeDays = selectedActiveDays,
-        timeWindows = selectedTimeWindows
+        timeWindows = selectedTimeWindows,
+        selectedBlockedDomains = selectedBlockedDomains
     )
+}
+
+enum class RewardTargetTab { Apps, Websites }
+
+data class DomainSelectionResult(val domains: List<String>, val error: String? = null)
+
+fun addDomainToSelection(current: List<String>, input: String): DomainSelectionResult {
+    val normalized = DomainNormalizer.normalize(input)
+        ?: return DomainSelectionResult(current, "Enter a valid website domain")
+    if (normalized in current) return DomainSelectionResult(current, "$normalized is already selected")
+    return DomainSelectionResult((current + normalized).distinct().sorted())
+}
+
+@Composable
+internal fun RewardTargetPickerSurface(
+    title: String,
+    supportingText: String?,
+    searchLabel: String,
+    apps: List<EarnItRuleStore.LaunchableApp>,
+    selectedPackages: Set<String>,
+    searchQuery: String,
+    loading: Boolean,
+    onSearchQueryChange: (String) -> Unit,
+    onToggleApp: (String) -> Unit,
+    onSave: () -> Unit,
+    onBack: () -> Unit,
+    multiSelect: Boolean,
+    saveLabel: String,
+    selectedDomains: List<String>,
+    onDomainsChange: (List<String>) -> Unit,
+    accessibilityEnabled: Boolean = true,
+    modifier: Modifier = Modifier
+) {
+    var tab by remember { mutableStateOf(RewardTargetTab.Apps) }
+    if (tab == RewardTargetTab.Apps) {
+        Column(modifier.fillMaxSize()) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button({ tab = RewardTargetTab.Apps }, Modifier.weight(1f)) { Text("Apps") }
+                OutlinedButton({ tab = RewardTargetTab.Websites }, Modifier.weight(1f)) { Text("Websites") }
+            }
+            BuilderAppPickerSurface(
+                title = title.replace("Apps", "Apps & Websites"), supportingText = supportingText,
+                searchLabel = searchLabel, apps = apps, selectedPackages = selectedPackages,
+                searchQuery = searchQuery, loading = loading, onSearchQueryChange = onSearchQueryChange,
+                onToggleApp = onToggleApp, onSave = onSave, onBack = onBack,
+                multiSelect = multiSelect, saveLabel = saveLabel, modifier = Modifier.weight(1f)
+            )
+        }
+    } else {
+        val context = androidx.compose.ui.platform.LocalContext.current
+        val chromeInstalled = remember(context) {
+            EarnItRuleStore.appInstalled(context, ChromeBrowserAdapter.CHROME_PACKAGE)
+        }
+        var input by remember { mutableStateOf("") }
+        var error by remember { mutableStateOf<String?>(null) }
+        BackHandler(onBack = onBack)
+        Column(modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton({ tab = RewardTargetTab.Apps }, Modifier.weight(1f)) { Text("Apps") }
+                Button({ tab = RewardTargetTab.Websites }, Modifier.weight(1f)) { Text("Websites") }
+            }
+            Text("Add websites", style = MaterialTheme.typography.headlineMedium)
+            Text("Protected websites share this Rule's Reward Time and schedule. Chrome is supported first.")
+            if (!accessibilityEnabled) {
+                Text(
+                    "Accessibility access is off, so websites are not currently protected. You can still configure them.",
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
+            if (!chromeInstalled) {
+                Text(
+                    "Google Chrome is not installed. These websites will become protected when Chrome is installed.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            TextField(
+                value = input, onValueChange = { input = it; error = null },
+                label = { Text("Enter a website such as youtube.com") },
+                isError = error != null,
+                supportingText = if (error != null) ({ Text(error.orEmpty()) }) else null,
+                modifier = Modifier.fillMaxWidth(), singleLine = true
+            )
+            Button(onClick = {
+                val result = addDomainToSelection(selectedDomains, input)
+                error = result.error
+                if (result.error == null) { onDomainsChange(result.domains); input = "" }
+            }, modifier = Modifier.fillMaxWidth()) { Text("Add") }
+            LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(selectedDomains, key = { it }) { domain ->
+                    Card(Modifier.fillMaxWidth()) {
+                        Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text("🌐  $domain", Modifier.weight(1f), maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            TextButton({ onDomainsChange(selectedDomains - domain) }) { Text("Remove") }
+                        }
+                    }
+                }
+            }
+            Text("${selectedPackages.size} apps · ${selectedDomains.size} websites selected")
+            Button(onSave, Modifier.fillMaxWidth(), enabled = selectedPackages.isNotEmpty() || selectedDomains.isNotEmpty()) { Text(saveLabel) }
+        }
+    }
 }
 
 @Composable
@@ -352,7 +458,7 @@ private fun RuleSoFar(
     requirements: List<EarnItRuleStore.RuleRequirement>
 ) {
     val lines = compactRuleSoFarLines(ruleType, draft, requirements)
-    val hasApps = draft.selectedEarnApps.isNotEmpty() || draft.selectedRewardApps.isNotEmpty()
+    val hasApps = draft.selectedEarnApps.isNotEmpty() || draft.hasProtectedTargets()
     if (lines.isEmpty() && !hasApps) return
 
     Column(
@@ -999,6 +1105,7 @@ private fun RewardStep(
     rule: EarnItRuleStore.Rule,
     apps: List<EarnItRuleStore.LaunchableApp>,
     selectedBlockedPackages: Set<String>,
+    selectedBlockedDomains: List<String>,
     onOpenBlockedPicker: () -> Unit,
     ruleType: EarnItRuleStore.RuleType
 ) {
@@ -1025,10 +1132,11 @@ private fun RewardStep(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(text = if (selectedApps.isEmpty()) chooseAppsLabel(ruleType) else manageAppsLabel(ruleType))
-                if (selectedApps.isNotEmpty()) {
+                val total = selectedApps.size + selectedBlockedDomains.size
+                Text(text = if (total == 0) "Choose Apps & Websites" else "Manage Apps & Websites")
+                if (total > 0) {
                     Text(
-                        text = selectedAppCountLabel(selectedApps.size),
+                        text = "${selectedApps.size} apps · ${selectedBlockedDomains.size} websites",
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
@@ -1742,6 +1850,7 @@ private fun CompleteToUnlockReviewStep(
                 apps = draft.selectedRewardApps,
                 missingValue = "Choose at least one app before saving."
             )
+            ReviewWebsitesSection(draft.selectedBlockedDomains)
             ReviewAgreementSection(
                 label = "ACTIVE",
                 value = reviewScheduleDetail(draft)
@@ -1762,6 +1871,7 @@ private fun ScheduledBlockReviewStep(draft: RuleDraftUiState) {
                 apps = draft.selectedRewardApps,
                 missingValue = "Choose at least one app before saving."
             )
+            ReviewWebsitesSection(draft.selectedBlockedDomains)
             ReviewAgreementSection(
                 label = "BLOCK DURING",
                 value = reviewScheduleDetail(draft)
@@ -1813,6 +1923,7 @@ private fun EarnRewardReviewStep(draft: RuleDraftUiState) {
                     apps = draft.selectedRewardApps,
                     missingValue = "Choose at least one Reward App before saving."
                 )
+                ReviewWebsitesSection(draft.selectedBlockedDomains)
                 ReviewAgreementSection(
                     label = "ACTIVE",
                     value = if (reviewScheduleIsValid(draft)) {
@@ -1896,7 +2007,7 @@ private fun ReviewAppsSection(label: String, apps: List<EarnItAppUiState>, missi
 private fun reviewMissingItems(draft: RuleDraftUiState): List<String> {
     return buildList {
         if (draft.selectedEarnApps.isEmpty()) add("Earn App")
-        if (draft.selectedRewardApps.isEmpty()) add("Reward App")
+        if (!draft.hasProtectedTargets()) add("Reward App or Website")
         if (draft.exchangeSelection <= 0) add("Reward Time exchange")
         if (!reviewScheduleIsValid(draft)) add("Active schedule")
     }
@@ -1905,6 +2016,16 @@ private fun reviewMissingItems(draft: RuleDraftUiState): List<String> {
 private fun reviewScheduleIsValid(draft: RuleDraftUiState): Boolean {
     return draft.activeDays.any { it in EarnItRuleStore.allDays } &&
         draft.timeWindows.isNotEmpty()
+}
+
+@Composable
+private fun ReviewWebsitesSection(domains: List<String>) {
+    if (domains.isEmpty()) return
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text("WEBSITES", style = MaterialTheme.typography.labelSmall)
+        domains.take(5).forEach { Text("🌐  $it", style = MaterialTheme.typography.bodyMedium) }
+        if (domains.size > 5) Text("+${domains.size - 5} more", style = MaterialTheme.typography.bodySmall)
+    }
 }
 
 private fun reviewScheduleSummary(draft: RuleDraftUiState): String {
@@ -1957,7 +2078,7 @@ private fun stepIsComplete(
             EarnItRuleStore.RuleType.CompleteToUnlock -> requirements.isNotEmpty()
             EarnItRuleStore.RuleType.ScheduledBlock -> true
         }
-        RuleBuilderStep.Reward -> draft.selectedRewardApps.isNotEmpty()
+        RuleBuilderStep.Reward -> draft.hasProtectedTargets()
         RuleBuilderStep.Exchange -> draft.exchangeSelection > 0
         RuleBuilderStep.Schedule -> reviewScheduleIsValid(draft)
         RuleBuilderStep.Review -> false
@@ -1977,13 +2098,13 @@ private fun stepIsEnabled(
             EarnItRuleStore.RuleType.CompleteToUnlock -> requirements.isNotEmpty()
             EarnItRuleStore.RuleType.ScheduledBlock -> true
         }
-        RuleBuilderStep.Exchange -> draft.selectedEarnApps.isNotEmpty() && draft.selectedRewardApps.isNotEmpty()
+        RuleBuilderStep.Exchange -> draft.selectedEarnApps.isNotEmpty() && draft.hasProtectedTargets()
         RuleBuilderStep.Schedule -> when (ruleType) {
             EarnItRuleStore.RuleType.EarnRewardTime -> draft.selectedEarnApps.isNotEmpty() &&
-                draft.selectedRewardApps.isNotEmpty() &&
+                draft.hasProtectedTargets() &&
                 draft.exchangeSelection > 0
-            EarnItRuleStore.RuleType.CompleteToUnlock -> requirements.isNotEmpty() && draft.selectedRewardApps.isNotEmpty()
-            EarnItRuleStore.RuleType.ScheduledBlock -> draft.selectedRewardApps.isNotEmpty()
+            EarnItRuleStore.RuleType.CompleteToUnlock -> requirements.isNotEmpty() && draft.hasProtectedTargets()
+            EarnItRuleStore.RuleType.ScheduledBlock -> draft.hasProtectedTargets()
         }
         RuleBuilderStep.Review -> canSaveRule(ruleType, draft, requirements)
     }
@@ -2000,7 +2121,7 @@ private fun canContinue(
             EarnItRuleStore.RuleType.CompleteToUnlock -> requirements.isNotEmpty()
             EarnItRuleStore.RuleType.ScheduledBlock -> true
         }
-        RuleBuilderStep.Reward -> draft.selectedRewardApps.isNotEmpty()
+        RuleBuilderStep.Reward -> draft.hasProtectedTargets()
         RuleBuilderStep.Exchange -> draft.exchangeSelection > 0
         RuleBuilderStep.Schedule -> draft.activeDays.isNotEmpty() && draft.startMinute in 0..1_439 && draft.endMinute in 1..1_440
         RuleBuilderStep.Review -> canSaveRule(ruleType, draft, requirements)
@@ -2015,7 +2136,10 @@ private fun canSaveRule(
     val validSchedule = draft.activeDays.isNotEmpty() && draft.startMinute in 0..1_439 && draft.endMinute in 1..1_440
     return when (ruleType) {
         EarnItRuleStore.RuleType.EarnRewardTime -> draft.canSave
-        EarnItRuleStore.RuleType.CompleteToUnlock -> requirements.isNotEmpty() && draft.selectedRewardApps.isNotEmpty() && validSchedule
-        EarnItRuleStore.RuleType.ScheduledBlock -> draft.selectedRewardApps.isNotEmpty() && validSchedule
+        EarnItRuleStore.RuleType.CompleteToUnlock -> requirements.isNotEmpty() && draft.hasProtectedTargets() && validSchedule
+        EarnItRuleStore.RuleType.ScheduledBlock -> draft.hasProtectedTargets() && validSchedule
     }
 }
+
+private fun RuleDraftUiState.hasProtectedTargets(): Boolean =
+    selectedRewardApps.isNotEmpty() || selectedBlockedDomains.isNotEmpty()

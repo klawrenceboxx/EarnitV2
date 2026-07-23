@@ -390,7 +390,7 @@ private fun LiveRuleCard(
                             rows = earnRewardTimeEarnAppRows(card, supportingText = null),
                             onOpenEarnApp = onOpenEarnApp
                         )
-                        RewardAppsSummarySection(label = "Unlocks", apps = card.rewardApps)
+                        RewardAppsSummarySection(label = "Unlocks", apps = card.rewardApps, websiteCount = card.websiteCount)
                         if (homeRule.earnContextText != null) {
                             Text(
                                 text = homeRule.earnContextText,
@@ -404,10 +404,10 @@ private fun LiveRuleCard(
                             progress = homeRule.completeToUnlockProgress,
                             onOpenEarnApp = onOpenEarnApp
                         )
-                        RewardAppsSummarySection(label = "Unlocks", apps = card.rewardApps)
+                        RewardAppsSummarySection(label = "Unlocks", apps = card.rewardApps, websiteCount = card.websiteCount)
                     }
                     EarnItRuleStore.RuleType.ScheduledBlock -> {
-                        RewardAppsSummarySection(label = "Blocked Apps", apps = card.rewardApps)
+                        RewardAppsSummarySection(label = "Protected", apps = card.rewardApps, websiteCount = card.websiteCount)
                     }
                 }
             }
@@ -530,8 +530,9 @@ private fun RuleAppSection(
 }
 
 @Composable
-private fun RewardAppsSummarySection(label: String, apps: List<EarnItAppUiState>) {
+private fun RewardAppsSummarySection(label: String, apps: List<EarnItAppUiState>, websiteCount: Int = 0) {
     val summary = rewardAppsSummaryState(apps)
+    val appPreviewLimit = if (websiteCount > 0) 3 else 4
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         SectionLabel(text = label)
         Row(
@@ -539,14 +540,15 @@ private fun RewardAppsSummarySection(label: String, apps: List<EarnItAppUiState>
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            apps.take(5).forEach { app ->
+            apps.take(appPreviewLimit).forEach { app ->
                 EarnItAppIcon(
                     packageName = app.packageName,
                     appName = app.name.withoutStrayWarningIndicator(),
                     size = 30.dp
                 )
             }
-            if (apps.size > 5) {
+            if (websiteCount > 0) Text("🌐 $websiteCount", style = MaterialTheme.typography.bodySmall)
+            if (apps.size > appPreviewLimit) {
                 Box(
                     modifier = Modifier
                         .size(30.dp)
@@ -554,11 +556,11 @@ private fun RewardAppsSummarySection(label: String, apps: List<EarnItAppUiState>
                         .background(MaterialTheme.colorScheme.surfaceVariant),
                     contentAlignment = Alignment.Center
                 ) {
-                    Text(text = "+${apps.size - 5}", style = MaterialTheme.typography.labelSmall)
+                    Text(text = "+${apps.size - appPreviewLimit}", style = MaterialTheme.typography.labelSmall)
                 }
             }
             Text(
-                text = summary.namesLabel,
+                text = if (apps.isEmpty() && websiteCount > 0) "$websiteCount websites" else summary.namesLabel,
                 modifier = Modifier.weight(1f, fill = false),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,

@@ -50,11 +50,13 @@ class BlockedActivity : ComponentActivity() {
     private var ruleId by mutableStateOf<String?>(null)
     private var blockedAppName by mutableStateOf("Instagram")
     private var blockedPackage by mutableStateOf<String?>(null)
+    private var blockedDomain by mutableStateOf<String?>(null)
     private var earnApps by mutableStateOf(emptyList<BlockedEarnAppUiState>())
     private var blockedReason by mutableStateOf(RuleAccessEvaluator.DenialReason.OutOfRewardTime)
     private var fallbackMessage by mutableStateOf<String?>(null)
     private var incompleteRequirements by mutableStateOf(emptyList<BlockedRequirementUiState>())
     private var scheduleStatus by mutableStateOf<BlockedScheduleUiState?>(null)
+    private var availableRewardTimeLabel by mutableStateOf<String?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -69,11 +71,13 @@ class BlockedActivity : ComponentActivity() {
                 BlockedScreen(
                     blockedAppName = blockedAppName,
                     blockedPackage = blockedPackage,
+                    blockedDomain = blockedDomain,
                     earnApps = earnApps,
                     blockedReason = blockedReason,
                     incompleteRequirements = incompleteRequirements,
                     scheduleStatus = scheduleStatus,
                     fallbackMessage = fallbackMessage,
+                    availableRewardTimeLabel = availableRewardTimeLabel,
                     onOpenEarnApp = ::openEarnApp,
                     onOpenRequirementApp = ::openRequirementApp,
                     onViewMoreEarningApps = ::openRuleDetail,
@@ -92,6 +96,21 @@ class BlockedActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         updateRuleFromIntent(intent)
+        val domain = blockedDomain
+        if (domain != null) {
+            val calendar = Calendar.getInstance()
+            val result = RuleAccessEvaluator.evaluateDomain(
+                EarnItRuleStore.getRules(this), domain, when (calendar.get(Calendar.DAY_OF_WEEK)) {
+                    Calendar.MONDAY -> 1; Calendar.TUESDAY -> 2; Calendar.WEDNESDAY -> 3
+                    Calendar.THURSDAY -> 4; Calendar.FRIDAY -> 5; Calendar.SATURDAY -> 6; else -> 7
+                },
+                calendar.get(Calendar.HOUR_OF_DAY) * 60 + calendar.get(Calendar.MINUTE)
+            ) { rule -> RuleAccessEvaluator.RuleRuntimeState(
+                RewardLedger.snapshot(this, rule).remainingRewardSeconds,
+                RewardLedger.completionProgress(this, rule)
+            ) }
+            if (result.allowed) returnToChrome()
+        }
     }
 
     private fun updateRuleFromIntent(intent: Intent?) {
@@ -103,6 +122,7 @@ class BlockedActivity : ComponentActivity() {
             ?: "Reward App"
         blockedPackage = intent?.getStringExtra(EXTRA_BLOCKED_PACKAGE)
             ?: rule.blockedApps.firstOrNull { it.name == blockedAppName }?.packageName
+        blockedDomain = intent?.getStringExtra(EXTRA_BLOCKED_DOMAIN)?.let(DomainNormalizer::normalize)
         earnApps = blockedEarnAppUiStates(
             rule = rule,
             legacyEarnAppName = intent?.getStringExtra(EXTRA_PRODUCTIVE_APP_NAME) ?: rule.productiveName,
@@ -116,6 +136,9 @@ class BlockedActivity : ComponentActivity() {
             progressSeconds = RewardLedger.completionProgress(this, rule)
         )
         scheduleStatus = blockedScheduleUiState(rule)
+        availableRewardTimeLabel = if (rule.type == EarnItRuleStore.RuleType.EarnRewardTime) {
+            EarnItUiFormatters.rewardTimeAvailability(RewardLedger.snapshot(this, rule).remainingRewardSeconds)
+        } else null
     }
 
     private fun openEarnApp(app: BlockedEarnAppUiState) {
@@ -168,10 +191,19 @@ class BlockedActivity : ComponentActivity() {
         finish()
     }
 
+    private fun returnToChrome() {
+        packageManager.getLaunchIntentForPackage(ChromeBrowserAdapter.CHROME_PACKAGE)?.let {
+            it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+            startActivity(it)
+        }
+        finish()
+    }
+
     companion object {
         const val EXTRA_RULE_ID = "com.example.earnitv2.extra.RULE_ID"
         const val EXTRA_BLOCKED_APP_NAME = "com.example.earnitv2.extra.BLOCKED_APP_NAME"
         const val EXTRA_BLOCKED_PACKAGE = "com.example.earnitv2.extra.BLOCKED_PACKAGE"
+        const val EXTRA_BLOCKED_DOMAIN = "com.example.earnitv2.extra.BLOCKED_DOMAIN"
         const val EXTRA_PRODUCTIVE_APP_NAME = "com.example.earnitv2.extra.PRODUCTIVE_APP_NAME"
         const val EXTRA_PRODUCTIVE_PACKAGE = "com.example.earnitv2.extra.PRODUCTIVE_PACKAGE"
         const val EXTRA_BLOCKED_REASON = "com.example.earnitv2.extra.BLOCKED_REASON"
@@ -318,6 +350,7 @@ fun blockedEarnAppUiStates(
 fun BlockedScreen(
     blockedAppName: String,
     blockedPackage: String?,
+    blockedDomain: String? = null,
     earnApps: List<BlockedEarnAppUiState>,
     blockedReason: RuleAccessEvaluator.DenialReason,
     incompleteRequirements: List<BlockedRequirementUiState>,
@@ -327,6 +360,7 @@ fun BlockedScreen(
     onOpenRequirementApp: (BlockedRequirementUiState) -> Unit,
     onViewMoreEarningApps: () -> Unit,
     onNotNow: () -> Unit,
+    availableRewardTimeLabel: String? = null,
     modifier: Modifier = Modifier
 ) {
     val presentation = blockedScreenPresentation(blockedReason)
@@ -353,9 +387,18 @@ fun BlockedScreen(
             )
             BlockedAppIdentity(
                 packageName = blockedPackage,
+                isWebsite = blockedDomain != null,
                 appName = blockedAppName,
                 description = blockedDescription(blockedReason, blockedAppName)
             )
+            if (availableRewardTimeLabel != null) {
+                Text(
+                    text = availableRewardTimeLabel,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = accentColor,
+                    textAlign = TextAlign.Center
+                )
+            }
 
             Column(
                 modifier = Modifier.fillMaxWidth(),
@@ -422,6 +465,7 @@ private fun BlockedRuleHeader(
 @Composable
 private fun BlockedAppIdentity(
     packageName: String?,
+    isWebsite: Boolean,
     appName: String,
     description: String
 ) {
@@ -429,7 +473,17 @@ private fun BlockedAppIdentity(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        EarnItAppIcon(packageName = packageName, appName = appName, size = 72.dp)
+        if (isWebsite) {
+            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+                Text(
+                    "🌐",
+                    style = MaterialTheme.typography.headlineLarge,
+                    modifier = Modifier.padding(14.dp).semantics { contentDescription = "Website" }
+                )
+            }
+        } else {
+            EarnItAppIcon(packageName = packageName, appName = appName, size = 72.dp)
+        }
         Text(
             text = appName,
             style = MaterialTheme.typography.titleLarge,

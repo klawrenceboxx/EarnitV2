@@ -239,6 +239,7 @@ internal fun EarnItRuleDetail(
 
         if (permissionState.needsAttention) {
             RuleDetailAttention(
+                rule = rule,
                 permissionState = permissionState,
                 onOpenUsageAccessSettings = onOpenUsageAccessSettings,
                 onOpenAccessibilitySettings = onOpenAccessibilitySettings
@@ -263,6 +264,7 @@ internal fun EarnItRuleDetail(
                 onProtectedActionBlocked = onProtectedActionBlocked
             )
             EarnItRuleStore.RuleType.CompleteToUnlock -> CompleteToUnlockDetailCard(
+                rule = rule,
                 progress = homeRule.completeToUnlockProgress
                     ?: completeToUnlockProgressUiState(rule, emptyMap()),
                 rewardApps = detail.card.rewardApps,
@@ -445,6 +447,7 @@ private fun RuleDetailOverflowMenu(
 
 @Composable
 private fun RuleDetailAttention(
+    rule: EarnItRuleStore.Rule,
     permissionState: PermissionSetupUiState,
     onOpenUsageAccessSettings: () -> Unit,
     onOpenAccessibilitySettings: () -> Unit
@@ -452,7 +455,11 @@ private fun RuleDetailAttention(
     SectionContainer {
         Text(text = "EarnIt needs attention", style = MaterialTheme.typography.titleSmall)
         Text(
-            text = permissionState.repairTargetLabels.joinToString(" and ") + " needs setup",
+            text = if (rule.normalizedBlockedDomains.isNotEmpty() &&
+                permissionState.appBlockingStatus == EarnItPermissionStatus.NeedsAttention
+            ) {
+                "Accessibility access is off, so this Rule's websites are not currently protected."
+            } else permissionState.repairTargetLabels.joinToString(" and ") + " needs setup",
             style = MaterialTheme.typography.bodyMedium
         )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -741,6 +748,7 @@ private fun EarnRewardTimeDetailCard(
             apps = detail.card.rewardApps,
             body = "Use Reward Time on these apps."
         )
+        WebsiteDomainList(rule.normalizedBlockedDomains)
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         DeepWorkRuleSetting(rule, isProtectedByStrictMode, onProtectedActionBlocked)
     }
@@ -748,6 +756,7 @@ private fun EarnRewardTimeDetailCard(
 
 @Composable
 private fun CompleteToUnlockDetailCard(
+    rule: EarnItRuleStore.Rule,
     progress: CompleteToUnlockRuleProgressUiState,
     rewardApps: List<EarnItAppUiState>,
     onOpenRequirementApp: (String) -> Unit
@@ -773,6 +782,7 @@ private fun CompleteToUnlockDetailCard(
             apps = rewardApps,
             body = "These apps unlock after all requirements are completed."
         )
+        WebsiteDomainList(rule.normalizedBlockedDomains)
     }
 }
 
@@ -791,6 +801,20 @@ private fun ScheduledBlockAppsCard(
                 "These apps will be blocked when this Rule is resumed and active."
             }
         )
+        WebsiteDomainList(rule.normalizedBlockedDomains)
+    }
+}
+
+@Composable
+private fun WebsiteDomainList(domains: List<String>) {
+    if (domains.isEmpty()) return
+    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+    Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
+        Text("Websites", style = MaterialTheme.typography.titleSmall)
+        domains.take(6).forEach { domain ->
+            Text("🌐  $domain", style = MaterialTheme.typography.bodyMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        }
+        if (domains.size > 6) Text("+${domains.size - 6} more", style = MaterialTheme.typography.bodySmall)
     }
 }
 

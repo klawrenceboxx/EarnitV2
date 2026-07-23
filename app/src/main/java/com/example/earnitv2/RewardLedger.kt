@@ -463,11 +463,13 @@ object RewardLedger {
 
     private fun EarnItRuleStore.Rule.signature(): String {
         val blockedRuleId = blockedApps.map { it.packageName }.sorted().joinToString(",")
+        val blockedDomainsId = normalizedBlockedDomains.joinToString(",")
         val activeDaysId = activeDays.sorted().joinToString(",")
         val earnRuleId = earnApps.map { it.packageName }.sorted().joinToString(",")
         val requirementsId = requirements.joinToString(",") { "${it.app.packageName}:${it.requiredSeconds}" }
         val windowsId = effectiveTimeWindows.joinToString(",") { "${it.startMinute}-${it.endMinute}" }
-        return "$type|$earnRuleId|$blockedRuleId|$rewardSecondsPerProductiveSecond|$activeDaysId|$windowsId|$requirementsId"
+        val legacyCompatible = "$type|$earnRuleId|$blockedRuleId|$rewardSecondsPerProductiveSecond|$activeDaysId|$windowsId|$requirementsId"
+        return if (blockedDomainsId.isEmpty()) legacyCompatible else "$legacyCompatible|domains=$blockedDomainsId"
     }
 
     private fun todayKey(): String {

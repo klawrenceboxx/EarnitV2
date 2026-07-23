@@ -32,9 +32,30 @@ object RuleAccessEvaluator {
         minuteOfDay: Int,
         runtimeState: (EarnItRuleStore.Rule) -> RuleRuntimeState
     ): Result {
-        val matchingRules = rules.filter { rule ->
+        return evaluateMatching(rules.filter { rule ->
             rule.enabled && rule.blockedAppForPackage(blockedPackage) != null
-        }
+        }, day, minuteOfDay, runtimeState)
+    }
+
+    fun evaluateDomain(
+        rules: List<EarnItRuleStore.Rule>,
+        hostname: String,
+        day: Int,
+        minuteOfDay: Int,
+        runtimeState: (EarnItRuleStore.Rule) -> RuleRuntimeState
+    ): Result = evaluateMatching(
+        rules.filter { it.enabled && it.blockedDomainForHost(hostname) != null },
+        day,
+        minuteOfDay,
+        runtimeState
+    )
+
+    private fun evaluateMatching(
+        matchingRules: List<EarnItRuleStore.Rule>,
+        day: Int,
+        minuteOfDay: Int,
+        runtimeState: (EarnItRuleStore.Rule) -> RuleRuntimeState
+    ): Result {
         val denials = matchingRules.mapNotNull { rule ->
             evaluateRule(rule, day, minuteOfDay, runtimeState(rule))
         }
@@ -56,7 +77,7 @@ object RuleAccessEvaluator {
         minuteOfDay: Int,
         state: RuleRuntimeState
     ): RuleDenial? {
-        if (!rule.enabled || rule.blockedApps.isEmpty()) return null
+        if (!rule.enabled || (rule.blockedApps.isEmpty() && rule.normalizedBlockedDomains.isEmpty())) return null
         val active = rule.isActiveAt(day, minuteOfDay)
         return when (rule.type) {
             EarnItRuleStore.RuleType.ScheduledBlock -> {

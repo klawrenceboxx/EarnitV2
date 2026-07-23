@@ -11,6 +11,7 @@ internal enum class RestrictionClassification { Stricter, Equivalent, LessRestri
 
 internal enum class RestrictionReason {
     RewardAppsAdded, RewardAppsRemoved, EarnAppsAdded, EarnAppsRemoved,
+    WebsitesAdded, WebsitesRemoved,
     RequirementIncreased, RequirementReduced, RequirementAdded, RequirementRemoved,
     RewardRateReduced, RewardRateIncreased, ScheduleExpanded, ScheduleReduced,
     RuleTypeChanged, Enabled, Disabled, UnsupportedChange
@@ -34,6 +35,7 @@ internal object RuleRestrictionPolicy {
         }
         val changes = mutableListOf<RestrictionDimension>()
         compareSets(current.blockedApps.packages(), proposed.blockedApps.packages(), RestrictionReason.RewardAppsAdded, RestrictionReason.RewardAppsRemoved, changes)
+        compareSets(current.normalizedBlockedDomains.toSet(), proposed.normalizedBlockedDomains.toSet(), RestrictionReason.WebsitesAdded, RestrictionReason.WebsitesRemoved, changes)
         compareSets(current.activeDays, proposed.activeDays, RestrictionReason.ScheduleExpanded, RestrictionReason.ScheduleReduced, changes)
         compareSchedule(current, proposed)?.let(changes::add)
         if (current.enabled != proposed.enabled) {

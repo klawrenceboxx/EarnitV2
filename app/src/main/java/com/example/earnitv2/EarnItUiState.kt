@@ -20,7 +20,8 @@ data class RuleCardUiState(
     val scheduleStatusLabel: String,
     val enabled: Boolean,
     val paused: Boolean,
-    val attentionLabel: String?
+    val attentionLabel: String?,
+    val websiteCount: Int = 0
 )
 
 data class RuleDetailUiState(
@@ -43,7 +44,8 @@ data class RuleDraftUiState(
     val timeWindows: List<EarnItRuleStore.TimeWindow>,
     val canReview: Boolean,
     val canSave: Boolean,
-    val reviewSummary: String
+    val reviewSummary: String,
+    val selectedBlockedDomains: List<String> = emptyList()
 )
 
 data class PermissionSetupUiState(
@@ -74,7 +76,8 @@ object EarnItUiStateAdapters {
             scheduleStatusLabel = EarnItUiFormatters.scheduleStatus(rule, isActiveNow),
             enabled = rule.enabled,
             paused = !rule.enabled,
-            attentionLabel = attentionLabel(usageAccessGranted, appBlockingEnabled)
+            attentionLabel = attentionLabel(usageAccessGranted, appBlockingEnabled),
+            websiteCount = rule.normalizedBlockedDomains.size
         )
     }
 
@@ -98,7 +101,8 @@ object EarnItUiStateAdapters {
         selectedRewardApps: List<EarnItRuleStore.RuleApp>,
         exchangeSelection: Int,
         activeDays: Set<Int>,
-        timeWindows: List<EarnItRuleStore.TimeWindow>
+        timeWindows: List<EarnItRuleStore.TimeWindow>,
+        selectedBlockedDomains: List<String> = emptyList()
     ): RuleDraftUiState {
         val validExchange = exchangeSelection > 0
         val validDays = activeDays.filter { it in EarnItRuleStore.allDays }.toSet()
@@ -107,7 +111,7 @@ object EarnItUiStateAdapters {
         val earnApps = selectedEarnApps.distinctBy { it.packageName }.map { EarnItAppUiState(it.packageName, it.name) }
         val rewardApps = selectedRewardApps.distinctBy { it.packageName }.map { it.toUiState() }
         val ready = earnApps.isNotEmpty() &&
-            rewardApps.isNotEmpty() &&
+            (rewardApps.isNotEmpty() || selectedBlockedDomains.isNotEmpty()) &&
             validExchange &&
             validSchedule
         val firstWindow = normalizedWindows.first()
@@ -128,7 +132,8 @@ object EarnItUiStateAdapters {
                 exchangeSelection = exchangeSelection,
                 activeDays = validDays,
                 timeWindows = normalizedWindows
-            )
+            ),
+            selectedBlockedDomains = selectedBlockedDomains.mapNotNull(DomainNormalizer::normalize).distinct().sorted()
         )
     }
 

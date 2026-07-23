@@ -6,6 +6,7 @@ import android.app.usage.UsageStatsManager
 import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.ApplicationInfo
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -19,9 +20,79 @@ class EarnItAccessibilityService : AccessibilityService() {
     private var lastBlockedLaunchAt = 0L
     private var activeBlockedPackage: String? = null
     private var activeBlockedAppName: String? = null
+    private var activeBlockedDomain: String? = null
     private var activeRule: EarnItRuleStore.Rule? = null
-    private var lastConsumptionAt = 0L
+    private val usageClock = ProtectedUsageClock()
     private var handoffTracker: TrackedAppHandoffTracker? = null
+    private val browserPageObserver = CurrentBrowserPageObserver()
+    private val websiteRedirectGate = WebsiteRedirectGate()
+    private var pendingWebsiteBlock: PendingWebsiteBlock? = null
+    private var websiteRedirectAttemptCount = 0
+    private var activeBrowserPackage: String? = null
+    private var browserRetryCount = 0
+    private var foregroundRecheckCount = 0
+
+    private val browserRetryRunnable = object : Runnable {
+        override fun run() {
+            val browserPackage = activeBrowserPackage ?: return
+            val root = rootInActiveWindow
+            if (root?.packageName?.toString() == packageName) {
+                clearBrowserObservation()
+                stopActiveBlockedUsage()
+                return
+            }
+            if (root?.packageName?.toString() != browserPackage) {
+                browserPageObserver.clear()
+                stopActiveBlockedUsage()
+                scheduleBrowserRetry(browserPackage)
+                return
+            }
+            handleBrowserForeground(EarnItRuleStore.getRules(this@EarnItAccessibilityService), browserPackage)
+        }
+    }
+
+    private val foregroundWindowRecheckRunnable: Runnable = object : Runnable {
+        override fun run() {
+            val rootPackage = rootInActiveWindow?.packageName?.toString()
+            if (rootPackage == null || !browserPageObserver.isSupportedBrowser(rootPackage)) {
+                if (foregroundRecheckCount < MAX_FOREGROUND_RECHECKS) {
+                    foregroundRecheckCount += 1
+                    handler.postDelayed(this, BROWSER_RETRY_DELAY_MILLIS)
+                }
+                return
+            }
+            foregroundRecheckCount = 0
+            if (activeBrowserPackage != rootPackage) {
+                handler.removeCallbacks(browserRetryRunnable)
+                browserRetryCount = 0
+                activeBrowserPackage = rootPackage
+            }
+            handleBrowserForeground(EarnItRuleStore.getRules(this@EarnItAccessibilityService), rootPackage)
+        }
+    }
+
+    private val websiteRedirectRetryRunnable = object : Runnable {
+        override fun run() {
+            val pending = pendingWebsiteBlock ?: return
+            val browserPackage = activeBrowserPackage ?: ChromeBrowserAdapter.CHROME_PACKAGE
+            val root = rootInActiveWindow
+            if (root?.packageName?.toString() != browserPackage) {
+                cancelPendingWebsiteBlock()
+                return
+            }
+            if (browserPageObserver.isPlaceholderVisible(browserPackage, root)) {
+                launchPendingWebsiteBlock()
+                return
+            }
+            if (websiteRedirectAttemptCount >= MAX_WEBSITE_REDIRECT_ATTEMPTS) {
+                cancelPendingWebsiteBlock()
+                return
+            }
+            websiteRedirectAttemptCount += 1
+            browserPageObserver.redirectCurrentPageToPlaceholder(browserPackage, root)
+            handler.postDelayed(this, WEBSITE_REDIRECT_RETRY_MILLIS)
+        }
+    }
 
     private val consumeRunnable = object : Runnable {
         override fun run() {
@@ -31,12 +102,28 @@ class EarnItAccessibilityService : AccessibilityService() {
             if (packageName != null && blockedAppName != null) {
                 val rules = EarnItRuleStore.getRules(this@EarnItAccessibilityService)
                 creditLatestProgress(rules)
-                val result = evaluateAccess(rules, packageName)
+                val domain = activeBlockedDomain
+                val result = if (domain != null) evaluateDomainAccess(rules, domain) else evaluateAccess(rules, packageName)
                 val spendRule = result.spendRule
                 if (!result.allowed || spendRule == null) {
                     clearActiveBlockedApp()
                     if (result.primaryDenial != null) {
-                        launchBlockedActivity(result.primaryDenial.rule, blockedAppName, packageName, result.primaryDenial.reason, ignoreDebounce = true)
+                        if (domain != null) {
+                            redirectWebsiteThenLaunchBlocked(
+                                result.primaryDenial.rule,
+                                domain,
+                                result.primaryDenial.reason,
+                                ignoreDebounce = true
+                            )
+                        } else {
+                            launchBlockedActivity(
+                                result.primaryDenial.rule,
+                                blockedAppName,
+                                packageName,
+                                result.primaryDenial.reason,
+                                ignoreDebounce = true
+                            )
+                        }
                     }
                     return
                 }
@@ -47,13 +134,40 @@ class EarnItAccessibilityService : AccessibilityService() {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        if (event?.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
+        event ?: return
+        if (event.eventType !in SUPPORTED_EVENT_TYPES) return
+        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
+            event.eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED
+        ) {
+            handler.removeCallbacks(foregroundWindowRecheckRunnable)
+            foregroundRecheckCount = 0
+            handler.postDelayed(foregroundWindowRecheckRunnable, BROWSER_RETRY_DELAY_MILLIS)
+        }
 
-        val foregroundPackage = event.packageName?.toString() ?: return
+        val foregroundPackage = event.packageName?.toString()
+            ?: rootInActiveWindow?.packageName?.toString()
+            ?: return
         val foregroundClass = event.className?.toString()
 
         val eventAtMillis = System.currentTimeMillis()
         val rules = EarnItRuleStore.getRules(this)
+        if (browserPageObserver.isSupportedBrowser(foregroundPackage)) {
+            val activeRootPackage = rootInActiveWindow?.packageName?.toString()
+            if (activeBrowserPackage == null && activeRootPackage != foregroundPackage &&
+                event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
+            ) return
+            if (activeBrowserPackage != foregroundPackage) {
+                handler.removeCallbacks(browserRetryRunnable)
+                browserRetryCount = 0
+                activeBrowserPackage = foregroundPackage
+            }
+            handleBrowserForeground(rules, foregroundPackage)
+            return
+        } else {
+            clearBrowserObservation()
+        }
+
+        if (event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
         val relevantLogicalPackages = trackedLogicalPackages(rules)
         val recentlyForegroundLogicalPackages = recentlyForegroundLogicalPackages(
             relevantLogicalPackages = relevantLogicalPackages,
@@ -131,6 +245,11 @@ class EarnItAccessibilityService : AccessibilityService() {
     }
 
     override fun onDestroy() {
+        handler.removeCallbacks(foregroundWindowRecheckRunnable)
+        handler.removeCallbacks(websiteRedirectRetryRunnable)
+        pendingWebsiteBlock = null
+        websiteRedirectGate.clear()
+        clearBrowserObservation()
         stopTrackedAppHandoffSession()
         stopActiveBlockedUsage()
         super.onDestroy()
@@ -155,14 +274,169 @@ class EarnItAccessibilityService : AccessibilityService() {
         )
     }
 
+    private fun evaluateDomainAccess(
+        rules: List<EarnItRuleStore.Rule>,
+        hostname: String
+    ): RuleAccessEvaluator.Result {
+        val calendar = Calendar.getInstance()
+        return RuleAccessEvaluator.evaluateDomain(
+            rules = rules,
+            hostname = hostname,
+            day = calendar.toEarnItDay(),
+            minuteOfDay = calendar.get(Calendar.HOUR_OF_DAY) * 60 + calendar.get(Calendar.MINUTE),
+            runtimeState = { rule ->
+                RuleAccessEvaluator.RuleRuntimeState(
+                    remainingRewardSeconds = RewardLedger.snapshot(this, rule).remainingRewardSeconds,
+                    requirementProgressSeconds = RewardLedger.completionProgress(this, rule)
+                )
+            }
+        )
+    }
+
+    /** Website matches take precedence over a separately protected Chrome app to avoid double charging. */
+    private fun handleBrowserForeground(rules: List<EarnItRuleStore.Rule>, browserPackage: String) {
+        val root = rootInActiveWindow
+        if (root?.packageName?.toString() == browserPackage &&
+            browserPageObserver.isPlaceholderVisible(browserPackage, root) &&
+            pendingWebsiteBlock != null
+        ) {
+            stopActiveBlockedUsage()
+            launchPendingWebsiteBlock()
+            return
+        }
+        val page = if (root?.packageName?.toString() == browserPackage) {
+            browserPageObserver.observe(browserPackage, root)
+        } else null
+        if (page == null) {
+            stopActiveBlockedUsage()
+            scheduleBrowserRetry(browserPackage)
+            return
+        }
+        handler.removeCallbacks(browserRetryRunnable)
+        browserRetryCount = 0
+        val matchingDomain = rules.firstNotNullOfOrNull { it.blockedDomainForHost(page.normalizedHost) }
+        if (matchingDomain == null) {
+            creditLatestProgress(rules)
+            handleForegroundApp(rules, browserPackage)
+            return
+        }
+
+        val deepWork = DeepWorkStore.load(this)
+        val deepWorkRule = deepWork.linkedRuleId?.let { id -> rules.firstOrNull { it.id == id } }
+        if ((deepWork.phase == DeepWorkPhase.Active ||
+                deepWork.displayPhase(SystemClock.elapsedRealtime(), System.currentTimeMillis()) == DeepWorkPhase.GoalComplete) &&
+            deepWorkRule?.blockedDomainForHost(page.normalizedHost) != null
+        ) {
+            stopActiveBlockedUsage()
+            redirectWebsiteThenLaunchBlocked(
+                deepWorkRule, matchingDomain, RuleAccessEvaluator.DenialReason.OutOfRewardTime
+            )
+            return
+        }
+
+        creditLatestProgress(rules)
+        val result = evaluateDomainAccess(rules, page.normalizedHost)
+        if (result.allowed) {
+            result.spendRule?.let { startActiveBlockedUsage(it, matchingDomain, matchingDomain, matchingDomain) }
+                ?: stopActiveBlockedUsage()
+            return
+        }
+        stopActiveBlockedUsage()
+        result.primaryDenial?.let { denial ->
+            redirectWebsiteThenLaunchBlocked(denial.rule, matchingDomain, denial.reason)
+        }
+    }
+
+    private fun redirectWebsiteThenLaunchBlocked(
+        rule: EarnItRuleStore.Rule,
+        domain: String,
+        reason: RuleAccessEvaluator.DenialReason,
+        ignoreDebounce: Boolean = false
+    ) {
+        if (!websiteRedirectGate.begin(rule.id, domain)) return
+        val browserPackage = activeBrowserPackage ?: ChromeBrowserAdapter.CHROME_PACKAGE
+        val root = rootInActiveWindow
+        pendingWebsiteBlock = PendingWebsiteBlock(rule, domain, reason, ignoreDebounce)
+        websiteRedirectAttemptCount = 0
+        handler.removeCallbacks(websiteRedirectRetryRunnable)
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            launchPendingWebsiteBlock()
+            handler.postDelayed({ websiteRedirectGate.complete() }, WEBSITE_REDIRECT_GUARD_MILLIS)
+            return
+        }
+        if (root?.packageName?.toString() == browserPackage) {
+            websiteRedirectRetryRunnable.run()
+        } else {
+            cancelPendingWebsiteBlock()
+        }
+        handler.postDelayed({ websiteRedirectGate.complete() }, WEBSITE_REDIRECT_GUARD_MILLIS)
+    }
+
+    private fun launchPendingWebsiteBlock() {
+        val pending = pendingWebsiteBlock ?: return
+        pendingWebsiteBlock = null
+        websiteRedirectAttemptCount = 0
+        handler.removeCallbacks(websiteRedirectRetryRunnable)
+        launchBlockedActivity(
+            rule = pending.rule,
+            blockedAppName = pending.domain,
+            blockedAppPackage = null,
+            reason = pending.reason,
+            ignoreDebounce = pending.ignoreDebounce,
+            blockedDomain = pending.domain
+        )
+    }
+
+    private fun cancelPendingWebsiteBlock() {
+        pendingWebsiteBlock = null
+        websiteRedirectAttemptCount = 0
+        handler.removeCallbacks(websiteRedirectRetryRunnable)
+        websiteRedirectGate.clear()
+    }
+
+    private fun scheduleBrowserRetry(browserPackage: String) {
+        if (activeBrowserPackage != browserPackage || browserRetryCount >= MAX_BROWSER_RETRIES) return
+        handler.removeCallbacks(browserRetryRunnable)
+        browserRetryCount += 1
+        handler.postDelayed(browserRetryRunnable, BROWSER_RETRY_DELAY_MILLIS)
+    }
+
+    private fun clearBrowserObservation() {
+        handler.removeCallbacks(browserRetryRunnable)
+        activeBrowserPackage = null
+        browserRetryCount = 0
+        browserPageObserver.clear()
+    }
+
+    private fun handleForegroundApp(rules: List<EarnItRuleStore.Rule>, foregroundPackage: String) {
+        val result = evaluateAccess(rules, foregroundPackage)
+        val blockedApp = rules.firstNotNullOfOrNull { it.blockedAppForPackage(foregroundPackage) }
+        if (blockedApp == null) {
+            stopActiveBlockedUsage()
+        } else if (result.allowed) {
+            result.spendRule?.let { startActiveBlockedUsage(it, blockedApp.packageName, blockedApp.name) }
+                ?: stopActiveBlockedUsage()
+        } else {
+            stopActiveBlockedUsage()
+            result.primaryDenial?.let {
+                launchBlockedActivity(it.rule, blockedApp.name, blockedApp.packageName, it.reason)
+            }
+        }
+    }
+
     private fun startActiveBlockedUsage(rule: EarnItRuleStore.Rule, blockedApp: EarnItRuleStore.RuleApp) {
-        if (activeBlockedPackage == blockedApp.packageName && activeRule?.id == rule.id) return
+        startActiveBlockedUsage(rule, blockedApp.packageName, blockedApp.name)
+    }
+
+    private fun startActiveBlockedUsage(rule: EarnItRuleStore.Rule, targetId: String, displayName: String, domain: String? = null) {
+        if (activeBlockedPackage == targetId && activeRule?.id == rule.id) return
 
         stopActiveBlockedUsage()
-        activeBlockedPackage = blockedApp.packageName
-        activeBlockedAppName = blockedApp.name
+        activeBlockedPackage = targetId
+        activeBlockedAppName = displayName
+        activeBlockedDomain = domain
         activeRule = rule
-        lastConsumptionAt = SystemClock.elapsedRealtime()
+        usageClock.start(ProtectedUsageClock.Key(rule.id, targetId), SystemClock.elapsedRealtime())
         handler.postDelayed(consumeRunnable, CONSUMPTION_TICK_MILLIS)
     }
 
@@ -175,20 +449,18 @@ class EarnItAccessibilityService : AccessibilityService() {
         handler.removeCallbacks(consumeRunnable)
         activeBlockedPackage = null
         activeBlockedAppName = null
+        activeBlockedDomain = null
         activeRule = null
-        lastConsumptionAt = 0L
+        usageClock.clear()
     }
 
     private fun consumeActiveBlockedUsage() {
         val rule = activeRule ?: return
-        if (activeBlockedPackage == null || lastConsumptionAt == 0L) return
+        if (activeBlockedPackage == null) return
         if (rule.type != EarnItRuleStore.RuleType.EarnRewardTime) return
 
-        val now = SystemClock.elapsedRealtime()
-        val elapsedSeconds = (now - lastConsumptionAt) / 1_000L
+        val elapsedSeconds = usageClock.tick(SystemClock.elapsedRealtime())
         if (elapsedSeconds <= 0L) return
-
-        lastConsumptionAt += elapsedSeconds * 1_000L
         RewardLedger.consumeRewardSeconds(this, rule, elapsedSeconds)
     }
 
@@ -423,7 +695,8 @@ class EarnItAccessibilityService : AccessibilityService() {
         blockedAppName: String,
         blockedAppPackage: String?,
         reason: RuleAccessEvaluator.DenialReason,
-        ignoreDebounce: Boolean = false
+        ignoreDebounce: Boolean = false,
+        blockedDomain: String? = null
     ) {
         if (!ignoreDebounce && !canLaunchBlockedActivity()) return
 
@@ -437,6 +710,7 @@ class EarnItAccessibilityService : AccessibilityService() {
             if (blockedAppPackage != null) {
                 putExtra(BlockedActivity.EXTRA_BLOCKED_PACKAGE, blockedAppPackage)
             }
+            if (blockedDomain != null) putExtra(BlockedActivity.EXTRA_BLOCKED_DOMAIN, blockedDomain)
             if (primaryEarnApp != null) {
                 putExtra(BlockedActivity.EXTRA_PRODUCTIVE_APP_NAME, primaryEarnApp.name)
                 putExtra(BlockedActivity.EXTRA_PRODUCTIVE_PACKAGE, primaryEarnApp.packageName)
@@ -469,7 +743,26 @@ class EarnItAccessibilityService : AccessibilityService() {
         const val TAG = "EarnItAccessibility"
         const val CONSUMPTION_TICK_MILLIS = 1_000L
         const val BLOCKED_ACTIVITY_DEBOUNCE_MILLIS = 2_000L
+        const val BROWSER_RETRY_DELAY_MILLIS = 200L
+        const val MAX_BROWSER_RETRIES = 6
+        const val MAX_FOREGROUND_RECHECKS = 25
+        const val WEBSITE_REDIRECT_RETRY_MILLIS = 200L
+        const val MAX_WEBSITE_REDIRECT_ATTEMPTS = 10
+        const val WEBSITE_REDIRECT_GUARD_MILLIS = 2_500L
+        val SUPPORTED_EVENT_TYPES = setOf(
+            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED,
+            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED,
+            AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED,
+            AccessibilityEvent.TYPE_WINDOWS_CHANGED
+        )
     }
+
+    private data class PendingWebsiteBlock(
+        val rule: EarnItRuleStore.Rule,
+        val domain: String,
+        val reason: RuleAccessEvaluator.DenialReason,
+        val ignoreDebounce: Boolean
+    )
 }
 
 internal fun isEarnItPackage(foregroundPackage: String, earnItPackage: String): Boolean {
