@@ -79,6 +79,7 @@ internal fun EarnItStrictModeScreen(
     onBeginActivation: (StrictModeConfiguration, StrictModeProtectionMethod, String?) -> Unit,
     onCancelActivation: () -> Unit,
     onBeginDeactivation: () -> Unit,
+    onConfirmChargerDeactivation: () -> PendingActionValidation,
     onCancelDeactivation: () -> Unit,
     onConfirmDeactivation: () -> Unit,
     onKeepStrictModeActive: () -> Unit,
@@ -134,7 +135,8 @@ internal fun EarnItStrictModeScreen(
     ) {
         if (foundationLifecycle == RuleStrictModeLifecycle.Invalid) {
             StrictModeInvalidConfiguration()
-        } else if (pendingAction?.authorizationMethod == StrictModeProtectionMethod.Charger && chargerSession != null) {
+        } else if (pendingAction?.authorizationMethod == StrictModeProtectionMethod.Charger && chargerSession != null &&
+            pendingAction.actionType != PendingStrictModeActionType.DisableStrictMode) {
             ChargerAuthorization(
                 session = chargerSession,
                 chargingState = chargingState,
@@ -200,8 +202,10 @@ internal fun EarnItStrictModeScreen(
             StrictModeLifecycleState.Active -> StrictModeActive(
                 state = state,
                 configuration = globalConfiguration,
+                chargingState = chargingState,
                 onRequestMethodChange = onRequestMethodChange,
-                onBeginDeactivation = onBeginDeactivation
+                onBeginDeactivation = onBeginDeactivation,
+                onConfirmChargerDeactivation = onConfirmChargerDeactivation
             )
             StrictModeLifecycleState.DeactivationCounting -> StrictModeDeactivationCountdown(
                 state = state,
@@ -1010,23 +1014,50 @@ private fun LockGlyph() {
 private fun StrictModeActive(
     state: StrictModeState,
     configuration: GlobalStrictModeConfiguration?,
+    chargingState: ChargingState,
     onRequestMethodChange: (StrictModeProtectionMethod, Long?, String?) -> Unit,
-    onBeginDeactivation: () -> Unit
+    onBeginDeactivation: () -> Unit,
+    onConfirmChargerDeactivation: () -> PendingActionValidation
 ) {
     var beginDeactivationDialogOpen by remember { mutableStateOf(false) }
+    var chargerStatusMessage by remember { mutableStateOf<String?>(null) }
     var changeMethodOpen by remember { mutableStateOf(false) }
     var replacementPin by remember { mutableStateOf("") }
     var replacementPinConfirmation by remember { mutableStateOf("") }
     var replacementWait by remember { mutableStateOf(pinCountdownPresets().first().second) }
     val ui = strictModeActiveUiState(state, configuration)
+    val chargerProtection = configuration?.protectionMethod == StrictModeProtectionMethod.Charger
+    val chargerButtonUi = chargerDeactivationButtonUi(chargingState.isActivelyCharging)
+    LaunchedEffect(chargingState.isActivelyCharging, beginDeactivationDialogOpen) {
+        if (chargerProtection && beginDeactivationDialogOpen && !chargingState.isActivelyCharging) {
+            beginDeactivationDialogOpen = false
+            chargerStatusMessage = "Connect a charger to continue."
+        }
+    }
     StrictModeCard {
         Text(text = ui.title, style = MaterialTheme.typography.titleLarge)
         Text(text = ui.description)
         HorizontalDivider()
         Text(text = ui.protectionMethod, style = MaterialTheme.typography.titleMedium)
         Text(text = ui.deactivationWait, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Button(onClick = { beginDeactivationDialogOpen = true }, modifier = Modifier.fillMaxWidth()) {
-            Text(text = "Begin Deactivation")
+        if (chargerProtection && !chargingState.isActivelyCharging) {
+            Text(
+                text = chargerStatusMessage ?: "Waiting for charger",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.primary
+            )
+        }
+        Button(
+            onClick = { beginDeactivationDialogOpen = true; chargerStatusMessage = null },
+            enabled = !chargerProtection || chargerButtonUi.enabled,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(
+                text = when {
+                    !chargerProtection -> "Begin Deactivation"
+                    else -> chargerButtonUi.label
+                }
+            )
         }
         OutlinedButton(onClick = { changeMethodOpen = !changeMethodOpen }, modifier = Modifier.fillMaxWidth()) {
             Text(text = "Change Protection Method")
@@ -1083,7 +1114,25 @@ private fun StrictModeActive(
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
     }
-    if (beginDeactivationDialogOpen) {
+    if (beginDeactivationDialogOpen && chargerProtection) {
+        AlertDialog(
+            onDismissRequest = { beginDeactivationDialogOpen = false },
+            title = { Text("Disable Strict Mode?") },
+            text = { Text("Your Rules will allow weaker edits, pausing, and deletion without charger authorization.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    beginDeactivationDialogOpen = false
+                    when (val result = onConfirmChargerDeactivation()) {
+                        is PendingActionValidation.Valid -> chargerStatusMessage = null
+                        is PendingActionValidation.Invalid -> chargerStatusMessage = result.message
+                    }
+                }) { Text("Disable") }
+            },
+            dismissButton = {
+                TextButton(onClick = { beginDeactivationDialogOpen = false }) { Text("Stay Focused") }
+            }
+        )
+    } else if (beginDeactivationDialogOpen) {
         BeginDeactivationDialog(
             method = configuration?.protectionMethod ?: StrictModeProtectionMethod.Countdown,
             waitLabel = durationLabel(state.configuration.deactivationCountdownMillis),
@@ -1103,6 +1152,13 @@ internal data class StrictModeActiveUiState(
     val deactivationWait: String
 )
 
+internal data class ChargerDeactivationButtonUi(val label: String, val enabled: Boolean)
+
+internal fun chargerDeactivationButtonUi(isActivelyCharging: Boolean) = ChargerDeactivationButtonUi(
+    label = if (isActivelyCharging) "Disable Strict Mode" else "Connect charger to deactivate",
+    enabled = isActivelyCharging
+)
+
 internal fun strictModeActiveUiState(state: StrictModeState, configuration: GlobalStrictModeConfiguration? = null) = StrictModeActiveUiState(
     title = "Strict Mode is active",
     description = "All Rules are protected from weaker edits, pausing, and deletion.",
@@ -1112,7 +1168,7 @@ internal fun strictModeActiveUiState(state: StrictModeState, configuration: Glob
         else -> "Countdown"
     },
     deactivationWait = when (configuration?.protectionMethod) {
-        StrictModeProtectionMethod.Charger -> "A charger is required to make protected changes."
+        StrictModeProtectionMethod.Charger -> "A charger is required to disable Strict Mode or make protected changes."
         StrictModeProtectionMethod.Pin -> "PIN verification, then a ${durationLabel(state.configuration.deactivationCountdownMillis)} wait"
         else -> "${durationLabel(state.configuration.deactivationCountdownMillis)} deactivation wait"
     }

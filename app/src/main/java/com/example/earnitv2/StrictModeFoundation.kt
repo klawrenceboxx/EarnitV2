@@ -555,6 +555,27 @@ internal class GlobalStrictModeStore(
         return result
     }
 
+    /** Completes the one-dialog charger flow, revalidating live charging at confirmation time. */
+    @Synchronized
+    fun confirmGlobalChargerDeactivation(chargingState: ChargingState): PendingActionValidation {
+        val config = globalConfiguration()
+            ?: return PendingActionValidation.Invalid("Strict Mode is not configured.")
+        if (config.protectionMethod != StrictModeProtectionMethod.Charger) {
+            return PendingActionValidation.Invalid("Charger authorization is not active.")
+        }
+        if (!chargingState.isActivelyCharging) {
+            return PendingActionValidation.Invalid("Connect a charger to continue.")
+        }
+        val action = when (val creation = beginGlobalDeactivation(chargingState)) {
+            is PendingActionCreationResult.Created -> creation.action
+            is PendingActionCreationResult.AlreadyPending -> creation.action
+            is PendingActionCreationResult.Rejected -> return PendingActionValidation.Invalid(creation.message)
+        }
+        val authorization = authorizeCharger(action.id, chargingState)
+        if (authorization is PendingActionValidation.Invalid) return authorization
+        return confirmGlobalDeactivation()
+    }
+
     fun verifyPin(requestId: String, pin: CharArray): PinVerificationResult {
         val action = pendingActions().firstOrNull { it.id == requestId }
             ?: return PinVerificationResult.Rejected("This request no longer exists. Begin again.")

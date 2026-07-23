@@ -36,4 +36,19 @@ class DeepWorkSessionTest {
         assertEquals(false, supportsDeepWorkEarning(EarnItRuleStore.RuleType.CompleteToUnlock))
         assertEquals(false, supportsDeepWorkEarning(EarnItRuleStore.RuleType.ScheduledBlock))
     }
+
+    @Test fun fiveMinuteSessionEarnsProportionalReward() {
+        assertEquals(30L, deepWorkRewardSeconds(5 * 60L, 1))
+        assertEquals("30 sec", formatDeepWorkReward(30L))
+    }
+
+    @Test fun configuredRateUsesTheSameCalculationAsDisplayedEarnings() {
+        assertEquals(600L, deepWorkRewardSeconds(20 * 60L, 5))
+        assertEquals("10 min", formatDeepWorkReward(deepWorkRewardSeconds(20 * 60L, 5)))
+    }
+
+    @Test fun timedSessionNeverCreditsPastItsGoal() {
+        val session = DeepWorkSession(goalSeconds = 300L)
+        assertEquals(300L, eligibleDeepWorkSeconds(session, 420L))
+    }
 }

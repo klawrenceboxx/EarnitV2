@@ -29,11 +29,16 @@ class ChargerTest {
         )
         assertTrue(setup.isValid)
         assertEquals("Charger", strictModeActiveUiState(StrictModeState(), fConfig()).protectionMethod)
-        assertEquals("A charger is required to make protected changes.", strictModeActiveUiState(StrictModeState(), fConfig()).deactivationWait)
+        assertEquals("A charger is required to disable Strict Mode or make protected changes.", strictModeActiveUiState(StrictModeState(), fConfig()).deactivationWait)
         assertEquals("Review Change", chargerContinueLabel(PendingStrictModeActionType.UpdateRule))
         assertEquals("Continue to Pause", chargerContinueLabel(PendingStrictModeActionType.PauseRule))
         assertEquals("Continue to Delete", chargerContinueLabel(PendingStrictModeActionType.DeleteRule))
         assertEquals("Continue to Disable", chargerContinueLabel(PendingStrictModeActionType.DisableStrictMode))
+    }
+
+    @Test fun mainScreenChargerButtonTracksLiveChargingState() {
+        assertEquals(ChargerDeactivationButtonUi("Connect charger to deactivate", false), chargerDeactivationButtonUi(false))
+        assertEquals(ChargerDeactivationButtonUi("Disable Strict Mode", true), chargerDeactivationButtonUi(true))
     }
 
     @Test fun acUsbWirelessAndOtherSourcesRequireActiveCharging() {
@@ -96,6 +101,23 @@ class ChargerTest {
         assertEquals(RuleStrictModeLifecycle.Disabled, f.store.globalConfiguration()?.lifecycle)
         assertEquals(StrictModeAuthorizationStatus.Consumed, f.store.pendingActions().first { it.id == action.id }.authorizationStatus)
         assertTrue(f.store.confirmGlobalDeactivation() is PendingActionValidation.Invalid)
+    }
+
+    @Test fun singlePageConfirmationDisablesOnlyWhileActivelyCharging() {
+        val unpluggedFixture = fixture()
+        assertTrue(unpluggedFixture.store.confirmGlobalChargerDeactivation(unplugged()) is PendingActionValidation.Invalid)
+        assertEquals(RuleStrictModeLifecycle.Active, unpluggedFixture.store.globalConfiguration()?.lifecycle)
+        assertNull(unpluggedFixture.store.activePendingAction(GlobalStrictModeStore.GLOBAL_CONFIGURATION_ID))
+
+        val chargingFixture = fixture()
+        assertTrue(chargingFixture.store.confirmGlobalChargerDeactivation(charging()) is PendingActionValidation.Valid)
+        assertEquals(RuleStrictModeLifecycle.Disabled, chargingFixture.store.globalConfiguration()?.lifecycle)
+    }
+
+    @Test fun repeatedSinglePageConfirmationCannotReplayAuthorization() {
+        val f = fixture()
+        assertTrue(f.store.confirmGlobalChargerDeactivation(charging()) is PendingActionValidation.Valid)
+        assertTrue(f.store.confirmGlobalChargerDeactivation(charging()) is PendingActionValidation.Invalid)
     }
 
     @Test fun cancellationPreventsReplayAndLeavesStrictModeActive() {

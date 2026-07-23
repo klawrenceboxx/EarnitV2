@@ -228,8 +228,18 @@ class MainActivity : ComponentActivity() {
                 StrictModeAuthorizationStatus.Invalid
             )
         }
-        (restorablePendingActions.firstOrNull { it.ruleId == GlobalStrictModeStore.GLOBAL_CONFIGURATION_ID }
-            ?: restorablePendingActions.firstOrNull())?.let { restored ->
+        val obsoleteGlobalChargerDeactivation = restorablePendingActions.firstOrNull {
+            it.ruleId == GlobalStrictModeStore.GLOBAL_CONFIGURATION_ID &&
+                it.actionType == PendingStrictModeActionType.DisableStrictMode &&
+                it.authorizationMethod == StrictModeProtectionMethod.Charger
+        }
+        if (obsoleteGlobalChargerDeactivation != null) {
+            ruleStrictModeStore.cancelGlobalDeactivation()
+            refreshStrictModeState()
+        }
+        val navigablePendingActions = restorablePendingActions - listOfNotNull(obsoleteGlobalChargerDeactivation).toSet()
+        (navigablePendingActions.firstOrNull { it.ruleId == GlobalStrictModeStore.GLOBAL_CONFIGURATION_ID }
+            ?: navigablePendingActions.firstOrNull())?.let { restored ->
             pendingStrictModeAction = restored
             strictModeReturnRuleId = restored.ruleId.takeUnless { it == GlobalStrictModeStore.GLOBAL_CONFIGURATION_ID }
             refreshStrictModeState()
@@ -352,6 +362,7 @@ class MainActivity : ComponentActivity() {
                             onBeginStrictModeActivation = ::beginStrictModeActivation,
                             onCancelStrictModeActivation = ::cancelStrictModeActivation,
                             onBeginStrictModeDeactivation = ::beginStrictModeDeactivation,
+                            onConfirmChargerStrictModeDeactivation = ::confirmChargerStrictModeDeactivation,
                             onCancelStrictModeDeactivation = ::cancelStrictModeDeactivation,
                             onConfirmStrictModeDeactivation = ::confirmStrictModeDeactivation,
                             onKeepStrictModeActive = ::keepStrictModeActive,
@@ -620,6 +631,21 @@ class MainActivity : ComponentActivity() {
             }
         }
         refreshStrictModeState()
+    }
+
+    private fun confirmChargerStrictModeDeactivation(): PendingActionValidation {
+        chargingState = chargingStateObserver.currentState()
+        val result = ruleStrictModeStore.confirmGlobalChargerDeactivation(chargingState)
+        if (result is PendingActionValidation.Invalid) {
+            pendingStrictModeAction?.takeIf {
+                it.actionType == PendingStrictModeActionType.DisableStrictMode &&
+                    it.authorizationMethod == StrictModeProtectionMethod.Charger
+            }?.let { ruleStrictModeStore.cancelRequest(it.id) }
+        }
+        pendingStrictModeAction = null
+        chargerSession = null
+        refreshStrictModeState()
+        return result
     }
 
     private fun cancelStrictModeDeactivation() {
@@ -1596,6 +1622,7 @@ internal fun Dashboard(
     onBeginStrictModeActivation: (StrictModeConfiguration, StrictModeProtectionMethod, String?) -> Unit,
     onCancelStrictModeActivation: () -> Unit,
     onBeginStrictModeDeactivation: () -> Unit,
+    onConfirmChargerStrictModeDeactivation: () -> PendingActionValidation,
     onCancelStrictModeDeactivation: () -> Unit,
     onConfirmStrictModeDeactivation: () -> Unit,
     onKeepStrictModeActive: () -> Unit,
@@ -1711,6 +1738,7 @@ internal fun Dashboard(
                 onBeginActivation = onBeginStrictModeActivation,
                 onCancelActivation = onCancelStrictModeActivation,
                 onBeginDeactivation = onBeginStrictModeDeactivation,
+                onConfirmChargerDeactivation = onConfirmChargerStrictModeDeactivation,
                 onCancelDeactivation = onCancelStrictModeDeactivation,
                 onConfirmDeactivation = onConfirmStrictModeDeactivation,
                 onKeepStrictModeActive = onKeepStrictModeActive,
@@ -2293,6 +2321,7 @@ fun DashboardPreview() {
             onBeginStrictModeActivation = { _, _, _ -> },
             onCancelStrictModeActivation = {},
             onBeginStrictModeDeactivation = {},
+            onConfirmChargerStrictModeDeactivation = { PendingActionValidation.Invalid("Unavailable") },
             onCancelStrictModeDeactivation = {},
             onConfirmStrictModeDeactivation = {},
             onKeepStrictModeActive = {},

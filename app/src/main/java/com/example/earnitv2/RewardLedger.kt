@@ -22,6 +22,7 @@ object RewardLedger {
     private const val KEY_TRACKED_HANDOFF_SECONDS = "tracked_handoff_seconds"
     private const val KEY_TRACKED_HANDOFF_CREDIT_CURSOR = "tracked_handoff_credit_cursor"
     private const val KEY_DEEP_WORK_CREDITED_SECONDS = "deep_work_credited_seconds"
+    private const val KEY_DEEP_WORK_PROCESSED_SESSION_IDS = "deep_work_processed_session_ids"
 
     data class Snapshot(
         val productiveCreditedSeconds: Long,
@@ -108,19 +109,40 @@ object RewardLedger {
         val rejectionReason: String?
     )
 
+    data class DeepWorkCreditResult(val snapshot: Snapshot, val creditedRewardSeconds: Long)
+
     @Synchronized
-    fun creditDeepWork(context: Context, rule: EarnItRuleStore.Rule, elapsedSeconds: Long): Snapshot {
+    fun creditDeepWork(
+        context: Context,
+        rule: EarnItRuleStore.Rule,
+        sessionId: String,
+        elapsedSeconds: Long
+    ): DeepWorkCreditResult {
         val prefs = currentPrefs(context, rule)
-        val key = ruleKey(rule, KEY_DEEP_WORK_CREDITED_SECONDS)
-        val credited = prefs.getLong(key, 0L)
-        val completed = (elapsedSeconds.coerceAtLeast(0L) / 600L) * 600L
-        val newlyCredited = (completed - credited).coerceAtLeast(0L)
         val current = snapshot(context, rule)
-        if (newlyCredited == 0L) return current
-        val issued = current.rewardIssuedSeconds + issueRewardSeconds(newlyCredited, rule)
-        prefs.edit().putLong(key, completed)
-            .putLong(ruleKey(rule, KEY_REWARD_ISSUED_SECONDS), issued).commit()
-        return Snapshot(current.productiveCreditedSeconds, issued, current.rewardConsumedSeconds)
+        if (!supportsDeepWorkEarning(rule.type) || sessionId.isBlank()) {
+            return DeepWorkCreditResult(current, 0L)
+        }
+        val processedKey = ruleKey(rule, KEY_DEEP_WORK_PROCESSED_SESSION_IDS)
+        val processedSessionIds = prefs.getStringSet(processedKey, emptySet()).orEmpty()
+        val rewardSeconds = deepWorkRewardSeconds(elapsedSeconds, rule.rewardSecondsPerProductiveSecond)
+        if (sessionId in processedSessionIds || rewardSeconds <= 0L) {
+            return DeepWorkCreditResult(current, 0L)
+        }
+        val issued = current.rewardIssuedSeconds + rewardSeconds
+        val updatedProcessedIds = processedSessionIds.toMutableSet().apply { add(sessionId) }
+        prefs.edit()
+            .putStringSet(processedKey, updatedProcessedIds)
+            .putLong(
+                ruleKey(rule, KEY_DEEP_WORK_CREDITED_SECONDS),
+                prefs.getLong(ruleKey(rule, KEY_DEEP_WORK_CREDITED_SECONDS), 0L) + elapsedSeconds.coerceAtLeast(0L)
+            )
+            .putLong(ruleKey(rule, KEY_REWARD_ISSUED_SECONDS), issued)
+            .commit()
+        return DeepWorkCreditResult(
+            Snapshot(current.productiveCreditedSeconds, issued, current.rewardConsumedSeconds),
+            rewardSeconds
+        )
     }
 
     fun activeAppUsageSecondsToday(
@@ -488,6 +510,9 @@ object RewardLedger {
         }
     }
 }
+
+internal fun deepWorkRewardSeconds(elapsedSeconds: Long, rewardSecondsPerProductiveSecond: Int): Long =
+    elapsedSeconds.coerceAtLeast(0L) * rewardSecondsPerProductiveSecond.coerceAtLeast(1) / 10L
 
 internal fun shouldResetRuleLedger(
     storedDay: String?,

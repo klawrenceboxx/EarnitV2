@@ -41,10 +41,23 @@ object DeepWorkStore {
     fun begin(c:Context,goal:Long?)=DeepWorkSession(DeepWorkPhase.Preparing,goal,preparationEndsElapsedRealtime=SystemClock.elapsedRealtime()+3000,linkedRuleId=linkedRuleId(c),sessionId=java.util.UUID.randomUUID().toString()).also{save(c,it)}
     fun activate(c:Context,s:DeepWorkSession):DeepWorkSession{val n=c.getSystemService(NotificationManager::class.java);val old=if(n.isNotificationPolicyAccessGranted)n.currentInterruptionFilter else null;if(old!=null)n.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_NONE);return s.copy(phase=DeepWorkPhase.Active,startedElapsedRealtime=SystemClock.elapsedRealtime(),startedWallClock=System.currentTimeMillis(),previousInterruptionFilter=old).also{save(c,it)}}
     fun continueOpenEnded(c:Context,s:DeepWorkSession,e:Long)=s.copy(phase=DeepWorkPhase.Active,goalSeconds=null,baseElapsedSeconds=e,startedElapsedRealtime=SystemClock.elapsedRealtime(),startedWallClock=System.currentTimeMillis()).also{save(c,it)}
-    fun finish(c:Context,s:DeepWorkSession,e:Long){s.linkedRuleId?.let{EarnItRuleStore.findRule(c,it)?.let{r->RewardLedger.creditDeepWork(c,r,e)}};val n=c.getSystemService(NotificationManager::class.java);if(n.isNotificationPolicyAccessGranted&&s.previousInterruptionFilter!=null)n.setInterruptionFilter(s.previousInterruptionFilter);c.getSharedPreferences(PREFS,0).edit().putString("last_completed_session_id",s.sessionId).putLong("last_completed_elapsed",e).putLong("last_completed_at",System.currentTimeMillis()).apply();save(c,DeepWorkSession())}
+    @Synchronized fun finish(c:Context,s:DeepWorkSession,e:Long):Long{val eligible=eligibleDeepWorkSeconds(s,e);val credited=s.linkedRuleId?.let{EarnItRuleStore.findRule(c,it)}?.let{r->RewardLedger.creditDeepWork(c,r,s.sessionId,eligible).creditedRewardSeconds}?:0L;val n=c.getSystemService(NotificationManager::class.java);if(n.isNotificationPolicyAccessGranted&&s.previousInterruptionFilter!=null)n.setInterruptionFilter(s.previousInterruptionFilter);c.getSharedPreferences(PREFS,0).edit().putString("last_completed_session_id",s.sessionId).putLong("last_completed_elapsed",eligible).putLong("last_completed_at",System.currentTimeMillis()).apply();save(c,DeepWorkSession());return credited}
 }
 
 internal fun supportsDeepWorkEarning(type: EarnItRuleStore.RuleType): Boolean = type == EarnItRuleStore.RuleType.EarnRewardTime
+internal fun eligibleDeepWorkSeconds(session: DeepWorkSession, elapsedSeconds: Long): Long =
+    session.goalSeconds?.let { elapsedSeconds.coerceIn(0L, it) } ?: elapsedSeconds.coerceAtLeast(0L)
+
+internal fun formatDeepWorkReward(seconds: Long): String {
+    val safe = seconds.coerceAtLeast(0L)
+    val minutes = safe / 60L
+    val remainder = safe % 60L
+    return when {
+        remainder == 0L -> "$minutes min"
+        minutes == 0L -> "$remainder sec"
+        else -> "$minutes min $remainder sec"
+    }
+}
 
 @Composable fun DeepWorkRuleSetting(rule: EarnItRuleStore.Rule, editingProtected: Boolean = false, onProtectedAction: () -> Unit = {}) {
     val context = LocalContext.current
@@ -89,12 +102,13 @@ internal fun supportsDeepWorkEarning(type: EarnItRuleStore.RuleType): Boolean = 
     LaunchedEffect(session){while(true){delay(250);ne=SystemClock.elapsedRealtime();nw=System.currentTimeMillis()}}
     if(session.phase==DeepWorkPhase.Preparing&&ne>=session.preparationEndsElapsedRealtime)LaunchedEffect(Unit){onActivated()}
     val elapsed=session.elapsedSeconds(ne,nw);val phase=session.displayPhase(ne,nw);val remaining=session.goalSeconds?.let{(it-elapsed).coerceAtLeast(0)}
-    val linkedRule=session.linkedRuleId?.let{EarnItRuleStore.findRule(context,it)};val rewardSeconds=linkedRule?.let{(elapsed/600)*600*it.rewardSecondsPerProductiveSecond/10}?:0
+    val linkedRule=session.linkedRuleId?.let{EarnItRuleStore.findRule(context,it)};val rewardSeconds=linkedRule?.let{deepWorkRewardSeconds(eligibleDeepWorkSeconds(session,elapsed),it.rewardSecondsPerProductiveSecond)}?:0
+    if(phase==DeepWorkPhase.GoalComplete)LaunchedEffect(session.sessionId){onFinish(eligibleDeepWorkSeconds(session,elapsed))}
     Box(Modifier.fillMaxSize().padding(28.dp),contentAlignment=Alignment.Center){Column(horizontalAlignment=Alignment.CenterHorizontally,verticalArrangement=Arrangement.spacedBy(22.dp)){
         Icon(Icons.Rounded.Star,null,Modifier.size(72.dp));when(phase){
             DeepWorkPhase.Preparing->{Text("Starting Deep Work",style=MaterialTheme.typography.headlineMedium);Text("Put your phone down and focus",textAlign=TextAlign.Center);Text((((session.preparationEndsElapsedRealtime-ne)/1000)+1).coerceAtLeast(1).toString(),style=MaterialTheme.typography.displayLarge);Text(if(context.getSystemService(NotificationManager::class.java).isNotificationPolicyAccessGranted)"Do Not Disturb turning on…" else "Do Not Disturb access not granted")}
-            DeepWorkPhase.Active->{Text("Deep Work Active");Text(formatDeepWorkDuration(remaining?:elapsed),style=MaterialTheme.typography.displayLarge);Text(if(remaining==null)"elapsed" else "remaining");if(linkedRule!=null)Text("+${rewardSeconds/60} min Reward Time earned");OutlinedButton({onFinish(elapsed)}){Text("End Session")}}
-            DeepWorkPhase.GoalComplete->{Text("Goal Complete!",style=MaterialTheme.typography.headlineMedium);Text("Total Deep Work Time\n${formatDeepWorkDuration(elapsed)}",textAlign=TextAlign.Center);if(linkedRule!=null)Text("+${rewardSeconds/60} min Reward Time earned");Row(horizontalArrangement=Arrangement.spacedBy(12.dp)){Button({onContinue(elapsed)}){Text("Continue")};OutlinedButton({onFinish(elapsed)}){Text("Finish")}}}
+            DeepWorkPhase.Active->{Text("Deep Work Active");Text(formatDeepWorkDuration(remaining?:elapsed),style=MaterialTheme.typography.displayLarge);Text(if(remaining==null)"elapsed" else "remaining");if(linkedRule!=null){Text("Earning Reward Time for: ${linkedRule.productiveName}");Text("+${formatDeepWorkReward(rewardSeconds)} Reward Time earned")};OutlinedButton({onFinish(eligibleDeepWorkSeconds(session,elapsed))}){Text("End Session")}}
+            DeepWorkPhase.GoalComplete->{Text("Goal Complete!",style=MaterialTheme.typography.headlineMedium);Text("Saving your Reward Time...",textAlign=TextAlign.Center)}
             else->Unit
         }
     }}
