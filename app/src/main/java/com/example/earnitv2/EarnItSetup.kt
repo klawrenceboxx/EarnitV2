@@ -20,6 +20,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
@@ -240,6 +241,13 @@ internal fun EarnItSettings(
     permissionState: PermissionSetupUiState,
     hasRules: Boolean,
     strictModeState: StrictModeState,
+    entitlementState: EntitlementState = EntitlementState.Free,
+    purchaseProvider: LocalPurchaseProvider? = null,
+    onOpenPro: () -> Unit = {},
+    onRestorePurchases: () -> Unit = {},
+    onManageSubscription: () -> Unit = {},
+    onSimulateEntitlement: (EntitlementState) -> Unit = {},
+    onResetEntitlement: () -> Unit = {},
     onBack: () -> Unit,
     onOpenAnalytics: () -> Unit,
     onOpenStrictMode: () -> Unit,
@@ -248,12 +256,12 @@ internal fun EarnItSettings(
     onCreateFirstRule: () -> Unit,
     showDeveloperTools: Boolean,
     onReplayOnboarding: () -> Unit,
-    pendingFeedbackCount: Int,
-    shakeToReportEnabled: Boolean,
-    onOpenFeedback: () -> Unit,
-    onShakeToReportChange: (Boolean) -> Unit,
-    onDebugShakeFeedback: () -> Unit,
-    onClearDebugFeedback: () -> Unit,
+    pendingFeedbackCount: Int = 0,
+    shakeToReportEnabled: Boolean = false,
+    onOpenFeedback: () -> Unit = {},
+    onShakeToReportChange: (Boolean) -> Unit = {},
+    onDebugShakeFeedback: () -> Unit = {},
+    onClearDebugFeedback: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     BackHandler(onBack = onBack)
@@ -268,6 +276,53 @@ internal fun EarnItSettings(
             Text(text = "Settings", style = MaterialTheme.typography.headlineMedium)
             TextButton(onClick = onBack) {
                 Text(text = "Done")
+            }
+        }
+
+        Card(
+            modifier = Modifier.fillMaxWidth().clickable(onClick = onOpenPro),
+            shape = RoundedCornerShape(18.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = if (entitlementState.grantsPremium) {
+                    MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = .48f)
+                } else {
+                    MaterialTheme.colorScheme.primaryContainer.copy(alpha = .32f)
+                }
+            ),
+            border = BorderStroke(
+                1.dp,
+                if (entitlementState.grantsPremium) MaterialTheme.colorScheme.tertiary
+                else MaterialTheme.colorScheme.primary.copy(alpha = .7f)
+            )
+        ) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    SettingsSymbolBadge(symbol = "♛", emphasized = true)
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                        Text("EarnIt Pro", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                        Text(
+                            if (entitlementState.grantsPremium) {
+                                if (entitlementState.offline) "Active from your last check while we reconnect."
+                                else "Unlimited Rules, Strict Mode, Deep Work, and full insights."
+                            } else {
+                                "Unlimited Rules, Strict Mode, Deep Work, and full insights."
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    SettingsStatusBadge(if (entitlementState.grantsPremium) "Active" else "View Pro")
+                }
+                if (entitlementState.grantsPremium) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        TextButton(onClick = onManageSubscription, modifier = Modifier.weight(1f)) {
+                            Text("Manage")
+                        }
+                        TextButton(onClick = onRestorePurchases, modifier = Modifier.weight(1f)) {
+                            Text("Restore")
+                        }
+                    }
+                }
             }
         }
 
@@ -429,6 +484,16 @@ internal fun EarnItSettings(
                     }
                     OutlinedButton(onClick = onClearDebugFeedback, modifier = Modifier.fillMaxWidth()) {
                         Text("Clear queued debug reports ($pendingFeedbackCount)")
+                    }
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    Text("Pro simulator", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                    if (purchaseProvider != null) {
+                        DebugEntitlementSimulator(
+                            entitlement = entitlementState,
+                            purchaseProvider = purchaseProvider,
+                            onEntitlement = onSimulateEntitlement,
+                            onReset = onResetEntitlement
+                        )
                     }
                 }
             }

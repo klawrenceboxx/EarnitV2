@@ -1031,6 +1031,16 @@ internal fun ruleDetailStatusCardState(
     isActiveNow: Boolean,
     pauseCountdownLabel: String? = null
 ): RuleDetailStatusCardState {
+    if (rule.inactiveReason == RuleInactiveReason.PremiumExpired) {
+        return RuleDetailStatusCardState(
+            title = "Premium inactive",
+            metric = "Saved",
+            stateLabel = null,
+            body = "This Rule is saved, but Free supports up to 2 active Rules.",
+            tone = RuleDetailTone.Paused,
+            showResume = true
+        )
+    }
     if (!rule.enabled) {
         return RuleDetailStatusCardState(
             title = "Rule paused",

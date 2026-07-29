@@ -47,6 +47,7 @@ fun EarnItHome(
     permissionState: PermissionSetupUiState,
     manageRulesOpen: Boolean,
     deepWorkActive: Boolean,
+    deepWorkPremium: Boolean = true,
     onOpenDeepWork: () -> Unit,
     onAddRule: () -> Unit,
     onOpenEarnApp: (String) -> Unit,
@@ -73,7 +74,7 @@ fun EarnItHome(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            DeepWorkHomeCard(active = deepWorkActive, onClick = onOpenDeepWork)
+            DeepWorkHomeCard(active = deepWorkActive, premium = deepWorkPremium, onClick = onOpenDeepWork)
             if (permissionState.needsAttention) {
                 HomeAttentionBanner(
                     permissionState = permissionState,
@@ -139,6 +140,7 @@ fun homeRuleUiState(
     val secondaryText = homeSecondaryText(rule, state.remainingRewardSeconds, isActiveNow, completeToUnlockProgress)
     val statusText = when {
         card.attentionLabel != null -> "Protection needs attention"
+        rule.inactiveReason == RuleInactiveReason.PremiumExpired -> "Premium inactive"
         !rule.enabled -> "Available if resumed today"
         rule.type == EarnItRuleStore.RuleType.CompleteToUnlock && !isActiveNow -> card.scheduleStatusLabel
         rule.type == EarnItRuleStore.RuleType.CompleteToUnlock -> homeCompleteStatusText(rule, completeToUnlockProgress)
@@ -167,6 +169,7 @@ private fun homePrimaryText(
     isActiveNow: Boolean,
     completeToUnlockProgress: CompleteToUnlockRuleProgressUiState?
 ): String {
+    if (rule.inactiveReason == RuleInactiveReason.PremiumExpired) return "Premium inactive"
     if (!rule.enabled) return "Rule paused"
     return when (rule.type) {
         EarnItRuleStore.RuleType.EarnRewardTime -> when {
@@ -673,12 +676,25 @@ private fun TemporaryRuleManagement(
                         ) {
                             Text(text = temporaryRuleTitle(rule), style = MaterialTheme.typography.titleSmall)
                             Text(text = temporaryRuleSubtitle(rule), style = MaterialTheme.typography.bodySmall)
+                            if (rule.inactiveReason == RuleInactiveReason.PremiumExpired) {
+                                Text(
+                                    "Premium inactive · This Rule is saved, but Free supports up to 2 active Rules.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 OutlinedButton(onClick = { onEditRule(rule) }) {
                                     Text(text = "Edit")
                                 }
                                 OutlinedButton(onClick = { onToggleRuleEnabled(rule) }) {
-                                    Text(text = if (rule.enabled) "Pause" else "Resume")
+                                    Text(
+                                        text = when {
+                                            rule.enabled -> "Pause"
+                                            rule.inactiveReason == RuleInactiveReason.PremiumExpired -> "Activate Rule"
+                                            else -> "Resume"
+                                        }
+                                    )
                                 }
                                 OutlinedButton(onClick = { onDeleteRule(rule) }) {
                                     Text(text = "Delete")

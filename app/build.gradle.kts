@@ -33,8 +33,22 @@ android {
     }
 
     buildTypes {
+        debug {
+            buildConfigField("boolean", "ENABLE_ENTITLEMENT_SIMULATOR", "true")
+            buildConfigField("boolean", "GRANT_BETA_ENTITLEMENT", "false")
+        }
+        create("internal") {
+            initWith(getByName("debug"))
+            applicationIdSuffix = ".internal"
+            versionNameSuffix = "-internal"
+            matchingFallbacks += listOf("debug")
+            buildConfigField("boolean", "ENABLE_ENTITLEMENT_SIMULATOR", "true")
+            buildConfigField("boolean", "GRANT_BETA_ENTITLEMENT", "true")
+        }
         release {
             isMinifyEnabled = false
+            buildConfigField("boolean", "ENABLE_ENTITLEMENT_SIMULATOR", "false")
+            buildConfigField("boolean", "GRANT_BETA_ENTITLEMENT", "false")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"

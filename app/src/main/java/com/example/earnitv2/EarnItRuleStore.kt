@@ -63,7 +63,9 @@ object EarnItRuleStore {
         val requirements: List<RuleRequirement> = emptyList(),
         val timeWindows: List<TimeWindow> = emptyList(),
         /** Versioned by its serialized field position; values are canonical hostnames only. */
-        val blockedDomains: List<String> = emptyList()
+        val blockedDomains: List<String> = emptyList(),
+        val lastActivatedAtMillis: Long = 0L,
+        val inactiveReason: RuleInactiveReason = RuleInactiveReason.None
     ) {
         val normalizedBlockedDomains: List<String> = blockedDomains
             .mapNotNull(DomainNormalizer::normalize)
@@ -140,8 +142,15 @@ object EarnItRuleStore {
         val savedRules = if (expiredPauseRuleIds.isEmpty()) {
             decodedRules
         } else {
-            val resumedRules = decodedRules.map { rule ->
-                if (rule.id in expiredPauseRuleIds) rule.copy(enabled = true) else rule
+            var resumedRules = decodedRules
+            expiredPauseRuleIds.sorted().forEach { ruleId ->
+                val result = RuleEntitlementPolicy.activate(
+                    rules = resumedRules,
+                    ruleId = ruleId,
+                    policy = FeatureAccessPolicy(EntitlementState.Free),
+                    activatedAtMillis = System.currentTimeMillis()
+                )
+                if (result is RuleActivationResult.Allowed) resumedRules = result.rules
             }
             expiredPauseRuleIds.forEach { EarnItPauseStore.clearPause(context, it) }
             saveRules(context, resumedRules)
@@ -198,14 +207,22 @@ object EarnItRuleStore {
             .commit()
     }
 
-    fun saveRule(context: Context, rule: Rule) {
+    fun saveRule(
+        context: Context,
+        rule: Rule,
+        policy: FeatureAccessPolicy = FeatureAccessPolicy(EntitlementState.Free)
+    ): RuleActivationResult {
         val rules = getRules(context)
-        val updatedRules = if (rules.any { it.id == rule.id }) {
-            rules.map { if (it.id == rule.id) rule else it }
-        } else {
-            rules + rule
+        val result = RuleEntitlementPolicy.save(
+            rules = rules,
+            rule = rule,
+            policy = policy,
+            activatedAtMillis = System.currentTimeMillis()
+        )
+        if (result is RuleActivationResult.Allowed) {
+            saveRules(context, result.rules)
         }
-        saveRules(context, updatedRules)
+        return result
     }
 
     fun deleteRule(context: Context, ruleId: String) {
@@ -213,10 +230,38 @@ object EarnItRuleStore {
         RewardLedger.deleteRuleState(context, ruleId)
     }
 
-    fun setRuleEnabled(context: Context, ruleId: String, enabled: Boolean) {
-        saveRules(context, getRules(context).map { rule ->
-            if (rule.id == ruleId) rule.copy(enabled = enabled) else rule
-        })
+    fun setRuleEnabled(
+        context: Context,
+        ruleId: String,
+        enabled: Boolean,
+        policy: FeatureAccessPolicy = FeatureAccessPolicy(EntitlementState.Free)
+    ): RuleActivationResult {
+        val rules = getRules(context)
+        val result = if (enabled) {
+            RuleEntitlementPolicy.activate(rules, ruleId, policy, System.currentTimeMillis())
+        } else {
+            RuleActivationResult.Allowed(rules.map { rule ->
+                if (rule.id == ruleId) {
+                    rule.copy(enabled = false, inactiveReason = RuleInactiveReason.None)
+                } else {
+                    rule
+                }
+            })
+        }
+        if (result is RuleActivationResult.Allowed) saveRules(context, result.rules)
+        return result
+    }
+
+    fun reconcileForEntitlement(context: Context, policy: FeatureAccessPolicy): List<Rule> {
+        val current = getRules(context)
+        val limit = policy.activeRuleLimit
+        val reconciled = if (limit == null) {
+            current
+        } else {
+            RuleEntitlementPolicy.reconcileDowngrade(current, limit)
+        }
+        if (reconciled != current) saveRules(context, reconciled)
+        return reconciled
     }
 
     fun newRuleFromDefault(context: Context, type: RuleType = RuleType.EarnRewardTime): Rule {
@@ -473,7 +518,9 @@ object EarnItRuleStore {
                 encodeBlockedApps(rule.earnApps),
                 encodeRequirements(rule.requirements),
                 encodeTimeWindows(rule.effectiveTimeWindows),
-                encodeBlockedDomains(rule.normalizedBlockedDomains)
+                encodeBlockedDomains(rule.normalizedBlockedDomains),
+                rule.lastActivatedAtMillis.toString(),
+                rule.inactiveReason.name
             ).joinToString(RULE_FIELD_SEPARATOR) { encodeField(it) }
         }
     }
@@ -506,6 +553,10 @@ object EarnItRuleStore {
                 val timeWindows = decodeTimeWindows(fields.getOrNull(12)).ifEmpty {
                     listOf(TimeWindow(startMinute, endMinute))
                 }
+                val lastActivatedAtMillis = fields.getOrNull(14)?.toLongOrNull()?.coerceAtLeast(0L) ?: 0L
+                val inactiveReason = fields.getOrNull(15)?.let { rawReason ->
+                    RuleInactiveReason.entries.firstOrNull { it.name == rawReason }
+                } ?: RuleInactiveReason.None
                 Rule(
                     id = id,
                     productivePackage = productivePackage,
@@ -520,7 +571,9 @@ object EarnItRuleStore {
                     productiveApps = productiveApps,
                     requirements = requirements,
                     timeWindows = timeWindows,
-                    blockedDomains = blockedDomains
+                    blockedDomains = blockedDomains,
+                    lastActivatedAtMillis = lastActivatedAtMillis,
+                    inactiveReason = inactiveReason
                 )
             }
             .distinctBy { it.id }

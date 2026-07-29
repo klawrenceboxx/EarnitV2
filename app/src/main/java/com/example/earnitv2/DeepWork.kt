@@ -83,7 +83,35 @@ internal fun formatDeepWorkReward(seconds: Long): String {
         AlertDialog(onDismissRequest = { conflictId = null }, title = { Text("Deep Work is already linked") }, text = { Text("Deep Work currently earns through $oldName. Move it to this Rule?") }, confirmButton = { TextButton({ DeepWorkStore.linkRule(context, rule.id); linkedId = rule.id; conflictId = null }) { Text("Move Deep Work") } }, dismissButton = { TextButton({ conflictId = null }) { Text("Cancel") } })
     }
 }
-@Composable fun DeepWorkHomeCard(active:Boolean,onClick:()->Unit){val a=if(active)MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.primary;Card(modifier=Modifier.fillMaxWidth().clickable(onClick=onClick),shape=RoundedCornerShape(18.dp),colors=CardDefaults.cardColors(a.copy(alpha=.1f)),border=BorderStroke(1.dp,a.copy(alpha=.75f))){Row(Modifier.padding(18.dp),verticalAlignment=Alignment.CenterVertically){Surface(shape=CircleShape,color=a.copy(alpha=.16f)){Icon(Icons.Rounded.Star,null,Modifier.padding(12.dp),tint=a)};Spacer(Modifier.width(14.dp));Column(Modifier.weight(1f)){Text(if(active)"Deep Work Active" else "Start Deep Work",fontWeight=FontWeight.SemiBold,color=a);Text(if(active)"Return to your focus session." else "Silence distractions and focus.")};Text(">")}}}
+@Composable
+fun DeepWorkHomeCard(active: Boolean, premium: Boolean = true, onClick: () -> Unit) {
+    val accent = if (active) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.primary
+    Card(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(accent.copy(alpha = .1f)),
+        border = BorderStroke(1.dp, accent.copy(alpha = .75f))
+    ) {
+        Row(Modifier.padding(18.dp), verticalAlignment = Alignment.CenterVertically) {
+            Surface(shape = CircleShape, color = accent.copy(alpha = .16f)) {
+                Icon(Icons.Rounded.Star, null, Modifier.padding(12.dp), tint = accent)
+            }
+            Spacer(Modifier.width(14.dp))
+            Column(Modifier.weight(1f)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(if (active) "Deep Work Active" else "Start Deep Work", fontWeight = FontWeight.SemiBold, color = accent)
+                    if (!premium && !active) {
+                        Surface(shape = RoundedCornerShape(50), color = accent.copy(alpha = .16f)) {
+                            Text("Pro", Modifier.padding(horizontal = 7.dp, vertical = 2.dp), color = accent, style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
+                }
+                Text(if (active) "Return to your focus session." else "Silence distractions and focus.")
+            }
+            Text(">")
+        }
+    }
+}
 @OptIn(ExperimentalMaterial3Api::class) @Composable fun DeepWorkSetupSheet(linkedRule:EarnItRuleStore.Rule?,apps:List<EarnItRuleStore.LaunchableApp> = emptyList(),onDismiss:()->Unit,onStart:(Long?)->Unit){
     val context=LocalContext.current;var selected by remember{mutableStateOf<Long?>(1800)};var custom by remember{mutableStateOf("45")};var customSelected by remember{mutableStateOf(false)};var showDndRationale by remember{mutableStateOf(false)};var standaloneBlocked by remember{mutableStateOf(DeepWorkStore.standaloneBlockedPackages(context))}
     ModalBottomSheet(onDismissRequest=onDismiss){Column(Modifier.fillMaxWidth().padding(20.dp),horizontalAlignment=Alignment.CenterHorizontally,verticalArrangement=Arrangement.spacedBy(10.dp)){

@@ -66,6 +66,8 @@ fun AnalyticsScreen(
     onBack: () -> Unit,
     onCreateRule: () -> Unit,
     onRepairPermission: () -> Unit,
+    premiumInsightsEnabled: Boolean = true,
+    onPremiumGate: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val summary = (state as? AnalyticsUiState.Ready)?.summary
@@ -82,7 +84,13 @@ fun AnalyticsScreen(
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         item { AnalyticsPageHeader(title = "Analytics", onBack = onBack) }
-        item { AnalyticsRangeSelector(selected = range, onSelected = onRangeChange) }
+        item {
+            AnalyticsRangeSelector(
+                selected = range,
+                onSelected = onRangeChange,
+                sevenDayEnabled = premiumInsightsEnabled
+            )
+        }
         when (state) {
             AnalyticsUiState.Loading -> item { AnalyticsLoadingState() }
             AnalyticsUiState.PermissionRequired -> item {
@@ -112,7 +120,13 @@ fun AnalyticsScreen(
                 } else {
                     item { AnalyticsOverviewCard(data) }
                 }
-                item { AnalyticsInsightsSection(insights) }
+                item {
+                    if (premiumInsightsEnabled) {
+                        AnalyticsInsightsSection(insights)
+                    } else {
+                        LockedAnalyticsInsights(onPremiumGate)
+                    }
+                }
                 if (data.apps.isNotEmpty()) item { MostUsedAppsSection(data.apps, onOpenApp) }
                 item { RulePerformanceSection(data.rulePerformance, rules.isEmpty(), onCreateRule) }
                 if (data.rewardSeconds > 0L) item { PeakDistractionSection(data) }
@@ -122,7 +136,41 @@ fun AnalyticsScreen(
 }
 
 @Composable
-internal fun AnalyticsRangeSelector(selected: AnalyticsRange, onSelected: (AnalyticsRange) -> Unit) {
+private fun LockedAnalyticsInsights(onPremiumGate: () -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        AnalyticsSectionTitle("Insights")
+        Surface(
+            modifier = Modifier.fillMaxWidth().clickable(onClick = onPremiumGate),
+            shape = RoundedCornerShape(16.dp),
+            color = MaterialTheme.colorScheme.surface,
+            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = .55f))
+        ) {
+            Row(
+                Modifier.padding(16.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                AnalyticsIconBadge("♛", MaterialTheme.colorScheme.primary)
+                Column(Modifier.weight(1f)) {
+                    Text("Unlock weekly insights", fontWeight = FontWeight.SemiBold)
+                    Text(
+                        "See patterns and progress across your Rules with Pro.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Text("›", color = MaterialTheme.colorScheme.primary)
+            }
+        }
+    }
+}
+
+@Composable
+internal fun AnalyticsRangeSelector(
+    selected: AnalyticsRange,
+    onSelected: (AnalyticsRange) -> Unit,
+    sevenDayEnabled: Boolean = true
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -140,7 +188,7 @@ internal fun AnalyticsRangeSelector(selected: AnalyticsRange, onSelected: (Analy
             ) {
                 Box(contentAlignment = Alignment.Center) {
                     Text(
-                        text = label,
+                        text = if (range == AnalyticsRange.SevenDays && !sevenDayEnabled) "$label  ♛ Pro" else label,
                         style = MaterialTheme.typography.labelLarge,
                         color = if (active) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
                         fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal

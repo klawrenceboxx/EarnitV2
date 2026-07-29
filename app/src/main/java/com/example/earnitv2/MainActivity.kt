@@ -34,6 +34,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -201,6 +202,10 @@ class MainActivity : ComponentActivity() {
     private var builderStep by mutableStateOf(RuleBuilderStep.Earn)
     private var deepWorkSession by mutableStateOf(DeepWorkSession())
     private var deepWorkSetupOpen by mutableStateOf(false)
+    private lateinit var entitlementRepository: SharedPreferencesEntitlementRepository
+    private lateinit var purchaseProvider: LocalPurchaseProvider
+    private val subscriptionConfig = SubscriptionConfig.Placeholder
+    private var proFlowState by mutableStateOf<ProFlowState?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -213,6 +218,16 @@ class MainActivity : ComponentActivity() {
             }
         }
         feedbackCrashPrompt = CrashMarkerStore.consume(this)
+        entitlementRepository = SharedPreferencesEntitlementRepository(
+            context = this,
+            allowDebugOverrides = BuildConfig.ENABLE_ENTITLEMENT_SIMULATOR,
+            betaEntitlement = BuildConfig.GRANT_BETA_ENTITLEMENT
+        )
+        purchaseProvider = LocalPurchaseProvider(
+            config = subscriptionConfig,
+            entitlementController = entitlementRepository,
+            simulationEnabled = BuildConfig.ENABLE_ENTITLEMENT_SIMULATOR
+        )
         strictModeStore = StrictModeStore(SharedPreferencesStrictModePersistence(this))
         chargingStateObserver = AndroidChargingStateObserver(applicationContext)
         strictModePinStore = SharedPreferencesStrictModePinStore(this)
@@ -224,7 +239,10 @@ class MainActivity : ComponentActivity() {
         deepWorkSession = DeepWorkStore.load(this)
         onboardingStore = EarnItOnboardingStore(this)
         val onboardingSeen = onboardingStore.initialize(EarnItRuleStore.hasDurablePriorUse(this))
-        val existingRules = EarnItRuleStore.getRules(this)
+        EarnItRuleStore.reconcileForEntitlement(
+            this,
+            FeatureAccessPolicy(entitlementRepository.state.value)
+        )
         val legacyStrictMode = strictModeStore.state()
         val migratedGlobal = ruleStrictModeStore.migrateToGlobal(legacyStrictMode)
         if (migratedGlobal.lifecycle in setOf(RuleStrictModeLifecycle.DeactivationCounting, RuleStrictModeLifecycle.DeactivationReady) &&
@@ -273,6 +291,13 @@ class MainActivity : ComponentActivity() {
         handleNavigationIntent(intent)
         setContent {
             EarnitV2Theme {
+                val entitlementState by entitlementRepository.state.collectAsState()
+                val purchaseState by purchaseProvider.state.collectAsState()
+                val featurePolicy = FeatureAccessPolicy(entitlementState)
+                LaunchedEffect(entitlementState) {
+                    EarnItRuleStore.reconcileForEntitlement(this@MainActivity, featurePolicy)
+                    refreshDashboardState()
+                }
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
                     if (feedbackOpen) {
                         FeedbackScreen(
@@ -347,9 +372,35 @@ class MainActivity : ComponentActivity() {
                             unavailableRuleType = unavailableRuleType,
                             deepWorkSession = deepWorkSession,
                             deepWorkSetupOpen = deepWorkSetupOpen,
-                            onOpenDeepWork = { if (deepWorkSession.phase == DeepWorkPhase.Inactive) deepWorkSetupOpen = true },
+                            entitlementState = entitlementState,
+                            featurePolicy = featurePolicy,
+                            purchaseState = purchaseState,
+                            purchaseProvider = purchaseProvider,
+                            subscriptionConfig = subscriptionConfig,
+                            proFlowState = proFlowState,
+                            onProFlowChange = { proFlowState = it },
+                            onCloseProFlow = { proFlowState = null },
+                            onPurchasePlan = purchaseProvider::purchase,
+                            onRestorePurchases = purchaseProvider::restorePurchases,
+                            onSimulateEntitlement = entitlementRepository::simulate,
+                            onResetEntitlement = entitlementRepository::reset,
+                            onOpenDeepWork = {
+                                if (PremiumSessionPolicy.canStartDeepWork(featurePolicy)) {
+                                    if (deepWorkSession.phase == DeepWorkPhase.Inactive) deepWorkSetupOpen = true
+                                } else {
+                                    openProGate(PremiumEntryPoint.DeepWork)
+                                }
+                            },
                             onDismissDeepWorkSetup = { deepWorkSetupOpen = false },
-                            onStartDeepWork = { goal -> deepWorkSetupOpen = false; deepWorkSession = DeepWorkStore.begin(this, goal) },
+                            onStartDeepWork = { goal ->
+                                if (PremiumSessionPolicy.canStartDeepWork(featurePolicy)) {
+                                    deepWorkSetupOpen = false
+                                    deepWorkSession = DeepWorkStore.begin(this, goal)
+                                } else {
+                                    deepWorkSetupOpen = false
+                                    openProGate(PremiumEntryPoint.DeepWork)
+                                }
+                            },
                             onActivateDeepWork = { deepWorkSession = DeepWorkStore.activate(this, deepWorkSession) },
                             onContinueDeepWork = { elapsed -> deepWorkSession = DeepWorkStore.continueOpenEnded(this, deepWorkSession, elapsed) },
                             onFinishDeepWork = { elapsed -> DeepWorkStore.finish(this, deepWorkSession, elapsed); deepWorkSession = DeepWorkSession(); refreshDashboardState() },
@@ -374,11 +425,20 @@ class MainActivity : ComponentActivity() {
                             onClearDebugFeedback = { feedbackViewModel.clearDebugQueue() },
                             onReplayOnboarding = ::replayOnboarding,
                             onOpenStrictMode = {
-                                strictModeReturnToSettings = settingsOpen
-                                strictModeReturnRuleId = selectedRuleDetailId
-                                settingsOpen = false
                                 refreshStrictModeState()
-                                strictModeOpen = true
+                                if (!PremiumSessionPolicy.canOpenStrictMode(
+                                        featurePolicy,
+                                        strictModeState.lifecycleState.isStrictModeProtecting()
+                                    )
+                                ) {
+                                    openProGate(PremiumEntryPoint.StrictMode)
+                                } else {
+                                    strictModeReturnToSettings = settingsOpen
+                                    strictModeReturnRuleId = selectedRuleDetailId
+                                    settingsOpen = false
+                                    refreshStrictModeState()
+                                    strictModeOpen = true
+                                }
                             },
                             onCloseStrictMode = {
                                 strictModeOpen = false
@@ -596,6 +656,12 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun changeAnalyticsRange(range: AnalyticsRange) {
+        if (range == AnalyticsRange.SevenDays &&
+            !FeatureAccessPolicy(entitlementRepository.state.value).canUse(PremiumFeature.SevenDayAnalytics)
+        ) {
+            openProGate(PremiumEntryPoint.Analytics)
+            return
+        }
         if (analyticsRange == range && analyticsState is AnalyticsUiState.Ready) return
         analyticsRange = range
         loadAnalytics()
@@ -651,6 +717,11 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun beginStrictModeActivation(configuration: StrictModeConfiguration, method: StrictModeProtectionMethod, pin: String?) {
+        if (!FeatureAccessPolicy(entitlementRepository.state.value).canUse(PremiumFeature.StrictMode)) {
+            strictModeOpen = false
+            openProGate(PremiumEntryPoint.StrictMode)
+            return
+        }
         if (method == StrictModeProtectionMethod.Pin) {
             val characters = pin?.toCharArray() ?: return
             val saved = try { strictModePinStore.save(characters) } finally { characters.fill('\u0000') }
@@ -1230,7 +1301,16 @@ class MainActivity : ComponentActivity() {
         if (!rule.enabled) {
             EarnItPauseStore.clearPause(this, rule.id)
         }
-        EarnItRuleStore.setRuleEnabled(this, rule.id, !rule.enabled)
+        val result = EarnItRuleStore.setRuleEnabled(
+            this,
+            rule.id,
+            !rule.enabled,
+            FeatureAccessPolicy(entitlementRepository.state.value)
+        )
+        if (result is RuleActivationResult.Denied) {
+            openProGate(PremiumEntryPoint.RuleLimit)
+            return
+        }
         refreshDashboardState()
     }
 
@@ -1248,7 +1328,16 @@ class MainActivity : ComponentActivity() {
 
     private fun resumeRule(rule: EarnItRuleStore.Rule) {
         EarnItPauseStore.clearPause(this, rule.id)
-        EarnItRuleStore.setRuleEnabled(this, rule.id, true)
+        val result = EarnItRuleStore.setRuleEnabled(
+            this,
+            rule.id,
+            true,
+            FeatureAccessPolicy(entitlementRepository.state.value)
+        )
+        if (result is RuleActivationResult.Denied) {
+            openProGate(PremiumEntryPoint.RuleLimit)
+            return
+        }
         refreshDashboardState()
     }
 
@@ -1259,7 +1348,12 @@ class MainActivity : ComponentActivity() {
             .keys
             .forEach { ruleId ->
                 EarnItPauseStore.clearPause(this, ruleId)
-                EarnItRuleStore.setRuleEnabled(this, ruleId, true)
+                EarnItRuleStore.setRuleEnabled(
+                    this,
+                    ruleId,
+                    true,
+                    FeatureAccessPolicy(entitlementRepository.state.value)
+                )
             }
     }
 
@@ -1431,7 +1525,9 @@ class MainActivity : ComponentActivity() {
             type = editingRule.type,
             productiveApps = if (editingRule.type == EarnItRuleStore.RuleType.EarnRewardTime) productiveApps else emptyList(),
             requirements = if (editingRule.type == EarnItRuleStore.RuleType.CompleteToUnlock) selectedRequirements else emptyList(),
-            blockedDomains = selectedBlockedDomains
+            blockedDomains = selectedBlockedDomains,
+            lastActivatedAtMillis = editingRule.lastActivatedAtMillis,
+            inactiveReason = editingRule.inactiveReason
         )
         if (builderEntryContext == RuleBuilderEntryContext.Edit && isRuleProtected(editingRule)) {
             val comparison = RuleRestrictionPolicy.compare(editingRule, rule)
@@ -1440,7 +1536,15 @@ class MainActivity : ComponentActivity() {
                 return
             }
         }
-        EarnItRuleStore.saveRule(this, rule)
+        val saveResult = EarnItRuleStore.saveRule(
+            this,
+            rule,
+            FeatureAccessPolicy(entitlementRepository.state.value)
+        )
+        if (saveResult is RuleActivationResult.Denied) {
+            openProGate(PremiumEntryPoint.RuleLimit)
+            return
+        }
         editingRuleTemplate = null
         builderEntryContext = null
         builderReturnRuleDetailId = null
@@ -1577,6 +1681,10 @@ class MainActivity : ComponentActivity() {
     private fun isDebugBuild(): Boolean =
         applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0
 
+    private fun openProGate(entryPoint: PremiumEntryPoint) {
+        proFlowState = ProFlowState(route = ProRoute.Gate, entryPoint = entryPoint)
+    }
+
     companion object {
         internal const val EXTRA_OPEN_RULE_DETAIL_ID = "com.example.earnitv2.extra.OPEN_RULE_DETAIL_ID"
         private const val APP_LIST_REFRESH_INTERVAL_MS = 60_000L
@@ -1664,6 +1772,18 @@ internal fun Dashboard(
     unavailableRuleType: RuleTypeOption?,
     deepWorkSession: DeepWorkSession,
     deepWorkSetupOpen: Boolean,
+    entitlementState: EntitlementState,
+    featurePolicy: FeatureAccessPolicy,
+    purchaseState: PurchaseState,
+    purchaseProvider: LocalPurchaseProvider,
+    subscriptionConfig: SubscriptionConfig,
+    proFlowState: ProFlowState?,
+    onProFlowChange: (ProFlowState) -> Unit,
+    onCloseProFlow: () -> Unit,
+    onPurchasePlan: (SubscriptionPlan) -> Unit,
+    onRestorePurchases: () -> Unit,
+    onSimulateEntitlement: (EntitlementState) -> Unit,
+    onResetEntitlement: () -> Unit,
     onOpenDeepWork: () -> Unit,
     onDismissDeepWorkSetup: () -> Unit,
     onStartDeepWork: (Long?) -> Unit,
@@ -1788,7 +1908,19 @@ internal fun Dashboard(
             homeRules.firstOrNull { it.rule.id == selectedRuleId }
         }
 
-        if (deepWorkSession.phase != DeepWorkPhase.Inactive) {
+        if (proFlowState != null) {
+            EarnItProScreen(
+                flow = proFlowState,
+                config = subscriptionConfig,
+                entitlement = entitlementState,
+                purchaseState = purchaseState,
+                onFlowChange = onProFlowChange,
+                onPurchase = onPurchasePlan,
+                onRestore = onRestorePurchases,
+                onClose = onCloseProFlow,
+                modifier = modifier
+            )
+        } else if (deepWorkSession.phase != DeepWorkPhase.Inactive) {
             DeepWorkScreen(deepWorkSession, onActivateDeepWork, onContinueDeepWork, onFinishDeepWork)
         } else if (ruleTypeSelectionOpen) {
             EarnItRuleTypeSelection(
@@ -1834,6 +1966,8 @@ internal fun Dashboard(
                 onBack = onCloseAnalytics,
                 onCreateRule = onAddRule,
                 onRepairPermission = onOpenUsageAccessSettings,
+                premiumInsightsEnabled = featurePolicy.canUse(PremiumFeature.PremiumInsights),
+                onPremiumGate = { onProFlowChange(ProFlowState(ProRoute.Gate, PremiumEntryPoint.Insights)) },
                 modifier = modifier
             )
         } else if (settingsOpen) {
@@ -1841,6 +1975,16 @@ internal fun Dashboard(
                 permissionState = permissionState,
                 hasRules = homeRules.isNotEmpty(),
                 strictModeState = strictModeState,
+                entitlementState = entitlementState,
+                purchaseProvider = purchaseProvider,
+                onOpenPro = { onProFlowChange(ProFlowState(ProRoute.Intro, PremiumEntryPoint.Settings)) },
+                onRestorePurchases = { onProFlowChange(ProFlowState(ProRoute.Restore, PremiumEntryPoint.Settings)) },
+                onManageSubscription = {
+                    purchaseProvider.openManageSubscription()
+                    onProFlowChange(ProFlowState(ProRoute.PurchaseStatus, PremiumEntryPoint.Settings))
+                },
+                onSimulateEntitlement = onSimulateEntitlement,
+                onResetEntitlement = onResetEntitlement,
                 onBack = onCloseSettings,
                 onOpenAnalytics = onOpenAnalytics,
                 onOpenStrictMode = onOpenStrictMode,
@@ -1894,6 +2038,7 @@ internal fun Dashboard(
                 permissionState = permissionState,
                 manageRulesOpen = manageRulesOpen,
                 deepWorkActive = deepWorkSession.phase != DeepWorkPhase.Inactive,
+                deepWorkPremium = featurePolicy.canUse(PremiumFeature.DeepWork),
                 onOpenDeepWork = onOpenDeepWork,
                 onAddRule = onAddRule,
                 onOpenEarnApp = onOpenEarnApp,
@@ -2312,6 +2457,16 @@ private fun formatDuration(totalSeconds: Long): String {
 @Preview(showBackground = true)
 @Composable
 fun DashboardPreview() {
+    val previewEntitlement = EntitlementState.Free
+    val previewController = object : DebugEntitlementController {
+        override fun simulate(state: EntitlementState) = Unit
+        override fun reset() = Unit
+    }
+    val previewPurchaseProvider = LocalPurchaseProvider(
+        SubscriptionConfig.Placeholder,
+        previewController,
+        simulationEnabled = true
+    )
     val rule = EarnItRuleStore.Rule(
         id = "preview",
         productivePackage = "com.duolingo",
@@ -2375,6 +2530,18 @@ fun DashboardPreview() {
             unavailableRuleType = null,
             deepWorkSession = DeepWorkSession(),
             deepWorkSetupOpen = false,
+            entitlementState = previewEntitlement,
+            featurePolicy = FeatureAccessPolicy(previewEntitlement),
+            purchaseState = PurchaseState.Idle,
+            purchaseProvider = previewPurchaseProvider,
+            subscriptionConfig = SubscriptionConfig.Placeholder,
+            proFlowState = null,
+            onProFlowChange = {},
+            onCloseProFlow = {},
+            onPurchasePlan = {},
+            onRestorePurchases = {},
+            onSimulateEntitlement = {},
+            onResetEntitlement = {},
             onOpenDeepWork = {},
             onDismissDeepWorkSetup = {},
             onStartDeepWork = {},

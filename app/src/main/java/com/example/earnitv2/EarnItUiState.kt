@@ -241,6 +241,7 @@ object EarnItUiFormatters {
 
     fun scheduleStatus(rule: EarnItRuleStore.Rule, isActiveNow: Boolean): String {
         return when {
+            rule.inactiveReason == RuleInactiveReason.PremiumExpired -> "Premium inactive"
             !rule.enabled -> "Rule paused"
             rule.type == EarnItRuleStore.RuleType.ScheduledBlock && isActiveNow -> "Block active now"
             rule.type == EarnItRuleStore.RuleType.ScheduledBlock -> "Outside block schedule"
