@@ -638,9 +638,11 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun refreshDashboardState() {
-        resumeExpiredPauses()
         refreshStrictModeState()
-        val savedRules = EarnItRuleStore.getRules(this)
+        val savedRules = EarnItRuleStore.getRules(
+            this,
+            FeatureAccessPolicy(entitlementRepository.state.value)
+        )
         pauseExpirations = EarnItPauseStore.pauseExpirations(this)
         rules = savedRules
         refreshLaunchableApps()
@@ -1339,22 +1341,6 @@ class MainActivity : ComponentActivity() {
             return
         }
         refreshDashboardState()
-    }
-
-    private fun resumeExpiredPauses() {
-        val now = System.currentTimeMillis()
-        EarnItPauseStore.pauseExpirations(this)
-            .filterValues { it <= now }
-            .keys
-            .forEach { ruleId ->
-                EarnItPauseStore.clearPause(this, ruleId)
-                EarnItRuleStore.setRuleEnabled(
-                    this,
-                    ruleId,
-                    true,
-                    FeatureAccessPolicy(entitlementRepository.state.value)
-                )
-            }
     }
 
     private fun deleteRule(rule: EarnItRuleStore.Rule) {

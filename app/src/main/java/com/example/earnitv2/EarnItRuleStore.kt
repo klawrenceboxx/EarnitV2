@@ -135,26 +135,25 @@ object EarnItRuleStore {
         val applicationCategory: Int? = null
     )
 
-    fun getRules(context: Context): List<Rule> {
+    fun getRules(
+        context: Context,
+        policy: FeatureAccessPolicy = FeatureAccessPolicy.current(context)
+    ): List<Rule> {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val decodedRules = decodeRules(prefs.getString(KEY_RULES, null))
         val expiredPauseRuleIds = EarnItPauseStore.expiredRuleIds(context)
         val savedRules = if (expiredPauseRuleIds.isEmpty()) {
             decodedRules
         } else {
-            var resumedRules = decodedRules
-            expiredPauseRuleIds.sorted().forEach { ruleId ->
-                val result = RuleEntitlementPolicy.activate(
-                    rules = resumedRules,
-                    ruleId = ruleId,
-                    policy = FeatureAccessPolicy(EntitlementState.Free),
-                    activatedAtMillis = System.currentTimeMillis()
-                )
-                if (result is RuleActivationResult.Allowed) resumedRules = result.rules
-            }
-            expiredPauseRuleIds.forEach { EarnItPauseStore.clearPause(context, it) }
-            saveRules(context, resumedRules)
-            resumedRules
+            val resolution = RuleEntitlementPolicy.resolveExpiredPauses(
+                rules = decodedRules,
+                expiredRuleIds = expiredPauseRuleIds,
+                policy = policy,
+                activatedAtMillis = System.currentTimeMillis()
+            )
+            resolution.resolvedRuleIds.forEach { EarnItPauseStore.clearPause(context, it) }
+            saveRules(context, resolution.rules)
+            resolution.rules
         }
         if (savedRules.isNotEmpty() || prefs.getBoolean(KEY_RULES_INITIALIZED, false)) return savedRules
         if (!hasLegacySingleRuleState(context)) return emptyList()
@@ -210,7 +209,7 @@ object EarnItRuleStore {
     fun saveRule(
         context: Context,
         rule: Rule,
-        policy: FeatureAccessPolicy = FeatureAccessPolicy(EntitlementState.Free)
+        policy: FeatureAccessPolicy = FeatureAccessPolicy.current(context)
     ): RuleActivationResult {
         val rules = getRules(context)
         val result = RuleEntitlementPolicy.save(
@@ -234,7 +233,7 @@ object EarnItRuleStore {
         context: Context,
         ruleId: String,
         enabled: Boolean,
-        policy: FeatureAccessPolicy = FeatureAccessPolicy(EntitlementState.Free)
+        policy: FeatureAccessPolicy = FeatureAccessPolicy.current(context)
     ): RuleActivationResult {
         val rules = getRules(context)
         val result = if (enabled) {

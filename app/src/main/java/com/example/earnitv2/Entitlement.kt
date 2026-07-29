@@ -146,6 +146,14 @@ class FeatureAccessPolicy(val entitlement: EntitlementState) {
 
     companion object {
         const val FREE_ACTIVE_RULE_LIMIT = 2
+
+        fun current(context: Context): FeatureAccessPolicy = FeatureAccessPolicy(
+            SharedPreferencesEntitlementRepository(
+                context = context,
+                allowDebugOverrides = BuildConfig.ENABLE_ENTITLEMENT_SIMULATOR,
+                betaEntitlement = BuildConfig.GRANT_BETA_ENTITLEMENT
+            ).state.value
+        )
     }
 }
 

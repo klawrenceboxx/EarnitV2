@@ -32,6 +32,47 @@ class RuleEntitlementPolicyTest {
     }
 
     @Test
+    fun expiredPauseAutoResumesForPremiumBeyondFreeLimit() {
+        val rules = listOf(
+            rule("one", true),
+            rule("two", true),
+            rule("paused", false)
+        )
+
+        val resolution = RuleEntitlementPolicy.resolveExpiredPauses(
+            rules = rules,
+            expiredRuleIds = setOf("paused"),
+            policy = premium,
+            activatedAtMillis = 100
+        )
+
+        assertEquals(3, resolution.rules.count { it.enabled })
+        assertTrue(resolution.rules.first { it.id == "paused" }.enabled)
+        assertEquals(setOf("paused"), resolution.resolvedRuleIds)
+    }
+
+    @Test
+    fun expiredPauseThatCannotResumeIsMarkedPremiumInactive() {
+        val rules = listOf(
+            rule("one", true),
+            rule("two", true),
+            rule("paused", false)
+        )
+
+        val resolution = RuleEntitlementPolicy.resolveExpiredPauses(
+            rules = rules,
+            expiredRuleIds = setOf("paused"),
+            policy = free,
+            activatedAtMillis = 100
+        )
+
+        val paused = resolution.rules.first { it.id == "paused" }
+        assertFalse(paused.enabled)
+        assertEquals(RuleInactiveReason.PremiumExpired, paused.inactiveReason)
+        assertEquals(setOf("paused"), resolution.resolvedRuleIds)
+    }
+
+    @Test
     fun inactiveRuleCanBeSavedBeyondFreeLimit() {
         val existing = listOf(rule("one", true), rule("two", true))
         val result = RuleEntitlementPolicy.save(existing, rule("draft", false), free, 3)

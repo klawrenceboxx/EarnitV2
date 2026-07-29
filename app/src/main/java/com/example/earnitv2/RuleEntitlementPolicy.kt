@@ -7,6 +7,11 @@ sealed interface RuleActivationResult {
     data class Denied(val reason: String) : RuleActivationResult
 }
 
+data class ExpiredPauseResolution(
+    val rules: List<EarnItRuleStore.Rule>,
+    val resolvedRuleIds: Set<String>
+)
+
 object RuleEntitlementPolicy {
     fun activate(
         rules: List<EarnItRuleStore.Rule>,
@@ -71,5 +76,31 @@ object RuleEntitlementPolicy {
                 rule
             }
         }
+    }
+
+    fun resolveExpiredPauses(
+        rules: List<EarnItRuleStore.Rule>,
+        expiredRuleIds: Set<String>,
+        policy: FeatureAccessPolicy,
+        activatedAtMillis: Long
+    ): ExpiredPauseResolution {
+        var resolvedRules = rules
+        val resolvedRuleIds = mutableSetOf<String>()
+        expiredRuleIds.sorted().forEach { ruleId ->
+            when (val result = activate(resolvedRules, ruleId, policy, activatedAtMillis)) {
+                is RuleActivationResult.Allowed -> resolvedRules = result.rules
+                is RuleActivationResult.Denied -> {
+                    resolvedRules = resolvedRules.map { rule ->
+                        if (rule.id == ruleId) {
+                            rule.copy(inactiveReason = RuleInactiveReason.PremiumExpired)
+                        } else {
+                            rule
+                        }
+                    }
+                }
+            }
+            resolvedRuleIds += ruleId
+        }
+        return ExpiredPauseResolution(resolvedRules, resolvedRuleIds)
     }
 }
