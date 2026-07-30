@@ -8,6 +8,9 @@ import android.hardware.SensorManager
 import org.json.JSONObject
 import java.util.UUID
 import kotlin.math.sqrt
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 object CrashMarkerStore {
     private const val PREFS = "feedback_crash_marker"
@@ -90,7 +93,8 @@ class ForegroundShakeController(context: Context, onShake: () -> Unit) : SensorE
     private val manager = context.getSystemService(SensorManager::class.java)
     private val accelerometer = manager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
     val detector = ShakeDetector(onShake)
-    private var registered = false
+    var registered = false
+        private set
     fun register() {
         if (!registered && accelerometer != null) {
             registered = manager.registerListener(this, accelerometer, SensorManager.SENSOR_DELAY_GAME)
@@ -106,9 +110,53 @@ class ForegroundShakeController(context: Context, onShake: () -> Unit) : SensorE
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
 }
 
+class ShakeSettingState(
+    initialValue: Boolean,
+    private val persist: (Boolean) -> Boolean
+) {
+    private val mutableEnabled = MutableStateFlow(initialValue)
+    val enabled: StateFlow<Boolean> = mutableEnabled.asStateFlow()
+
+    fun setEnabled(value: Boolean): Boolean {
+        val previous = mutableEnabled.value
+        if (previous == value) return true
+        mutableEnabled.value = value
+        if (persist(value)) return true
+        mutableEnabled.value = previous
+        return false
+    }
+
+    fun updateFromExternalSource(value: Boolean) {
+        mutableEnabled.value = value
+    }
+}
+
 class FeedbackPreferences(context: Context) {
     private val prefs = context.getSharedPreferences("feedback_preferences", Context.MODE_PRIVATE)
-    var shakeEnabled: Boolean
-        get() = prefs.getBoolean("shake_enabled", false)
-        set(value) { prefs.edit().putBoolean("shake_enabled", value).apply() }
+    private val state = ShakeSettingState(prefs.getBoolean(KEY_SHAKE_ENABLED, false)) { value ->
+        prefs.edit().putBoolean(KEY_SHAKE_ENABLED, value).commit()
+    }
+    val shakeEnabled: StateFlow<Boolean> = state.enabled
+    private val listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { preferences, key ->
+        if (key == KEY_SHAKE_ENABLED) {
+            state.updateFromExternalSource(preferences.getBoolean(KEY_SHAKE_ENABLED, false))
+        }
+    }
+
+    init {
+        prefs.registerOnSharedPreferenceChangeListener(listener)
+    }
+
+    fun setShakeEnabled(value: Boolean): Boolean = state.setEnabled(value)
+
+    fun close() {
+        prefs.unregisterOnSharedPreferenceChangeListener(listener)
+    }
+
+    private companion object {
+        const val KEY_SHAKE_ENABLED = "shake_enabled"
+    }
 }
+
+internal fun shouldRegisterShakeDetector(enabled: Boolean, resumed: Boolean, feedbackOpen: Boolean): Boolean =
+    enabled && resumed && !feedbackOpen

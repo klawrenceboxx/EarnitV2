@@ -5,6 +5,8 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -32,8 +34,13 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -44,6 +51,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import java.time.format.TextStyle
+import java.time.LocalDate
+import java.time.format.DateTimeFormatter
 import java.util.Locale
 import kotlin.math.abs
 
@@ -56,11 +65,13 @@ private val AnalyticsOrange = Color(0xFFFFA33D)
 @Composable
 fun AnalyticsScreen(
     range: AnalyticsRange,
+    selectedDate: LocalDate,
     state: AnalyticsUiState,
     insights: List<InsightCandidate>,
     rules: List<EarnItRuleStore.Rule>,
     selectedAppPackage: String?,
     onRangeChange: (AnalyticsRange) -> Unit,
+    onDateChange: (LocalDate) -> Unit,
     onOpenApp: (String) -> Unit,
     onBackFromApp: () -> Unit,
     onBack: () -> Unit,
@@ -90,6 +101,9 @@ fun AnalyticsScreen(
                 onSelected = onRangeChange,
                 sevenDayEnabled = premiumInsightsEnabled
             )
+        }
+        if (range == AnalyticsRange.Today) {
+            item { AnalyticsDateNavigator(selectedDate, onDateChange) }
         }
         when (state) {
             AnalyticsUiState.Loading -> item { AnalyticsLoadingState() }
@@ -127,10 +141,116 @@ fun AnalyticsScreen(
                         LockedAnalyticsInsights(onPremiumGate)
                     }
                 }
-                if (data.apps.isNotEmpty()) item { MostUsedAppsSection(data.apps, onOpenApp) }
+                if (range == AnalyticsRange.Today) {
+                    item { RewardActivitySection(data) }
+                    data.ruleActivity?.let { activity -> item { RuleActivitySection(activity) } }
+                }
+                item {
+                    if (data.apps.isNotEmpty()) MostUsedAppsSection(data.apps, onOpenApp)
+                    else AnalyticsStateCard("No app activity", "No app usage was recorded for this day.")
+                }
                 item { RulePerformanceSection(data.rulePerformance, rules.isEmpty(), onCreateRule) }
-                if (data.rewardSeconds > 0L) item { PeakDistractionSection(data) }
+                if (data.rewardSeconds > 0L && range == AnalyticsRange.SevenDays) {
+                    item { PeakDistractionSection(data) }
+                }
             }
+        }
+    }
+}
+
+@Composable
+private fun AnalyticsDateNavigator(
+    selectedDate: LocalDate,
+    onDateChange: (LocalDate) -> Unit
+) {
+    val today = LocalDate.now()
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .pointerInput(selectedDate, today) {
+                var drag = 0f
+                detectHorizontalDragGestures(
+                    onDragStart = { drag = 0f },
+                    onHorizontalDrag = { change, amount -> change.consume(); drag += amount },
+                    onDragEnd = {
+                        analyticsDateAfterSwipe(selectedDate, today, drag)?.let(onDateChange)
+                    }
+                )
+            },
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+    ) {
+        Row(
+            Modifier.fillMaxWidth().heightIn(min = 58.dp).padding(horizontal = 6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            TextButton(
+                onClick = { onDateChange(selectedDate.minusDays(1)) },
+                modifier = Modifier.semantics { contentDescription = "Previous day" }
+            ) { Text("‹", style = MaterialTheme.typography.headlineSmall) }
+            Text(
+                analyticsDateLabel(selectedDate, today),
+                Modifier.weight(1f),
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                fontWeight = FontWeight.SemiBold
+            )
+            TextButton(
+                onClick = { if (selectedDate < today) onDateChange(selectedDate.plusDays(1)) },
+                enabled = selectedDate < today,
+                modifier = Modifier.semantics { contentDescription = "Next day" }
+            ) { Text("›", style = MaterialTheme.typography.headlineSmall) }
+        }
+    }
+}
+
+internal fun analyticsDateAfterSwipe(selectedDate: LocalDate, today: LocalDate, dragPixels: Float): LocalDate? = when {
+    dragPixels <= -64f -> selectedDate.minusDays(1)
+    dragPixels >= 64f && selectedDate < today -> selectedDate.plusDays(1)
+    else -> null
+}
+
+internal fun analyticsDateLabel(
+    date: LocalDate,
+    today: LocalDate = LocalDate.now(),
+    locale: Locale = Locale.getDefault()
+): String {
+    val monthDay = date.format(DateTimeFormatter.ofPattern("MMMM d", locale))
+    return when (date) {
+        today -> "Today, $monthDay"
+        today.minusDays(1) -> "Yesterday, $monthDay"
+        else -> "${date.dayOfWeek.getDisplayName(TextStyle.FULL, locale)}, $monthDay"
+    }
+}
+
+@Composable
+private fun RewardActivitySection(summary: AnalyticsSummary) {
+    AnalyticsCard {
+        AnalyticsSectionTitle("Reward activity")
+        Text(
+            "Reward App minutes by hour",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        AnalyticsHourlyBarChart(summary.dailyUsage.firstOrNull()?.hourlyRewardSeconds.orEmpty(), AnalyticsReward)
+    }
+}
+
+@Composable
+private fun RuleActivitySection(activity: RuleActivityMetrics) {
+    val metrics = buildList {
+        activity.rewardEarnedSeconds?.let { add("Reward Time earned" to it) }
+        activity.rewardSpentSeconds?.let { add("Reward Time spent" to it) }
+        activity.remainingRewardSeconds?.let { add("Remaining Reward Time" to it) }
+    }
+    if (metrics.isEmpty() && activity.blockedAttempts == 0) return
+    AnalyticsCard {
+        AnalyticsSectionTitle("Rule activity")
+        metrics.forEach { (label, seconds) ->
+            AnalyticsAboutRow(label, analyticsDuration(seconds))
+        }
+        if (activity.blockedAttempts > 0) {
+            AnalyticsAboutRow("Blocked attempts", activity.blockedAttempts.toString())
         }
     }
 }
@@ -138,7 +258,7 @@ fun AnalyticsScreen(
 @Composable
 private fun LockedAnalyticsInsights(onPremiumGate: () -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        AnalyticsSectionTitle("Insights")
+        AnalyticsSectionTitle("Weekly insights")
         Surface(
             modifier = Modifier.fillMaxWidth().clickable(onClick = onPremiumGate),
             shape = RoundedCornerShape(16.dp),
@@ -150,16 +270,16 @@ private fun LockedAnalyticsInsights(onPremiumGate: () -> Unit) {
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                AnalyticsIconBadge("♛", MaterialTheme.colorScheme.primary)
+                AnalyticsIconBadge("▥", MaterialTheme.colorScheme.primary)
                 Column(Modifier.weight(1f)) {
-                    Text("Unlock weekly insights", fontWeight = FontWeight.SemiBold)
+                    Text("Weekly insights", fontWeight = FontWeight.SemiBold)
                     Text(
-                        "See patterns and progress across your Rules with Pro.",
+                        "See patterns and progress across your Rules.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                Text("›", color = MaterialTheme.colorScheme.primary)
+                Text("View with Pro  ›", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelLarge)
             }
         }
     }
@@ -188,7 +308,7 @@ internal fun AnalyticsRangeSelector(
             ) {
                 Box(contentAlignment = Alignment.Center) {
                     Text(
-                        text = if (range == AnalyticsRange.SevenDays && !sevenDayEnabled) "$label  ♛ Pro" else label,
+                        text = label,
                         style = MaterialTheme.typography.labelLarge,
                         color = if (active) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
                         fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal
@@ -201,7 +321,7 @@ internal fun AnalyticsRangeSelector(
 
 @Composable
 private fun AnalyticsOverviewCard(summary: AnalyticsSummary) = AnalyticsCard {
-    AnalyticsSectionTitle("Overview")
+    AnalyticsSectionTitle(if (summary.range == AnalyticsRange.Today) "Today overview" else "Overview")
     Text("Total screen time", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
     Text(
         analyticsDuration(summary.totalSeconds),
@@ -215,17 +335,11 @@ private fun AnalyticsOverviewCard(summary: AnalyticsSummary) = AnalyticsCard {
         AnalyticsMetric("Reward Apps", summary.rewardSeconds, AnalyticsReward, Modifier.weight(1f))
         AnalyticsMetric("Other Apps", summary.otherSeconds, AnalyticsOther, Modifier.weight(1f))
     }
-    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = .7f))
-    Text(
-        if (summary.range == AnalyticsRange.SevenDays) "Weekly trend" else "Reward activity today",
-        style = MaterialTheme.typography.titleSmall,
-        fontWeight = FontWeight.SemiBold
-    )
     if (summary.range == AnalyticsRange.SevenDays) {
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = .7f))
+        Text("Weekly trend", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
         AnalyticsDailyBarChart(summary.dailyUsage)
         AnalyticsLegend()
-    } else {
-        AnalyticsHourlyBarChart(summary.dailyUsage.firstOrNull()?.hourlyRewardSeconds.orEmpty(), AnalyticsReward)
     }
 }
 
@@ -575,16 +689,47 @@ private fun AnalyticsSingleSeriesDailyChart(values: List<Long>, labels: List<Str
 private fun AnalyticsHourlyBarChart(values: List<Long>, color: Color) {
     val padded = List(24) { values.getOrElse(it) { 0L } }
     val max = padded.maxOrNull()?.coerceAtLeast(1) ?: 1
-    Canvas(Modifier.fillMaxWidth().height(104.dp).semantics { contentDescription = "Hourly usage chart" }) {
+    var selectedHour by remember(values) { mutableIntStateOf(-1) }
+    Canvas(
+        Modifier
+            .fillMaxWidth()
+            .height(116.dp)
+            .pointerInput(values) {
+                detectTapGestures { offset ->
+                    selectedHour = ((offset.x / size.width) * 24).toInt().coerceIn(0, 23)
+                }
+            }
+            .semantics { contentDescription = "Hourly Reward App usage chart" }
+    ) {
         val gap = 3.dp.toPx()
         val width = ((size.width - gap * 23) / 24).coerceAtLeast(1f)
         padded.forEachIndexed { index, value ->
             val h = if (value == 0L) 0f else (size.height * value / max.toFloat()).coerceAtLeast(3.dp.toPx())
-            drawRoundRect(color.copy(alpha = if (value == 0L) 0f else .9f), Offset(index * (width + gap), size.height - h), Size(width, h), CornerRadius(width / 2f))
+            drawRoundRect(
+                color.copy(alpha = if (value == 0L) .08f else if (selectedHour == index) 1f else .72f),
+                Offset(index * (width + gap), size.height - if (value == 0L) 2.dp.toPx() else h),
+                Size(width, if (value == 0L) 2.dp.toPx() else h),
+                CornerRadius(width / 2f)
+            )
         }
     }
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-        listOf("12 AM", "12 PM", "11 PM").forEach { Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        listOf("12 AM", "6 AM", "12 PM", "6 PM", "11 PM").forEach {
+            Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+    if (selectedHour in 0..23) {
+        val end = (selectedHour + 1) % 24
+        Surface(
+            color = color.copy(alpha = .12f),
+            shape = RoundedCornerShape(10.dp)
+        ) {
+            Text(
+                "${formatHour(selectedHour)}–${formatHour(end)} · ${analyticsDuration(padded[selectedHour])}",
+                Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+                style = MaterialTheme.typography.labelMedium
+            )
+        }
     }
 }
 

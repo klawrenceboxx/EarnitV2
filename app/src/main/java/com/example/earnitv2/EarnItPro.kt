@@ -21,16 +21,21 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.Role
@@ -39,6 +44,13 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.example.earnitv2.ui.theme.WarmCoral
+import com.example.earnitv2.ui.theme.WarmInk
+import com.example.earnitv2.ui.theme.WarmOutline
+import com.example.earnitv2.ui.theme.WarmSurface
+import com.example.earnitv2.ui.theme.WarmSurfaceRaised
+import com.example.earnitv2.ui.theme.WarmText
+import com.example.earnitv2.ui.theme.WarmTextMuted
 
 enum class ProRoute { Gate, Intro, Plans, Compare, Restore, PurchaseStatus }
 
@@ -48,38 +60,124 @@ data class ProFlowState(
     val selectedPlanId: String = SubscriptionConfig.Placeholder.annual.id
 )
 
+data class PremiumGateContent(
+    val title: String,
+    val body: String,
+    val benefits: List<String>,
+    val icon: String,
+    val iconSemantic: String
+)
+
+internal fun premiumGateContent(entryPoint: PremiumEntryPoint): PremiumGateContent = when (entryPoint) {
+    PremiumEntryPoint.DeepWork -> PremiumGateContent(
+        "Deep Work is part of EarnIt Pro",
+        "Start focused sessions with stronger protection against distractions.",
+        listOf("Longer focus sessions", "Stronger blocking", "Fewer ways to exit early"),
+        "◎",
+        "Deep Work timer"
+    )
+    PremiumEntryPoint.StrictMode -> PremiumGateContent(
+        "Strict Mode is part of EarnIt Pro",
+        "Lock your Rules and make impulsive changes harder.",
+        listOf("Protect active Rules", "Prevent quick deactivation", "Stay committed"),
+        "◇",
+        "Protected Rule"
+    )
+    PremiumEntryPoint.Analytics, PremiumEntryPoint.Insights -> PremiumGateContent(
+        "Unlock your weekly view",
+        "See how your habits change across seven days.",
+        listOf("Daily screen-time trends", "Earn versus Reward usage", "Most-used apps and insights"),
+        "▥",
+        "Weekly analytics"
+    )
+    PremiumEntryPoint.RuleLimit -> PremiumGateContent(
+        "You've reached the free limit",
+        "Free includes up to 2 active Rules.",
+        listOf("Create unlimited active Rules", "Keep separate routines", "Build different focus systems"),
+        "≡",
+        "Unlimited Rules"
+    )
+    PremiumEntryPoint.Settings -> PremiumGateContent(
+        "Upgrade to EarnIt Pro",
+        "Unlock unlimited Rules, Deep Work, Strict Mode, and weekly insights.",
+        listOf("Unlimited active Rules", "Stronger focus tools", "Seven-day insights"),
+        "✦",
+        "EarnIt Pro"
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PremiumGateDialog(
     entryPoint: PremiumEntryPoint,
     onUpgrade: () -> Unit,
     onDismiss: () -> Unit
 ) {
-    val copy = premiumGateCopy(entryPoint)
-    AlertDialog(
+    val copy = premiumGateContent(entryPoint)
+    ModalBottomSheet(
         onDismissRequest = onDismiss,
-        title = { Text(copy.first) },
-        text = { Text(copy.second) },
-        confirmButton = { TextButton(onClick = onUpgrade) { Text("Upgrade to Pro") } },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text(if (entryPoint == PremiumEntryPoint.RuleLimit) "Keep current Rules" else "Not now")
+        containerColor = WarmInk,
+        contentColor = WarmText,
+        dragHandle = {
+            Surface(
+                modifier = Modifier.padding(top = 10.dp).width(42.dp).heightIn(min = 4.dp),
+                color = WarmOutline,
+                shape = RoundedCornerShape(99.dp)
+            ) {}
+        }
+    ) {
+        Column(
+            Modifier.fillMaxWidth().verticalScroll(rememberScrollState())
+                .padding(start = 20.dp, end = 20.dp, bottom = 28.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = WarmSurfaceRaised,
+                border = BorderStroke(1.dp, WarmOutline),
+                modifier = Modifier.semantics { contentDescription = copy.iconSemantic }
+            ) {
+                Text(copy.icon, Modifier.padding(horizontal = 17.dp, vertical = 12.dp), color = WarmCoral, style = MaterialTheme.typography.headlineSmall)
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                Text(copy.title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, color = WarmText)
+                Text(copy.body, style = MaterialTheme.typography.bodyLarge, color = WarmTextMuted)
+            }
+            Surface(
+                color = WarmSurface,
+                shape = RoundedCornerShape(18.dp),
+                border = BorderStroke(1.dp, WarmOutline)
+            ) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    copy.benefits.forEach { benefit ->
+                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text("✓", color = WarmCoral, fontWeight = FontWeight.Bold)
+                            Text(benefit, color = WarmText, style = MaterialTheme.typography.bodyMedium)
+                        }
+                    }
+                }
+            }
+            Button(
+                onClick = onUpgrade,
+                modifier = Modifier.fillMaxWidth().heightIn(min = 54.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = WarmCoral, contentColor = WarmInk)
+            ) {
+                Text("See Pro plans")
+            }
+            TextButton(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) {
+                Text("Maybe later", color = WarmTextMuted)
             }
         }
-    )
+    }
 }
 
-internal fun premiumGateCopy(entryPoint: PremiumEntryPoint): Pair<String, String> = when (entryPoint) {
-    PremiumEntryPoint.RuleLimit -> "You've reached the free limit" to
-        "Free includes up to 2 active Rules. Upgrade to create and activate unlimited Rules."
-    PremiumEntryPoint.DeepWork -> "Deep Work is included with Pro" to
-        "Start focused sessions with stronger distraction blocking."
-    PremiumEntryPoint.StrictMode -> "Strict Mode is included with Pro" to
-        "Lock your Rules and prevent changes while Strict Mode is active."
-    PremiumEntryPoint.Analytics, PremiumEntryPoint.Insights -> "Unlock 7-day insights" to
-        "See weekly patterns, trends, and insights across your Rules."
-    PremiumEntryPoint.Settings -> "Meet EarnIt Pro" to
-        "Unlock unlimited Rules, Deep Work, Strict Mode, and full insights."
-}
+internal fun premiumGateCopy(entryPoint: PremiumEntryPoint): Pair<String, String> =
+    premiumGateContent(entryPoint).let { it.title to it.body }
+
+internal fun proGateUpgradeFlow(flow: ProFlowState): ProFlowState = flow.copy(route = ProRoute.Plans)
+
+internal fun selectedSubscriptionPlan(config: SubscriptionConfig, selectedPlanId: String): SubscriptionPlan =
+    listOf(config.annual, config.monthly).first { it.id == selectedPlanId }
 
 @Composable
 fun EarnItProScreen(
@@ -104,7 +202,7 @@ fun EarnItProScreen(
     when (flow.route) {
         ProRoute.Gate -> PremiumGateDialog(
             entryPoint = flow.entryPoint,
-            onUpgrade = { onFlowChange(flow.copy(route = ProRoute.Intro)) },
+            onUpgrade = { onFlowChange(proGateUpgradeFlow(flow)) },
             onDismiss = onClose
         )
         ProRoute.Intro -> ProIntro(
@@ -117,7 +215,7 @@ fun EarnItProScreen(
             config = config,
             onSelect = { onFlowChange(flow.copy(selectedPlanId = it.id)) },
             onContinue = {
-                val selected = listOf(config.annual, config.monthly).first { it.id == flow.selectedPlanId }
+                val selected = selectedSubscriptionPlan(config, flow.selectedPlanId)
                 onPurchase(selected)
                 onFlowChange(flow.copy(route = ProRoute.PurchaseStatus))
             },
@@ -181,23 +279,27 @@ private fun PlanSelection(
     onBack: () -> Unit,
     modifier: Modifier
 ) {
-    ProPage("Choose Your Plan", onBack, modifier) {
-        Surface(
-            color = MaterialTheme.colorScheme.tertiaryContainer,
-            shape = RoundedCornerShape(50)
-        ) {
-            Text(
-                "Save ${config.yearlySavingsPercent}% with yearly",
-                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                color = MaterialTheme.colorScheme.onTertiaryContainer,
-                style = MaterialTheme.typography.labelMedium
-            )
+    ProPage("", onBack, modifier, spacing = 12) {
+        Surface(shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.primaryContainer) {
+            Text("✦", Modifier.padding(horizontal = 12.dp, vertical = 8.dp), color = MaterialTheme.colorScheme.primary)
         }
+        Text(
+            "Upgrade to EarnIt Pro",
+            style = MaterialTheme.typography.headlineSmall,
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center
+        )
+        Text(
+            "Unlock unlimited Rules, Deep Work, Strict Mode, and weekly insights.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center
+        )
         PlanCard(
             plan = config.annual,
             selected = flow.selectedPlanId == config.annual.id,
             badge = "Most Popular",
-            supporting = "That's $${config.annualMonthlyEquivalent}/month",
+            supporting = "$${config.annualMonthlyEquivalent}/month equivalent",
             savings = "Save ${config.yearlySavingsPercent}%",
             trialText = if (config.annualTrialEnabled) "${config.annual.trialDays}-day free trial" else null,
             onSelect = { onSelect(config.annual) }
@@ -209,18 +311,34 @@ private fun PlanSelection(
         )
         listOf("Cancel anytime", "Works across your devices", "Secure payment with Google Play")
             .forEach { Text("✓  $it", style = MaterialTheme.typography.bodySmall) }
-        Button(onClick = onContinue, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) {
+        Button(
+            onClick = onContinue,
+            modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = WarmCoral, contentColor = WarmInk)
+        ) {
             Text("Continue")
         }
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-            TextButton(onClick = onCompare) { Text("Compare Plans") }
-            TextButton(onClick = onRestore) { Text("Restore Purchases") }
-        }
+        ProActionRow("Compare Plans", onCompare)
+        ProActionRow("Restore Purchases", onRestore)
         Text(
             "Terms of Service  ·  Privacy Policy",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+    }
+}
+
+@Composable
+private fun ProActionRow(label: String, onClick: () -> Unit) {
+    Surface(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+        color = androidx.compose.ui.graphics.Color.Transparent,
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Row(Modifier.padding(horizontal = 10.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(label, Modifier.weight(1f), color = WarmCoral, fontWeight = FontWeight.SemiBold)
+            Text("›", color = WarmCoral)
+        }
     }
 }
 
@@ -240,17 +358,17 @@ private fun PlanCard(
             .clickable(role = Role.RadioButton, onClick = onSelect)
             .semantics { contentDescription = "${plan.displayName} plan, ${plan.formattedPrice}, ${if (selected) "selected" else "not selected"}" },
         colors = CardDefaults.cardColors(
-            containerColor = if (selected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = .48f)
+            containerColor = if (selected) WarmCoral.copy(alpha = .16f)
             else MaterialTheme.colorScheme.surface
         ),
         border = BorderStroke(
             if (selected) 2.dp else 1.dp,
-            if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
+            if (selected) WarmCoral else MaterialTheme.colorScheme.outlineVariant
         ),
         shape = RoundedCornerShape(16.dp)
     ) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            badge?.let { Text(it, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium) }
+            badge?.let { Text(it, color = WarmCoral, style = MaterialTheme.typography.labelMedium) }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Column {
                     Text(plan.displayName, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
@@ -260,10 +378,10 @@ private fun PlanCard(
                         fontWeight = FontWeight.Bold
                     )
                 }
-                Text(if (selected) "◉" else "○", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.titleLarge)
+                Text(if (selected) "◉" else "○", color = WarmCoral, style = MaterialTheme.typography.titleLarge)
             }
             supporting?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
-            savings?.let { Text(it, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium) }
+            savings?.let { Text(it, color = WarmCoral, style = MaterialTheme.typography.labelMedium) }
             trialText?.let { Text(it, color = MaterialTheme.colorScheme.tertiary, style = MaterialTheme.typography.labelMedium) }
         }
     }
@@ -410,17 +528,18 @@ private fun ProPage(
     title: String,
     onBack: () -> Unit,
     modifier: Modifier,
+    spacing: Int = 16,
     content: @Composable ColumnScope.() -> Unit
 ) {
     Column(
         modifier = modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
+        verticalArrangement = Arrangement.spacedBy(spacing.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             TextButton(onClick = onBack) { Text("‹ Back") }
             Spacer(Modifier.width(8.dp))
-            Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            if (title.isNotBlank()) Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
         }
         content()
     }
@@ -433,8 +552,15 @@ fun DebugEntitlementSimulator(
     onEntitlement: (EntitlementState) -> Unit,
     onReset: () -> Unit
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text("Entitlement: ${entitlement.status} · ${entitlement.source}", style = MaterialTheme.typography.bodySmall)
+    val selectedPurchaseOutcome by purchaseProvider.nextPurchaseOutcomeState.collectAsState()
+    val selectedRestoreOutcome by purchaseProvider.nextRestoreOutcomeState.collectAsState()
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text(
+            "These controls simulate subscription states for testing. They do not create real purchases.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        SimulatorGroupTitle("Entitlement")
         listOf(
             "Free" to EntitlementState.Free,
             "Purchased Premium" to EntitlementState(EntitlementStatus.Active, EntitlementSource.Purchase),
@@ -442,27 +568,97 @@ fun DebugEntitlementSimulator(
             "Grace period" to EntitlementState(EntitlementStatus.GracePeriod, EntitlementSource.Purchase),
             "Expired" to EntitlementState(EntitlementStatus.Expired, EntitlementSource.Purchase),
             "Unknown" to EntitlementState.Unknown,
-            "Offline cached Premium" to EntitlementState(EntitlementStatus.Active, EntitlementSource.Purchase, offline = true),
-            "Offline cached Free" to EntitlementState(EntitlementStatus.Free, offline = true)
+            "Offline Premium" to EntitlementState(EntitlementStatus.Active, EntitlementSource.Purchase, offline = true),
+            "Offline Free" to EntitlementState(EntitlementStatus.Free, offline = true)
         ).chunked(2).forEach { row ->
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 row.forEach { (label, value) ->
-                    OutlinedButton(onClick = { onEntitlement(value) }, modifier = Modifier.weight(1f)) {
+                    val selected = entitlement.sameSimulatorState(value)
+                    OutlinedButton(
+                        onClick = { onEntitlement(value) },
+                        modifier = Modifier.weight(1f),
+                        border = BorderStroke(if (selected) 2.dp else 1.dp, if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline)
+                    ) {
                         Text(label, textAlign = TextAlign.Center, style = MaterialTheme.typography.labelSmall)
                     }
                 }
             }
         }
-        Text("Next purchase outcome", style = MaterialTheme.typography.labelMedium)
-        MockPurchaseOutcome.entries.chunked(2).forEach { row ->
+        SimulatorGroupTitle("Next purchase result")
+        listOf(
+            MockPurchaseOutcome.Success to "Success",
+            MockPurchaseOutcome.Processing to "Processing",
+            MockPurchaseOutcome.Pending to "Pending",
+            MockPurchaseOutcome.Failed to "Failed",
+            MockPurchaseOutcome.Cancelled to "Cancelled"
+        ).chunked(2).forEach { row ->
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                row.forEach { outcome ->
-                    OutlinedButton(onClick = { purchaseProvider.nextOutcome = outcome }, modifier = Modifier.weight(1f)) {
-                        Text(outcome.name, textAlign = TextAlign.Center, style = MaterialTheme.typography.labelSmall)
+                row.forEach { (outcome, label) ->
+                    val selected = selectedPurchaseOutcome == outcome
+                    OutlinedButton(
+                        onClick = { purchaseProvider.nextPurchaseOutcome = outcome },
+                        modifier = Modifier.weight(1f),
+                        border = BorderStroke(if (selected) 2.dp else 1.dp, if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline)
+                    ) {
+                        Text(label, textAlign = TextAlign.Center, style = MaterialTheme.typography.labelSmall)
                     }
                 }
+                if (row.size == 1) Spacer(Modifier.weight(1f))
             }
         }
-        TextButton(onClick = onReset, modifier = Modifier.fillMaxWidth()) { Text("Reset entitlement simulator") }
+        SimulatorGroupTitle("Restore result")
+        listOf(
+            MockPurchaseOutcome.RestoreSuccess to "Restored",
+            MockPurchaseOutcome.RestoreNotFound to "Nothing found"
+        ).forEach { (outcome, label) ->
+            val selected = selectedRestoreOutcome == outcome
+            OutlinedButton(
+                onClick = { purchaseProvider.nextRestoreOutcome = outcome },
+                modifier = Modifier.fillMaxWidth(),
+                border = BorderStroke(if (selected) 2.dp else 1.dp, if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline)
+            ) { Text(label) }
+        }
+        TextButton(
+            onClick = {
+                purchaseProvider.nextPurchaseOutcome = MockPurchaseOutcome.Success
+                purchaseProvider.nextRestoreOutcome = MockPurchaseOutcome.RestoreSuccess
+                onReset()
+            },
+            modifier = Modifier.fillMaxWidth()
+        ) { Text("Reset simulator") }
     }
+}
+
+@Composable
+fun PremiumSimulatorScreen(
+    entitlement: EntitlementState,
+    purchaseProvider: LocalPurchaseProvider,
+    onEntitlement: (EntitlementState) -> Unit,
+    onReset: () -> Unit,
+    onBack: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    BackHandler(onBack = onBack)
+    ProPage("Premium simulator", onBack, modifier) {
+        DebugEntitlementSimulator(entitlement, purchaseProvider, onEntitlement, onReset)
+    }
+}
+
+internal fun EntitlementState.sameSimulatorState(other: EntitlementState): Boolean =
+    status == other.status && source == other.source && offline == other.offline
+
+internal fun humanReadableEntitlement(state: EntitlementState): String = when {
+    state.offline && state.grantsPremium -> "Offline Premium"
+    state.offline -> "Offline Free"
+    state.status == EntitlementStatus.Active && state.source == EntitlementSource.Purchase -> "Purchased Premium"
+    state.status == EntitlementStatus.Active && state.source == EntitlementSource.Beta -> "Beta Premium"
+    state.status == EntitlementStatus.GracePeriod -> "Grace period"
+    state.status == EntitlementStatus.Expired -> "Expired"
+    state.status == EntitlementStatus.Unknown -> "Unknown"
+    else -> "Free"
+}
+
+@Composable
+private fun SimulatorGroupTitle(value: String) {
+    Text(value.uppercase(), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
 }

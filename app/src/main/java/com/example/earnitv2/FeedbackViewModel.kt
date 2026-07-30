@@ -31,6 +31,7 @@ data class FeedbackUiState(
 ) {
     val hasDraft get() = category != null || message.isNotBlank() || contactEmail.isNotBlank() || screenshotPath != null
     val busy get() = phase in setOf(FeedbackPhase.VALIDATING, FeedbackPhase.PREPARING_ATTACHMENT, FeedbackPhase.SENDING)
+    val canSubmit get() = feedbackCanSubmit(category, message, contactEmail)
 }
 
 class FeedbackViewModel(application: Application) : AndroidViewModel(application) {

@@ -14,8 +14,72 @@ class AnalyticsTest {
     private val zone = ZoneId.of("America/Toronto")
     private val now = ZonedDateTime.of(2026, 7, 21, 15, 30, 0, 0, zone).toInstant().toEpochMilli()
 
-    @Test fun analyticsDefaultsToSevenDays() {
-        assertEquals(AnalyticsRange.SevenDays, defaultAnalyticsRange())
+    @Test fun analyticsDefaultsToToday() {
+        assertEquals(AnalyticsRange.Today, defaultAnalyticsRange())
+    }
+
+    @Test fun selectedDayAndPreviousDayUseTruthfulCalendarWindows() {
+        val selected = LocalDate.of(2026, 7, 19)
+        val current = AnalyticsPeriods.selectedDay(selected, now, zone)
+        val previous = AnalyticsPeriods.previousDay(selected, now, zone)
+        assertEquals(listOf(selected), current.dates)
+        assertEquals(listOf(selected.minusDays(1)), previous.dates)
+        assertEquals(24 * 60 * 60 * 1_000L, current.endMillis - current.startMillis)
+    }
+
+    @Test fun dateNavigationBlocksFutureAndFormatsContext() {
+        val today = LocalDate.of(2026, 7, 28)
+        assertEquals(today.minusDays(1), analyticsDateAfterSwipe(today, today, -100f))
+        assertNull(analyticsDateAfterSwipe(today, today, 100f))
+        assertEquals(today, analyticsDateAfterSwipe(today.minusDays(1), today, 100f))
+        assertEquals("Today, July 28", analyticsDateLabel(today, today, java.util.Locale.ENGLISH))
+        assertEquals(
+            "Yesterday, July 27",
+            analyticsDateLabel(today.minusDays(1), today, java.util.Locale.ENGLISH)
+        )
+        assertEquals(
+            "Sunday, July 26",
+            analyticsDateLabel(today.minusDays(2), today, java.util.Locale.ENGLISH)
+        )
+    }
+
+    @Test fun freeSevenDayTapOpensGateWhilePremiumLoadsRange() {
+        val free = analyticsRangeDecision(AnalyticsRange.SevenDays, sevenDayEnabled = false)
+        assertTrue(free.openPremiumGate)
+        assertNull(free.rangeToLoad)
+
+        val premium = analyticsRangeDecision(AnalyticsRange.SevenDays, sevenDayEnabled = true)
+        assertFalse(premium.openPremiumGate)
+        assertEquals(AnalyticsRange.SevenDays, premium.rangeToLoad)
+        assertEquals(AnalyticsRange.Today, analyticsRangeDecision(AnalyticsRange.Today, false).rangeToLoad)
+    }
+
+    @Test fun selectedDayAggregationUpdatesAppsAndPreviousDayComparison() {
+        val firstDate = LocalDate.of(2026, 7, 20)
+        val secondDate = firstDate.plusDays(1)
+        val first = AnalyticsPeriods.selectedDay(firstDate, now, zone)
+        val second = AnalyticsPeriods.selectedDay(secondDate, now, zone)
+        val firstSummary = AnalyticsAggregator.aggregate(
+            AnalyticsRange.Today,
+            first,
+            listOf(UsageSlice("first", first.startMillis, first.startMillis + 120_000)),
+            emptyMap(),
+            emptyMap(),
+            emptyList(),
+            zone = zone
+        )
+        val secondSummary = AnalyticsAggregator.aggregate(
+            AnalyticsRange.Today,
+            second,
+            listOf(UsageSlice("second", second.startMillis, second.startMillis + 300_000)),
+            emptyMap(),
+            emptyMap(),
+            emptyList(),
+            previousTotalSeconds = firstSummary.totalSeconds,
+            zone = zone
+        )
+        assertEquals(listOf("second"), secondSummary.apps.map { it.packageName })
+        assertEquals(120L, secondSummary.previousTotalSeconds)
     }
 
     @Test fun todayUsesLocalCalendarBoundaries() {

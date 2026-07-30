@@ -38,12 +38,14 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.example.earnitv2.ui.theme.EarnitV2Theme
 import kotlin.concurrent.thread
 import kotlinx.coroutines.delay
+import java.time.LocalDate
 
 data class RuleDashboardState(
     val rule: EarnItRuleStore.Rule,
@@ -124,6 +126,8 @@ class MainActivity : ComponentActivity() {
     private var feedbackOpen by mutableStateOf(false)
     private var feedbackCrashPrompt by mutableStateOf<CrashDiagnostics?>(null)
     private lateinit var feedbackPreferences: FeedbackPreferences
+    private var shakeSettingError by mutableStateOf<String?>(null)
+    private var activityResumed = false
     private lateinit var shakeController: ForegroundShakeController
     private var rules by mutableStateOf(emptyList<EarnItRuleStore.Rule>())
     private var ruleStates by mutableStateOf(emptyList<RuleDashboardState>())
@@ -188,10 +192,11 @@ class MainActivity : ComponentActivity() {
     private var settingsOpen by mutableStateOf(false)
     private var analyticsOpen by mutableStateOf(false)
     private var analyticsRange by mutableStateOf(defaultAnalyticsRange())
+    private var analyticsSelectedDate by mutableStateOf(LocalDate.now())
     private var analyticsState by mutableStateOf<AnalyticsUiState>(AnalyticsUiState.Loading)
     private var analyticsInsights by mutableStateOf(emptyList<InsightCandidate>())
     private var analyticsAppPackage by mutableStateOf<String?>(null)
-    private val analyticsCache = mutableMapOf<AnalyticsRange, Pair<AnalyticsSummary, List<InsightCandidate>>>()
+    private val analyticsCache = mutableMapOf<Pair<AnalyticsRange, LocalDate>, Pair<AnalyticsSummary, List<InsightCandidate>>>()
     private var strictModeOpen by mutableStateOf(false)
     private var strictModeBlockedActionOpen by mutableStateOf(false)
     private var ruleTypeSelectionOpen by mutableStateOf(false)
@@ -206,9 +211,13 @@ class MainActivity : ComponentActivity() {
     private lateinit var purchaseProvider: LocalPurchaseProvider
     private val subscriptionConfig = SubscriptionConfig.Placeholder
     private var proFlowState by mutableStateOf<ProFlowState?>(null)
+    private var premiumSimulatorOpen by mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        analyticsSelectedDate = savedInstanceState?.getString(STATE_ANALYTICS_DATE)
+            ?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
+            ?: LocalDate.now()
         enableEdgeToEdge()
         CrashMarkerStore.install(this)
         feedbackPreferences = FeedbackPreferences(this)
@@ -293,7 +302,11 @@ class MainActivity : ComponentActivity() {
             EarnitV2Theme {
                 val entitlementState by entitlementRepository.state.collectAsState()
                 val purchaseState by purchaseProvider.state.collectAsState()
+                val shakeEnabled by feedbackPreferences.shakeEnabled.collectAsStateWithLifecycle()
                 val featurePolicy = FeatureAccessPolicy(entitlementState)
+                LaunchedEffect(shakeEnabled, feedbackOpen) {
+                    syncShakeController(shakeEnabled)
+                }
                 LaunchedEffect(entitlementState) {
                     EarnItRuleStore.reconcileForEntitlement(this@MainActivity, featurePolicy)
                     refreshDashboardState()
@@ -384,6 +397,9 @@ class MainActivity : ComponentActivity() {
                             onRestorePurchases = purchaseProvider::restorePurchases,
                             onSimulateEntitlement = entitlementRepository::simulate,
                             onResetEntitlement = entitlementRepository::reset,
+                            premiumSimulatorOpen = premiumSimulatorOpen,
+                            onOpenPremiumSimulator = { premiumSimulatorOpen = true },
+                            onClosePremiumSimulator = { premiumSimulatorOpen = false },
                             onOpenDeepWork = {
                                 if (PremiumSessionPolicy.canStartDeepWork(featurePolicy)) {
                                     if (deepWorkSession.phase == DeepWorkPhase.Inactive) deepWorkSetupOpen = true
@@ -411,15 +427,21 @@ class MainActivity : ComponentActivity() {
                             onOpenAnalytics = ::openAnalytics,
                             onCloseAnalytics = { analyticsOpen = false; analyticsAppPackage = null },
                             onAnalyticsRangeChange = ::changeAnalyticsRange,
+                            analyticsSelectedDate = analyticsSelectedDate,
+                            onAnalyticsDateChange = ::changeAnalyticsDate,
                             onOpenAnalyticsApp = { analyticsAppPackage = it },
                             onBackFromAnalyticsApp = { analyticsAppPackage = null },
                             onCloseSettings = { settingsOpen = false },
                             pendingFeedbackCount = feedbackViewModel.pendingCount(),
-                            shakeToReportEnabled = feedbackPreferences.shakeEnabled,
+                            shakeToReportEnabled = shakeEnabled,
+                            shakeSettingError = shakeSettingError,
                             onOpenFeedback = { openFeedback(FeedbackEntrySource.SETTINGS) },
                             onShakeToReportChange = {
-                                feedbackPreferences.shakeEnabled = it
-                                if (it) shakeController.register() else shakeController.unregister()
+                                shakeSettingError = if (feedbackPreferences.setShakeEnabled(it)) {
+                                    null
+                                } else {
+                                    "Couldn't save this setting. Your previous choice was restored."
+                                }
                             },
                             onDebugShakeFeedback = { openFeedback(FeedbackEntrySource.SHAKE) },
                             onClearDebugFeedback = { feedbackViewModel.clearDebugQueue() },
@@ -569,16 +591,23 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        activityResumed = true
         settingsLaunchInProgress = false
         refreshDashboardState()
         reconcileOnboardingWithPermissions()
         if (analyticsOpen) loadAnalytics(forceRefresh = true)
-        if (::feedbackPreferences.isInitialized && feedbackPreferences.shakeEnabled && !feedbackOpen) shakeController.register()
+        syncShakeController()
     }
 
     override fun onPause() {
+        activityResumed = false
         if (::shakeController.isInitialized) shakeController.unregister()
         super.onPause()
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putString(STATE_ANALYTICS_DATE, analyticsSelectedDate.toString())
+        super.onSaveInstanceState(outState)
     }
 
     private fun openFeedback(source: FeedbackEntrySource, crash: CrashDiagnostics? = null) {
@@ -597,7 +626,21 @@ class MainActivity : ComponentActivity() {
     private fun closeFeedback() {
         feedbackOpen = false
         shakeController.detector.rearm()
-        if (feedbackPreferences.shakeEnabled) shakeController.register()
+        syncShakeController()
+    }
+
+    private fun syncShakeController(enabled: Boolean = feedbackPreferences.shakeEnabled.value) {
+        if (!::shakeController.isInitialized || !::feedbackPreferences.isInitialized) return
+        if (shouldRegisterShakeDetector(enabled, activityResumed, feedbackOpen)) {
+            shakeController.register()
+        } else {
+            shakeController.unregister()
+        }
+    }
+
+    override fun onDestroy() {
+        if (::feedbackPreferences.isInitialized) feedbackPreferences.close()
+        super.onDestroy()
     }
 
     override fun onStart() {
@@ -658,14 +701,25 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun changeAnalyticsRange(range: AnalyticsRange) {
-        if (range == AnalyticsRange.SevenDays &&
-            !FeatureAccessPolicy(entitlementRepository.state.value).canUse(PremiumFeature.SevenDayAnalytics)
-        ) {
+        val decision = analyticsRangeDecision(
+            range,
+            FeatureAccessPolicy(entitlementRepository.state.value).canUse(PremiumFeature.SevenDayAnalytics)
+        )
+        if (decision.openPremiumGate) {
             openProGate(PremiumEntryPoint.Analytics)
             return
         }
-        if (analyticsRange == range && analyticsState is AnalyticsUiState.Ready) return
-        analyticsRange = range
+        val allowedRange = decision.rangeToLoad ?: return
+        if (analyticsRange == allowedRange && analyticsState is AnalyticsUiState.Ready) return
+        analyticsRange = allowedRange
+        loadAnalytics()
+    }
+
+    private fun changeAnalyticsDate(date: LocalDate) {
+        if (date.isAfter(LocalDate.now()) || date == analyticsSelectedDate) return
+        analyticsSelectedDate = date
+        analyticsAppPackage = null
+        if (analyticsRange != AnalyticsRange.Today) analyticsRange = AnalyticsRange.Today
         loadAnalytics()
     }
 
@@ -675,8 +729,10 @@ class MainActivity : ComponentActivity() {
             return
         }
         val requestedRange = analyticsRange
+        val requestedDate = analyticsSelectedDate
+        val cacheKey = requestedRange to requestedDate
         if (!forceRefresh) {
-            analyticsCache[requestedRange]?.let { (summary, insights) ->
+            analyticsCache[cacheKey]?.let { (summary, insights) ->
                 analyticsState = AnalyticsUiState.Ready(summary)
                 analyticsInsights = insights
                 return
@@ -684,7 +740,7 @@ class MainActivity : ComponentActivity() {
         }
         analyticsState = AnalyticsUiState.Loading
         thread(name = "EarnItAnalytics") {
-            val result = runCatching { AnalyticsRepository(applicationContext).load(requestedRange) }
+            val result = runCatching { AnalyticsRepository(applicationContext).load(requestedRange, requestedDate) }
             val loaded = result.fold({ AnalyticsUiState.Ready(it) }, { AnalyticsUiState.Unavailable(it.message ?: "Usage history could not be read.") })
             val insights = result.getOrNull()?.let { summary ->
                 AnalyticsInsightEngine.generate(summary, AnalyticsInsightHistoryStore.load(applicationContext)).also {
@@ -692,8 +748,11 @@ class MainActivity : ComponentActivity() {
                 }
             }.orEmpty()
             runOnUiThread {
-                result.getOrNull()?.let { analyticsCache[requestedRange] = it to insights }
-                if (analyticsRange == requestedRange) { analyticsState = loaded; analyticsInsights = insights }
+                result.getOrNull()?.let { analyticsCache[cacheKey] = it to insights }
+                if (analyticsRange == requestedRange && analyticsSelectedDate == requestedDate) {
+                    analyticsState = loaded
+                    analyticsInsights = insights
+                }
             }
         }
     }
@@ -1674,6 +1733,7 @@ class MainActivity : ComponentActivity() {
     companion object {
         internal const val EXTRA_OPEN_RULE_DETAIL_ID = "com.example.earnitv2.extra.OPEN_RULE_DETAIL_ID"
         private const val APP_LIST_REFRESH_INTERVAL_MS = 60_000L
+        private const val STATE_ANALYTICS_DATE = "analytics_selected_date"
     }
 }
 
@@ -1751,6 +1811,7 @@ internal fun Dashboard(
     settingsOpen: Boolean,
     analyticsOpen: Boolean,
     analyticsRange: AnalyticsRange,
+    analyticsSelectedDate: LocalDate,
     analyticsState: AnalyticsUiState,
     analyticsInsights: List<InsightCandidate>,
     analyticsAppPackage: String?,
@@ -1770,6 +1831,9 @@ internal fun Dashboard(
     onRestorePurchases: () -> Unit,
     onSimulateEntitlement: (EntitlementState) -> Unit,
     onResetEntitlement: () -> Unit,
+    premiumSimulatorOpen: Boolean,
+    onOpenPremiumSimulator: () -> Unit,
+    onClosePremiumSimulator: () -> Unit,
     onOpenDeepWork: () -> Unit,
     onDismissDeepWorkSetup: () -> Unit,
     onStartDeepWork: (Long?) -> Unit,
@@ -1783,11 +1847,13 @@ internal fun Dashboard(
     onOpenAnalytics: () -> Unit,
     onCloseAnalytics: () -> Unit,
     onAnalyticsRangeChange: (AnalyticsRange) -> Unit,
+    onAnalyticsDateChange: (LocalDate) -> Unit,
     onOpenAnalyticsApp: (String) -> Unit,
     onBackFromAnalyticsApp: () -> Unit,
     onCloseSettings: () -> Unit,
     pendingFeedbackCount: Int,
     shakeToReportEnabled: Boolean,
+    shakeSettingError: String?,
     onOpenFeedback: () -> Unit,
     onShakeToReportChange: (Boolean) -> Unit,
     onDebugShakeFeedback: () -> Unit,
@@ -1878,6 +1944,21 @@ internal fun Dashboard(
         }
     }
 
+    if (proFlowState != null) {
+        EarnItProScreen(
+            flow = proFlowState,
+            config = subscriptionConfig,
+            entitlement = entitlementState,
+            purchaseState = purchaseState,
+            onFlowChange = onProFlowChange,
+            onPurchase = onPurchasePlan,
+            onRestore = onRestorePurchases,
+            onClose = onCloseProFlow,
+            modifier = modifier
+        )
+        return
+    }
+
     if (editingRule == null) {
         val homeRules = ruleStates.map { state ->
             homeRuleUiState(
@@ -1894,16 +1975,13 @@ internal fun Dashboard(
             homeRules.firstOrNull { it.rule.id == selectedRuleId }
         }
 
-        if (proFlowState != null) {
-            EarnItProScreen(
-                flow = proFlowState,
-                config = subscriptionConfig,
+        if (premiumSimulatorOpen && showDeveloperTools) {
+            PremiumSimulatorScreen(
                 entitlement = entitlementState,
-                purchaseState = purchaseState,
-                onFlowChange = onProFlowChange,
-                onPurchase = onPurchasePlan,
-                onRestore = onRestorePurchases,
-                onClose = onCloseProFlow,
+                purchaseProvider = purchaseProvider,
+                onEntitlement = onSimulateEntitlement,
+                onReset = onResetEntitlement,
+                onBack = onClosePremiumSimulator,
                 modifier = modifier
             )
         } else if (deepWorkSession.phase != DeepWorkPhase.Inactive) {
@@ -1942,18 +2020,20 @@ internal fun Dashboard(
         } else if (analyticsOpen) {
             AnalyticsScreen(
                 range = analyticsRange,
+                selectedDate = analyticsSelectedDate,
                 state = analyticsState,
                 insights = analyticsInsights,
                 rules = ruleStates.map { it.rule },
                 selectedAppPackage = analyticsAppPackage,
                 onRangeChange = onAnalyticsRangeChange,
+                onDateChange = onAnalyticsDateChange,
                 onOpenApp = onOpenAnalyticsApp,
                 onBackFromApp = onBackFromAnalyticsApp,
                 onBack = onCloseAnalytics,
                 onCreateRule = onAddRule,
                 onRepairPermission = onOpenUsageAccessSettings,
                 premiumInsightsEnabled = featurePolicy.canUse(PremiumFeature.PremiumInsights),
-                onPremiumGate = { onProFlowChange(ProFlowState(ProRoute.Gate, PremiumEntryPoint.Insights)) },
+                onPremiumGate = { onProFlowChange(ProFlowState(ProRoute.Gate, PremiumEntryPoint.Analytics)) },
                 modifier = modifier
             )
         } else if (settingsOpen) {
@@ -1971,6 +2051,7 @@ internal fun Dashboard(
                 },
                 onSimulateEntitlement = onSimulateEntitlement,
                 onResetEntitlement = onResetEntitlement,
+                onOpenPremiumSimulator = onOpenPremiumSimulator,
                 onBack = onCloseSettings,
                 onOpenAnalytics = onOpenAnalytics,
                 onOpenStrictMode = onOpenStrictMode,
@@ -1981,6 +2062,7 @@ internal fun Dashboard(
                 onReplayOnboarding = onReplayOnboarding,
                 pendingFeedbackCount = pendingFeedbackCount,
                 shakeToReportEnabled = shakeToReportEnabled,
+                shakeSettingError = shakeSettingError,
                 onOpenFeedback = onOpenFeedback,
                 onShakeToReportChange = onShakeToReportChange,
                 onDebugShakeFeedback = onDebugShakeFeedback,
@@ -2509,6 +2591,7 @@ fun DashboardPreview() {
             settingsOpen = false,
             analyticsOpen = false,
             analyticsRange = AnalyticsRange.SevenDays,
+            analyticsSelectedDate = LocalDate.now(),
             analyticsState = AnalyticsUiState.Loading,
             analyticsInsights = emptyList(),
             analyticsAppPackage = null,
@@ -2528,6 +2611,9 @@ fun DashboardPreview() {
             onRestorePurchases = {},
             onSimulateEntitlement = {},
             onResetEntitlement = {},
+            premiumSimulatorOpen = false,
+            onOpenPremiumSimulator = {},
+            onClosePremiumSimulator = {},
             onOpenDeepWork = {},
             onDismissDeepWorkSetup = {},
             onStartDeepWork = {},
@@ -2541,11 +2627,13 @@ fun DashboardPreview() {
             onOpenAnalytics = {},
             onCloseAnalytics = {},
             onAnalyticsRangeChange = {},
+            onAnalyticsDateChange = {},
             onOpenAnalyticsApp = {},
             onBackFromAnalyticsApp = {},
             onCloseSettings = {},
             pendingFeedbackCount = 0,
             shakeToReportEnabled = false,
+            shakeSettingError = null,
             onOpenFeedback = {},
             onShakeToReportChange = {},
             onDebugShakeFeedback = {},

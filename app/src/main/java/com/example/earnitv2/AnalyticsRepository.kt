@@ -8,11 +8,23 @@ import java.time.LocalDate
 import java.time.ZoneId
 
 class AnalyticsRepository(private val context: Context) {
-    fun load(range: AnalyticsRange, nowMillis: Long = System.currentTimeMillis()): AnalyticsSummary {
+    fun load(
+        range: AnalyticsRange,
+        selectedDate: LocalDate = LocalDate.now(),
+        nowMillis: Long = System.currentTimeMillis()
+    ): AnalyticsSummary {
         val rules = EarnItRuleStore.getRules(context)
         val zone = ZoneId.systemDefault()
-        val current = AnalyticsPeriods.current(range, nowMillis, zone)
-        val previous = AnalyticsPeriods.previous(range, nowMillis, zone)
+        val current = if (range == AnalyticsRange.Today) {
+            AnalyticsPeriods.selectedDay(selectedDate, nowMillis, zone)
+        } else {
+            AnalyticsPeriods.current(range, nowMillis, zone)
+        }
+        val previous = if (range == AnalyticsRange.Today) {
+            AnalyticsPeriods.previousDay(selectedDate, nowMillis, zone)
+        } else {
+            AnalyticsPeriods.previous(range, nowMillis, zone)
+        }
         val manager = context.getSystemService(UsageStatsManager::class.java)
         val allSlices = queryForegroundSlices(manager, previous.startMillis, current.endMillis)
         val currentSlices = allSlices.clipTo(current.startMillis, current.endMillis)
@@ -21,14 +33,29 @@ class AnalyticsRepository(private val context: Context) {
         val packages = allSlices.map { it.packageName }.toSet()
         val names = packages.associateWith(::appName)
         val previousSummary = AnalyticsAggregator.aggregate(range, previous, previousSlices, names, classifications, rules, zone = zone)
-        return AnalyticsAggregator.aggregate(
+        val blockedAttempts = AnalyticsEventStore.blockedAttempts(context, current.dates)
+        val base = AnalyticsAggregator.aggregate(
             range, current, currentSlices, names, classifications, rules,
             previousEarnSeconds = previousSummary.earnSeconds,
             previousRewardSeconds = previousSummary.rewardSeconds,
             previousTotalSeconds = previousSummary.totalSeconds,
-            blockedAttempts = AnalyticsEventStore.blockedAttempts(context, current.dates),
+            blockedAttempts = blockedAttempts,
             zone = zone
         )
+        val today = Instant.ofEpochMilli(nowMillis).atZone(zone).toLocalDate()
+        val ledgerMetrics = if (range == AnalyticsRange.Today && selectedDate == today) {
+            val snapshots = rules.filter { it.type == EarnItRuleStore.RuleType.EarnRewardTime }
+                .map { RewardLedger.snapshot(context, it) }
+            RuleActivityMetrics(
+                rewardEarnedSeconds = snapshots.sumOf { it.rewardIssuedSeconds },
+                rewardSpentSeconds = snapshots.sumOf { it.rewardConsumedSeconds },
+                remainingRewardSeconds = snapshots.sumOf { it.remainingRewardSeconds },
+                blockedAttempts = blockedAttempts.values.sum()
+            )
+        } else {
+            blockedAttempts.values.sum().takeIf { it > 0 }?.let { RuleActivityMetrics(blockedAttempts = it) }
+        }
+        return base.copy(ruleActivity = ledgerMetrics)
     }
 
     /** Existing storage has no historical classification snapshots, so MVP analytics applies the

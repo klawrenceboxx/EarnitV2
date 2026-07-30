@@ -9,7 +9,22 @@ import kotlin.math.roundToLong
 enum class AnalyticsRange { Today, SevenDays }
 enum class AnalyticsClassification { Earn, Reward, Other }
 
-internal fun defaultAnalyticsRange(): AnalyticsRange = AnalyticsRange.SevenDays
+internal fun defaultAnalyticsRange(): AnalyticsRange = AnalyticsRange.Today
+
+data class AnalyticsRangeDecision(
+    val rangeToLoad: AnalyticsRange?,
+    val openPremiumGate: Boolean
+)
+
+internal fun analyticsRangeDecision(
+    requested: AnalyticsRange,
+    sevenDayEnabled: Boolean
+): AnalyticsRangeDecision =
+    if (requested == AnalyticsRange.SevenDays && !sevenDayEnabled) {
+        AnalyticsRangeDecision(null, openPremiumGate = true)
+    } else {
+        AnalyticsRangeDecision(requested, openPremiumGate = false)
+    }
 
 data class AnalyticsPeriod(val startMillis: Long, val endMillis: Long, val dates: List<LocalDate>)
 
@@ -44,6 +59,13 @@ data class RulePerformanceSummary(
 
 data class PeakUsageWindow(val startHour: Int, val endHourExclusive: Int, val seconds: Long)
 
+data class RuleActivityMetrics(
+    val rewardEarnedSeconds: Long? = null,
+    val rewardSpentSeconds: Long? = null,
+    val remainingRewardSeconds: Long? = null,
+    val blockedAttempts: Int = 0
+)
+
 data class AnalyticsSummary(
     val range: AnalyticsRange,
     val period: AnalyticsPeriod,
@@ -57,7 +79,8 @@ data class AnalyticsSummary(
     val peakRewardWindow: PeakUsageWindow?,
     val previousEarnSeconds: Long? = null,
     val previousRewardSeconds: Long? = null,
-    val previousTotalSeconds: Long? = null
+    val previousTotalSeconds: Long? = null,
+    val ruleActivity: RuleActivityMetrics? = null
 )
 
 sealed interface AnalyticsUiState {
@@ -83,6 +106,28 @@ object AnalyticsPeriods {
         val elapsed = nowMillis - current.startMillis
         val start = first.atStartOfDay(zone).toInstant().toEpochMilli()
         return AnalyticsPeriod(start, start + elapsed, generateSequence(first) { it.plusDays(1) }.take(days.toInt()).toList())
+    }
+
+    fun selectedDay(
+        date: LocalDate,
+        nowMillis: Long,
+        zone: ZoneId = ZoneId.systemDefault()
+    ): AnalyticsPeriod {
+        val today = Instant.ofEpochMilli(nowMillis).atZone(zone).toLocalDate()
+        val start = date.atStartOfDay(zone).toInstant().toEpochMilli()
+        val end = if (date == today) nowMillis else date.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
+        return AnalyticsPeriod(start, end, listOf(date))
+    }
+
+    fun previousDay(
+        date: LocalDate,
+        nowMillis: Long,
+        zone: ZoneId = ZoneId.systemDefault()
+    ): AnalyticsPeriod {
+        val current = selectedDay(date, nowMillis, zone)
+        val previousDate = date.minusDays(1)
+        val start = previousDate.atStartOfDay(zone).toInstant().toEpochMilli()
+        return AnalyticsPeriod(start, start + (current.endMillis - current.startMillis), listOf(previousDate))
     }
 
     private fun period(first: LocalDate, last: LocalDate, zone: ZoneId, nowMillis: Long) = AnalyticsPeriod(

@@ -36,7 +36,25 @@ class LocalPurchaseProvider(
 ) : PurchaseProvider {
     private val mutableState = MutableStateFlow<PurchaseState>(PurchaseState.Idle)
     override val state: StateFlow<PurchaseState> = mutableState.asStateFlow()
-    var nextOutcome: MockPurchaseOutcome = MockPurchaseOutcome.Success
+    private val mutableNextPurchaseOutcome = MutableStateFlow(MockPurchaseOutcome.Success)
+    private val mutableNextRestoreOutcome = MutableStateFlow(MockPurchaseOutcome.RestoreSuccess)
+    val nextPurchaseOutcomeState: StateFlow<MockPurchaseOutcome> = mutableNextPurchaseOutcome.asStateFlow()
+    val nextRestoreOutcomeState: StateFlow<MockPurchaseOutcome> = mutableNextRestoreOutcome.asStateFlow()
+    var nextPurchaseOutcome: MockPurchaseOutcome
+        get() = mutableNextPurchaseOutcome.value
+        set(value) { mutableNextPurchaseOutcome.value = value }
+    var nextRestoreOutcome: MockPurchaseOutcome
+        get() = mutableNextRestoreOutcome.value
+        set(value) { mutableNextRestoreOutcome.value = value }
+    var nextOutcome: MockPurchaseOutcome
+        get() = nextPurchaseOutcome
+        set(value) {
+            if (value == MockPurchaseOutcome.RestoreSuccess || value == MockPurchaseOutcome.RestoreNotFound) {
+                nextRestoreOutcome = value
+            } else {
+                nextPurchaseOutcome = value
+            }
+        }
 
     override fun loadPlans(): List<SubscriptionPlan> = listOf(config.annual, config.monthly)
 
@@ -47,7 +65,7 @@ class LocalPurchaseProvider(
         }
         if (mutableState.value == PurchaseState.Processing) return
         mutableState.value = PurchaseState.Processing
-        when (nextOutcome) {
+        when (nextPurchaseOutcome) {
             MockPurchaseOutcome.Success -> {
                 entitlementController.simulate(
                     EntitlementState(EntitlementStatus.Active, EntitlementSource.Purchase)
@@ -71,7 +89,7 @@ class LocalPurchaseProvider(
             return
         }
         mutableState.value = PurchaseState.Processing
-        if (nextOutcome == MockPurchaseOutcome.RestoreSuccess) {
+        if (nextRestoreOutcome == MockPurchaseOutcome.RestoreSuccess) {
             entitlementController.simulate(
                 EntitlementState(EntitlementStatus.Active, EntitlementSource.Purchase)
             )

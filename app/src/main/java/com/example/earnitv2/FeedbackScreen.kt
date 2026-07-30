@@ -29,6 +29,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -91,24 +92,50 @@ fun FeedbackScreen(
             FeedbackHeader(onBack = ::requestClose)
             Text("Found a problem or have an idea? Let us know.", color = MaterialTheme.colorScheme.onSurfaceVariant)
 
-            Text("What's this about?", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("Feedback type", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                Text("Required", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+            }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 FeedbackCategory.entries.forEach { category ->
+                    val selected = state.category == category
                     FilterChip(
-                        selected = state.category == category,
+                        selected = selected,
                         onClick = { viewModel.selectCategory(category) },
                         label = { Text(category.label) },
+                        leadingIcon = if (selected) ({ Text("✓", fontWeight = FontWeight.Bold) }) else null,
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                            selectedLeadingIconColor = MaterialTheme.colorScheme.primary
+                        ),
+                        border = FilterChipDefaults.filterChipBorder(
+                            enabled = true,
+                            selected = selected,
+                            borderColor = MaterialTheme.colorScheme.outlineVariant,
+                            selectedBorderColor = MaterialTheme.colorScheme.primary,
+                            borderWidth = 1.dp,
+                            selectedBorderWidth = 2.dp
+                        ),
                         modifier = Modifier.weight(1f).heightIn(min = 48.dp)
                     )
                 }
             }
             state.categoryError?.let { ErrorText(it) }
+            if (state.category == null && state.categoryError == null) {
+                Text(
+                    "Choose Bug, Suggestion, or Other.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
 
+            Text("Tell us more", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
             OutlinedTextField(
                 value = state.message,
                 onValueChange = viewModel::setMessage,
                 modifier = Modifier.fillMaxWidth().heightIn(min = 150.dp),
-                label = { Text(if (state.entrySource == FeedbackEntrySource.CRASH_FOLLOW_UP) "What were you doing?" else "Tell us more") },
+                label = { Text(if (state.entrySource == FeedbackEntrySource.CRASH_FOLLOW_UP) "What were you doing?" else "Feedback") },
                 placeholder = { Text(if (state.entrySource == FeedbackEntrySource.CRASH_FOLLOW_UP) "Tell us what you were doing before EarnIt closed." else "Tell us what happened or what you would like to see…") },
                 supportingText = {
                     val remaining = FeedbackValidation.MAX_MESSAGE_LENGTH - state.message.length
@@ -119,6 +146,13 @@ fun FeedbackScreen(
                 maxLines = 10
             )
             state.messageError?.let { ErrorText(it) }
+            if (state.message.isBlank() && state.messageError == null) {
+                Text(
+                    "Required — tell us what happened or what you’d like to suggest.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
 
             OutlinedTextField(
                 value = state.contactEmail,
@@ -137,7 +171,7 @@ fun FeedbackScreen(
                 ScreenshotPreview(path = path, onRemove = viewModel::removeScreenshot)
             } ?: OutlinedButton(
                 onClick = { picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
-                enabled = !state.busy,
+                enabled = state.canSubmit && !state.busy,
                 modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)
             ) { Text(if (state.phase == FeedbackPhase.PREPARING_ATTACHMENT) "Preparing screenshot…" else "Attach screenshot (optional)") }
             state.screenshotError?.let { ErrorText(it) }

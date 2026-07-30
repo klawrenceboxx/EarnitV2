@@ -22,6 +22,51 @@ class FeedbackTest {
         assertNull(FeedbackValidation.emailError("person@example.com"))
     }
 
+    @Test fun categoryAndMeaningfulTextAreRequiredButEmailIsOptional() {
+        assertFalse(feedbackCanSubmit(null, "Instagram did not close.", ""))
+        assertFalse(feedbackCanSubmit(FeedbackCategory.BUG, "   ", ""))
+        assertTrue(feedbackCanSubmit(FeedbackCategory.SUGGESTION, "Show exact Reward Time.", ""))
+        assertFalse(feedbackCanSubmit(FeedbackCategory.OTHER, "A useful message", "not-email"))
+        assertEquals(
+            "Tell us what happened or what you’d like to suggest.",
+            FeedbackValidation.messageError(" ")
+        )
+    }
+
+    @Test fun shakeSettingStateStartsEnabledOrDisabledAndPersistsToggles() {
+        val writes = mutableListOf<Boolean>()
+        val enabled = ShakeSettingState(true) { writes += it; true }
+        val disabled = ShakeSettingState(false) { writes += it; true }
+        assertTrue(enabled.enabled.value)
+        assertFalse(disabled.enabled.value)
+        assertTrue(enabled.setEnabled(false))
+        assertFalse(enabled.enabled.value)
+        assertTrue(disabled.setEnabled(true))
+        assertTrue(disabled.enabled.value)
+        assertEquals(listOf(false, true), writes)
+    }
+
+    @Test fun shakeSettingRecreationExternalUpdateAndFailureStaySynchronized() {
+        var persisted = true
+        val first = ShakeSettingState(persisted) { value -> persisted = value; true }
+        first.setEnabled(false)
+        val recreated = ShakeSettingState(persisted) { true }
+        assertFalse(recreated.enabled.value)
+        recreated.updateFromExternalSource(true)
+        assertTrue(recreated.enabled.value)
+
+        val failing = ShakeSettingState(false) { false }
+        assertFalse(failing.setEnabled(true))
+        assertFalse(failing.enabled.value)
+    }
+
+    @Test fun shakeDetectorRegistrationUsesTheSameSettingState() {
+        assertTrue(shouldRegisterShakeDetector(enabled = true, resumed = true, feedbackOpen = false))
+        assertFalse(shouldRegisterShakeDetector(enabled = false, resumed = true, feedbackOpen = false))
+        assertFalse(shouldRegisterShakeDetector(enabled = true, resumed = false, feedbackOpen = false))
+        assertFalse(shouldRegisterShakeDetector(enabled = true, resumed = true, feedbackOpen = true))
+    }
+
     @Test fun diagnostics_areVersionedAndExcludeSensitiveFields() {
         val diagnostics = sampleDiagnostics()
         val json = diagnostics.toJson()

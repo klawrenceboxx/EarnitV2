@@ -248,6 +248,7 @@ internal fun EarnItSettings(
     onManageSubscription: () -> Unit = {},
     onSimulateEntitlement: (EntitlementState) -> Unit = {},
     onResetEntitlement: () -> Unit = {},
+    onOpenPremiumSimulator: () -> Unit = {},
     onBack: () -> Unit,
     onOpenAnalytics: () -> Unit,
     onOpenStrictMode: () -> Unit,
@@ -258,6 +259,7 @@ internal fun EarnItSettings(
     onReplayOnboarding: () -> Unit,
     pendingFeedbackCount: Int = 0,
     shakeToReportEnabled: Boolean = false,
+    shakeSettingError: String? = null,
     onOpenFeedback: () -> Unit = {},
     onShakeToReportChange: (Boolean) -> Unit = {},
     onDebugShakeFeedback: () -> Unit = {},
@@ -402,6 +404,14 @@ internal fun EarnItSettings(
                 }
                 Switch(checked = shakeToReportEnabled, onCheckedChange = onShakeToReportChange)
             }
+            shakeSettingError?.let {
+                Text(
+                    it,
+                    Modifier.padding(start = 16.dp, end = 16.dp, bottom = 12.dp),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
         }
 
         Card(
@@ -486,14 +496,26 @@ internal fun EarnItSettings(
                         Text("Clear queued debug reports ($pendingFeedbackCount)")
                     }
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                    Text("Pro simulator", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-                    if (purchaseProvider != null) {
-                        DebugEntitlementSimulator(
-                            entitlement = entitlementState,
-                            purchaseProvider = purchaseProvider,
-                            onEntitlement = onSimulateEntitlement,
-                            onReset = onResetEntitlement
-                        )
+                    Surface(
+                        modifier = Modifier.fillMaxWidth().clickable(onClick = onOpenPremiumSimulator),
+                        shape = RoundedCornerShape(14.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .32f)
+                    ) {
+                        Row(
+                            Modifier.padding(14.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                                Text("Premium simulator", fontWeight = FontWeight.SemiBold)
+                                Text(
+                                    "Current state: ${humanReadableEntitlement(entitlementState)}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Text("Open simulator", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelLarge)
+                        }
                     }
                 }
             }

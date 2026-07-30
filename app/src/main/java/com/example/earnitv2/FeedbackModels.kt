@@ -144,10 +144,18 @@ object FeedbackValidation {
     const val MAX_MESSAGE_LENGTH = 2_000
     private val emailPattern = Regex("^[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,63}$", RegexOption.IGNORE_CASE)
     fun messageError(message: String): String? = when {
-        message.isBlank() -> "Tell us what happened or what you would like to see."
+        message.isBlank() -> "Tell us what happened or what you’d like to suggest."
         message.length > MAX_MESSAGE_LENGTH -> "Keep feedback under $MAX_MESSAGE_LENGTH characters."
         else -> null
     }
     fun emailError(email: String): String? =
         email.trim().takeIf { it.isNotEmpty() && !emailPattern.matches(it) }?.let { "Enter a valid email address or leave it blank." }
 }
+
+internal fun feedbackCanSubmit(
+    category: FeedbackCategory?,
+    message: String,
+    email: String
+): Boolean = category != null &&
+    FeedbackValidation.messageError(message) == null &&
+    FeedbackValidation.emailError(email) == null

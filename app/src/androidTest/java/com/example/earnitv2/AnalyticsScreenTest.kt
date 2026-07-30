@@ -6,6 +6,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.performClick
 import com.example.earnitv2.ui.theme.EarnitV2Theme
 import org.junit.Assert.assertTrue
@@ -63,8 +64,10 @@ class AnalyticsScreenTest {
         compose.setContent {
             EarnitV2Theme {
                 AnalyticsScreen(
-                    range = range, state = AnalyticsUiState.Ready(emptySummary(range)), insights = emptyList(),
+                    range = range, selectedDate = LocalDate.of(2026, 7, 21),
+                    state = AnalyticsUiState.Ready(emptySummary(range)), insights = emptyList(),
                     rules = emptyList(), selectedAppPackage = null, onRangeChange = { range = it },
+                    onDateChange = {},
                     onOpenApp = {}, onBackFromApp = {}, onBack = {}, onCreateRule = {}, onRepairPermission = {}
                 )
             }
@@ -81,8 +84,10 @@ class AnalyticsScreenTest {
         compose.setContent {
             EarnitV2Theme {
                 AnalyticsScreen(
-                    range = AnalyticsRange.SevenDays, state = AnalyticsUiState.Ready(summary), insights = emptyList(),
+                    range = AnalyticsRange.SevenDays, selectedDate = LocalDate.of(2026, 7, 21),
+                    state = AnalyticsUiState.Ready(summary), insights = emptyList(),
                     rules = emptyList(), selectedAppPackage = selected, onRangeChange = {},
+                    onDateChange = {},
                     onOpenApp = { selected = it }, onBackFromApp = { selected = null }, onBack = {},
                     onCreateRule = {}, onRepairPermission = {}
                 )
@@ -91,6 +96,34 @@ class AnalyticsScreenTest {
         compose.onNodeWithText("Example App").performClick()
         compose.onNodeWithText("Time spent").assertIsDisplayed()
         compose.onNodeWithText("Usage over time").assertIsDisplayed()
+    }
+
+    @Test fun selectedDayNavigationUpdatesTheVisibleDate() {
+        var selected by mutableStateOf(LocalDate.now())
+        compose.setContent {
+            EarnitV2Theme {
+                AnalyticsScreen(
+                    range = AnalyticsRange.Today,
+                    selectedDate = selected,
+                    state = AnalyticsUiState.Ready(emptySummary(AnalyticsRange.Today)),
+                    insights = emptyList(),
+                    rules = emptyList(),
+                    selectedAppPackage = null,
+                    onRangeChange = {},
+                    onDateChange = { selected = it },
+                    onOpenApp = {},
+                    onBackFromApp = {},
+                    onBack = {},
+                    onCreateRule = {},
+                    onRepairPermission = {}
+                )
+            }
+        }
+        compose.onNodeWithText("Today, ${selected.month.getDisplayName(java.time.format.TextStyle.FULL, java.util.Locale.getDefault())} ${selected.dayOfMonth}")
+            .assertIsDisplayed()
+        compose.onNodeWithContentDescription("Previous day").performClick()
+        compose.onNodeWithText("Yesterday, ${selected.month.getDisplayName(java.time.format.TextStyle.FULL, java.util.Locale.getDefault())} ${selected.dayOfMonth}")
+            .assertIsDisplayed()
     }
 
     private fun emptySummary(range: AnalyticsRange): AnalyticsSummary {
