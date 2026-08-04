@@ -5,6 +5,14 @@ Package: `com.example.earnitv2`
 
 ---
 
+## Required project context
+Before planning or implementing substantial work, read:
+- `docs/PRODUCT_CONTEXT.md`
+- `docs/CURRENT_PRIORITIES.md`
+- `docs/DESIGN_SYSTEM.md` — before building or modifying any UI
+
+---
+
 ## Tech Stack
 
 - **Language:** Kotlin
