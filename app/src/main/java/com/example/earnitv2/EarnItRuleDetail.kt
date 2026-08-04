@@ -44,6 +44,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.semantics
@@ -128,6 +129,7 @@ internal fun EarnItRuleDetail(
     var otherPauseReason by remember(rule.id) { mutableStateOf("") }
     var pauseCountdownSeconds by remember(rule.id) { mutableStateOf(10) }
     var customPauseMinutes by remember(rule.id) { mutableStateOf("45") }
+    var bfHistoryOpen by remember(rule.id) { mutableStateOf(false) }
 
     LaunchedEffect(pausedUntilMillis) {
         while (pausedUntilMillis != null && pausedUntilMillis > System.currentTimeMillis()) {
@@ -222,6 +224,14 @@ internal fun EarnItRuleDetail(
         return
     }
 
+    if (bfHistoryOpen) {
+        BenjaminFranklinHistoryScreen(
+            onBack = { bfHistoryOpen = false },
+            modifier = modifier
+        )
+        return
+    }
+
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -271,7 +281,8 @@ internal fun EarnItRuleDetail(
                     ?: completeToUnlockProgressUiState(rule, emptyMap()),
                 rewardApps = detail.card.rewardApps,
                 onOpenRequirementApp = onOpenEarnApp,
-                onToggleDailyCommitment = { enabled -> onToggleDailyCommitment(rule, enabled) }
+                onToggleDailyCommitment = { enabled -> onToggleDailyCommitment(rule, enabled) },
+                onOpenBfHistory = { bfHistoryOpen = true }
             )
             EarnItRuleStore.RuleType.ScheduledBlock -> ScheduledBlockAppsCard(
                 rule = rule,
@@ -763,8 +774,13 @@ private fun CompleteToUnlockDetailCard(
     progress: CompleteToUnlockRuleProgressUiState,
     rewardApps: List<EarnItAppUiState>,
     onOpenRequirementApp: (String) -> Unit,
-    onToggleDailyCommitment: (Boolean) -> Unit
+    onToggleDailyCommitment: (Boolean) -> Unit,
+    onOpenBfHistory: () -> Unit
 ) {
+    val context = LocalContext.current
+    var showReviewDialog by remember { mutableStateOf(false) }
+    var todayCommitment by remember { mutableStateOf(BenjaminFranklinStore.today(context)) }
+
     SectionContainer(title = "Complete to unlock") {
         completeToUnlockDetailRequirements(progress).forEach { requirement ->
             AppActionRow(
@@ -789,14 +805,30 @@ private fun CompleteToUnlockDetailCard(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                val commitment = todayCommitment
                 val status = when {
                     !rule.requiresDailyCommitment -> "Off for this Rule"
-                    BenjaminFranklinStore.today(androidx.compose.ui.platform.LocalContext.current) == null -> "Waiting for today's commitment"
-                    else -> "Commitment set for today"
+                    commitment == null -> "Waiting for today's commitment"
+                    commitment.completionStatus == CompletionStatus.Completed -> "Commitment completed today"
+                    commitment.completionStatus == CompletionStatus.Missed -> "Commitment missed — set a new one tomorrow"
+                    else -> "Commitment set — review when done"
                 }
                 Text(text = status, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
             }
             Switch(checked = rule.requiresDailyCommitment, onCheckedChange = onToggleDailyCommitment)
+        }
+        if (rule.requiresDailyCommitment) {
+            val commitment = todayCommitment
+            if (commitment != null && commitment.completionStatus == CompletionStatus.Pending) {
+                OutlinedButton(
+                    onClick = { showReviewDialog = true },
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("Review today's commitment") }
+            }
+            TextButton(
+                onClick = onOpenBfHistory,
+                modifier = Modifier.fillMaxWidth()
+            ) { Text("View history  ›") }
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         AppIconRow(
@@ -805,6 +837,19 @@ private fun CompleteToUnlockDetailCard(
             body = "These apps unlock after all requirements are completed."
         )
         WebsiteDomainList(rule.normalizedBlockedDomains)
+    }
+
+    val commitment = todayCommitment
+    if (showReviewDialog && commitment != null) {
+        CommitmentReviewDialog(
+            commitment = commitment,
+            onDismiss = { showReviewDialog = false },
+            onSave = { completed, reflection ->
+                BenjaminFranklinStore.reviewToday(context, completed, reflection)
+                todayCommitment = BenjaminFranklinStore.today(context)
+                showReviewDialog = false
+            }
+        )
     }
 }
 

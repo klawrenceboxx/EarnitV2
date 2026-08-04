@@ -164,11 +164,15 @@ If missing, feedback upload is a no-op (empty string BuildConfig fields).
 - Block gate UI: `DailyCommitmentScreen` in `BlockedActivity.kt` — user sets commitment before unlock
 - Serialization: `requiresDailyCommitment` field (field 16) persists correctly, only valid on `CompleteToUnlock` rules
 
-**What's missing / unfinished:**
-- No UI in `EarnItRuleBuilder` or `EarnItRuleDetail` to toggle `requiresDailyCommitment` on a rule — no way to enable this from within the app currently
-- No end-of-day review UI — `BenjaminFranklinStore.reviewToday()` exists but is uncalled
-- No history/streak screen for past commitments
-- The feature is effectively invisible unless you manually set `requiresDailyCommitment = true` on a `CompleteToUnlock` rule via other means
+**What works:**
+- Store: `saveToday()`, `reviewToday()`, `get(date)` — all functional
+- Evaluator integration: `hasDailyCommitment` fed into `RuleRuntimeState`; `DailyCommitmentMissing` denial reason implemented
+- Block gate UI: `DailyCommitmentScreen` in `BlockedActivity.kt` — user sets commitment before unlock
+- Toggle UI: `EarnItRuleDetail.kt` has a `Switch` for `requiresDailyCommitment` on `CompleteToUnlock` rules, saved via `MainActivity.kt:1381`
+- End-of-day review: `CommitmentReviewDialog` in `BenjaminFranklinScreen.kt` — calls `reviewToday()`. Surfaced via "Review today's commitment" button in `CompleteToUnlockDetailCard` when today's status is `Pending`
+- History/streak screen: `BenjaminFranklinHistoryScreen` in `BenjaminFranklinScreen.kt` — shows streak count + last 60 days of commitments. Accessible via "View history ›" in rule detail
+
+**No known missing pieces** — the feature is end-to-end usable.
 
 ---
 
