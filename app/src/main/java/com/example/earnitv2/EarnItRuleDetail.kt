@@ -32,6 +32,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.Switch
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -108,6 +109,7 @@ internal fun EarnItRuleDetail(
     onEditRule: (EarnItRuleStore.Rule) -> Unit,
     onPauseRuleFor: (EarnItRuleStore.Rule, Long, String?) -> Unit,
     onResumeRule: (EarnItRuleStore.Rule) -> Unit,
+    onToggleDailyCommitment: (EarnItRuleStore.Rule, Boolean) -> Unit,
     isProtectedByStrictMode: Boolean,
     strictModeConfiguration: GlobalStrictModeConfiguration?,
     onOpenStrictMode: () -> Unit,
@@ -268,7 +270,8 @@ internal fun EarnItRuleDetail(
                 progress = homeRule.completeToUnlockProgress
                     ?: completeToUnlockProgressUiState(rule, emptyMap()),
                 rewardApps = detail.card.rewardApps,
-                onOpenRequirementApp = onOpenEarnApp
+                onOpenRequirementApp = onOpenEarnApp,
+                onToggleDailyCommitment = { enabled -> onToggleDailyCommitment(rule, enabled) }
             )
             EarnItRuleStore.RuleType.ScheduledBlock -> ScheduledBlockAppsCard(
                 rule = rule,
@@ -759,7 +762,8 @@ private fun CompleteToUnlockDetailCard(
     rule: EarnItRuleStore.Rule,
     progress: CompleteToUnlockRuleProgressUiState,
     rewardApps: List<EarnItAppUiState>,
-    onOpenRequirementApp: (String) -> Unit
+    onOpenRequirementApp: (String) -> Unit,
+    onToggleDailyCommitment: (Boolean) -> Unit
 ) {
     SectionContainer(title = "Complete to unlock") {
         completeToUnlockDetailRequirements(progress).forEach { requirement ->
@@ -776,6 +780,24 @@ private fun CompleteToUnlockDetailCard(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Text(text = "Benjamin Franklin Mode", style = MaterialTheme.typography.titleSmall)
+                Text(
+                    text = "Complete today's commitment before this Unlock Rule can activate.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                val status = when {
+                    !rule.requiresDailyCommitment -> "Off for this Rule"
+                    BenjaminFranklinStore.today(androidx.compose.ui.platform.LocalContext.current) == null -> "Waiting for today's commitment"
+                    else -> "Commitment set for today"
+                }
+                Text(text = status, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+            }
+            Switch(checked = rule.requiresDailyCommitment, onCheckedChange = onToggleDailyCommitment)
+        }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         AppIconRow(
             title = "Unlocks",

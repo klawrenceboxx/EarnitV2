@@ -25,12 +25,15 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TextField
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.Color
@@ -68,7 +71,13 @@ class BlockedActivity : ComponentActivity() {
         setContent {
             EarnitV2Theme(darkTheme = true, dynamicColor = false) {
                 BackHandler(onBack = ::returnHome)
-                BlockedScreen(
+                if (blockedReason == RuleAccessEvaluator.DenialReason.DailyCommitmentMissing) {
+                    DailyCommitmentScreen(onCommit = { commitment, minutes, importance ->
+                        BenjaminFranklinStore.saveToday(this, commitment, minutes, importance)
+                        updateRuleFromIntent(intent)
+                        blockedPackage?.let { packageName -> openApp(packageName, blockedAppName) } ?: returnHome()
+                    })
+                } else BlockedScreen(
                     blockedAppName = blockedAppName,
                     blockedPackage = blockedPackage,
                     blockedDomain = blockedDomain,
@@ -107,7 +116,8 @@ class BlockedActivity : ComponentActivity() {
                 calendar.get(Calendar.HOUR_OF_DAY) * 60 + calendar.get(Calendar.MINUTE)
             ) { rule -> RuleAccessEvaluator.RuleRuntimeState(
                 RewardLedger.snapshot(this, rule).remainingRewardSeconds,
-                RewardLedger.completionProgress(this, rule)
+                RewardLedger.completionProgress(this, rule),
+                BenjaminFranklinStore.today(this) != null
             ) }
             if (result.allowed) returnToChrome()
         }
@@ -239,6 +249,11 @@ fun blockedScreenPresentation(reason: RuleAccessEvaluator.DenialReason): Blocked
             ruleType = EarnItRuleStore.RuleType.CompleteToUnlock,
             title = "Complete requirements to unlock",
             sectionTitle = "Complete all requirements"
+        )
+        RuleAccessEvaluator.DenialReason.DailyCommitmentMissing -> BlockedScreenPresentation(
+            ruleType = EarnItRuleStore.RuleType.CompleteToUnlock,
+            title = "Set today's commitment",
+            sectionTitle = null
         )
         RuleAccessEvaluator.DenialReason.ScheduledBlockActive -> BlockedScreenPresentation(
             ruleType = EarnItRuleStore.RuleType.ScheduledBlock,
@@ -423,6 +438,7 @@ fun BlockedScreen(
                             accentColor = accentColor
                         )
                     }
+                    RuleAccessEvaluator.DenialReason.DailyCommitmentMissing -> Unit
                     RuleAccessEvaluator.DenialReason.ScheduledBlockActive -> {
                         if (scheduleStatus != null) {
                             BlockedScheduleStatusCard(scheduleStatus, accentColor)
@@ -566,7 +582,32 @@ fun blockedDescription(reason: RuleAccessEvaluator.DenialReason, blockedAppName:
     return when (reason) {
         RuleAccessEvaluator.DenialReason.ScheduledBlockActive -> "$blockedAppName is blocked by a Scheduled Block Rule right now."
         RuleAccessEvaluator.DenialReason.CompleteToUnlockIncomplete -> "$blockedAppName unlocks after this Rule's requirements are complete."
+        RuleAccessEvaluator.DenialReason.DailyCommitmentMissing -> "Set today's commitment before this app can unlock."
         RuleAccessEvaluator.DenialReason.OutOfRewardTime -> "$blockedAppName uses Reward Time from this Rule."
+    }
+}
+
+@Composable
+private fun DailyCommitmentScreen(onCommit: (String, Int, String) -> Unit) {
+    var commitment by remember { mutableStateOf("") }
+    var estimatedMinutes by remember { mutableStateOf("60") }
+    var importance by remember { mutableStateOf("") }
+    Column(
+        modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)
+            .safeDrawingPadding().verticalScroll(rememberScrollState()).padding(24.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        Text(text = "Benjamin Franklin Mode", style = MaterialTheme.typography.titleMedium)
+        Text(text = "What good shall I accomplish today?", style = MaterialTheme.typography.headlineSmall)
+        Text(text = "Choose one intentional commitment before unlocking this app.", style = MaterialTheme.typography.bodyMedium)
+        TextField(value = commitment, onValueChange = { commitment = it }, label = { Text("Today's commitment") }, modifier = Modifier.fillMaxWidth())
+        TextField(value = estimatedMinutes, onValueChange = { estimatedMinutes = it.filter(Char::isDigit) }, label = { Text("Estimated duration (minutes)") }, modifier = Modifier.fillMaxWidth())
+        TextField(value = importance, onValueChange = { importance = it }, label = { Text("Why is this important? (optional)") }, modifier = Modifier.fillMaxWidth())
+        Button(
+            onClick = { onCommit(commitment.trim(), estimatedMinutes.toIntOrNull() ?: 0, importance) },
+            enabled = commitment.isNotBlank() && (estimatedMinutes.toIntOrNull() ?: 0) > 0,
+            modifier = Modifier.fillMaxWidth()
+        ) { Text("Commit for today") }
     }
 }
 

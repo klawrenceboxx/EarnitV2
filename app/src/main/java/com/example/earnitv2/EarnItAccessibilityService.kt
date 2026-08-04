@@ -268,7 +268,8 @@ class EarnItAccessibilityService : AccessibilityService() {
             runtimeState = { rule ->
                 RuleAccessEvaluator.RuleRuntimeState(
                     remainingRewardSeconds = RewardLedger.snapshot(this, rule).remainingRewardSeconds,
-                    requirementProgressSeconds = RewardLedger.completionProgress(this, rule)
+                    requirementProgressSeconds = RewardLedger.completionProgress(this, rule),
+                    hasDailyCommitment = BenjaminFranklinStore.today(this) != null
                 )
             }
         )
@@ -287,7 +288,8 @@ class EarnItAccessibilityService : AccessibilityService() {
             runtimeState = { rule ->
                 RuleAccessEvaluator.RuleRuntimeState(
                     remainingRewardSeconds = RewardLedger.snapshot(this, rule).remainingRewardSeconds,
-                    requirementProgressSeconds = RewardLedger.completionProgress(this, rule)
+                    requirementProgressSeconds = RewardLedger.completionProgress(this, rule),
+                    hasDailyCommitment = BenjaminFranklinStore.today(this) != null
                 )
             }
         )

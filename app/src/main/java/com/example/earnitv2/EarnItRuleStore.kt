@@ -64,6 +64,7 @@ object EarnItRuleStore {
         val timeWindows: List<TimeWindow> = emptyList(),
         /** Versioned by its serialized field position; values are canonical hostnames only. */
         val blockedDomains: List<String> = emptyList(),
+        val requiresDailyCommitment: Boolean = false,
         val lastActivatedAtMillis: Long = 0L,
         val inactiveReason: RuleInactiveReason = RuleInactiveReason.None
     ) {
@@ -519,7 +520,8 @@ object EarnItRuleStore {
                 encodeTimeWindows(rule.effectiveTimeWindows),
                 encodeBlockedDomains(rule.normalizedBlockedDomains),
                 rule.lastActivatedAtMillis.toString(),
-                rule.inactiveReason.name
+                rule.inactiveReason.name,
+                rule.requiresDailyCommitment.toString()
             ).joinToString(RULE_FIELD_SEPARATOR) { encodeField(it) }
         }
     }
@@ -556,6 +558,7 @@ object EarnItRuleStore {
                 val inactiveReason = fields.getOrNull(15)?.let { rawReason ->
                     RuleInactiveReason.entries.firstOrNull { it.name == rawReason }
                 } ?: RuleInactiveReason.None
+                val requiresDailyCommitment = fields.getOrNull(16)?.toBooleanStrictOrNull() ?: false
                 Rule(
                     id = id,
                     productivePackage = productivePackage,
@@ -571,6 +574,7 @@ object EarnItRuleStore {
                     requirements = requirements,
                     timeWindows = timeWindows,
                     blockedDomains = blockedDomains,
+                    requiresDailyCommitment = requiresDailyCommitment && type == RuleType.CompleteToUnlock,
                     lastActivatedAtMillis = lastActivatedAtMillis,
                     inactiveReason = inactiveReason
                 )

@@ -3,13 +3,15 @@ package com.example.earnitv2
 object RuleAccessEvaluator {
     enum class DenialReason {
         ScheduledBlockActive,
+        DailyCommitmentMissing,
         CompleteToUnlockIncomplete,
         OutOfRewardTime
     }
 
     data class RuleRuntimeState(
         val remainingRewardSeconds: Long = 0L,
-        val requirementProgressSeconds: Map<String, Long> = emptyMap()
+        val requirementProgressSeconds: Map<String, Long> = emptyMap(),
+        val hasDailyCommitment: Boolean = false
     )
 
     data class RuleDenial(
@@ -84,7 +86,9 @@ object RuleAccessEvaluator {
                 if (active) RuleDenial(rule, DenialReason.ScheduledBlockActive) else null
             }
             EarnItRuleStore.RuleType.CompleteToUnlock -> {
-                if (active && !requirementsComplete(rule, state.requirementProgressSeconds)) {
+                if (active && rule.requiresDailyCommitment && !state.hasDailyCommitment) {
+                    RuleDenial(rule, DenialReason.DailyCommitmentMissing)
+                } else if (active && !requirementsComplete(rule, state.requirementProgressSeconds)) {
                     RuleDenial(rule, DenialReason.CompleteToUnlockIncomplete)
                 } else {
                     null
@@ -112,8 +116,9 @@ object RuleAccessEvaluator {
     private fun denialPriority(reason: DenialReason): Int {
         return when (reason) {
             DenialReason.ScheduledBlockActive -> 0
-            DenialReason.CompleteToUnlockIncomplete -> 1
-            DenialReason.OutOfRewardTime -> 2
+            DenialReason.DailyCommitmentMissing -> 1
+            DenialReason.CompleteToUnlockIncomplete -> 2
+            DenialReason.OutOfRewardTime -> 3
         }
     }
 }

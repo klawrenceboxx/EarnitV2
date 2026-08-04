@@ -56,6 +56,37 @@ class RuleAccessEvaluatorTest {
     }
 
     @Test
+    fun completeToUnlock_dailyCommitmentIsRequiredBeforeOtherRequirements() {
+        val rule = completeRule().copy(requiresDailyCommitment = true)
+
+        val denial = RuleAccessEvaluator.evaluateRule(
+            rule = rule,
+            day = 1,
+            minuteOfDay = 10 * 60,
+            state = RuleAccessEvaluator.RuleRuntimeState(
+                requirementProgressSeconds = mapOf("duo" to 10 * 60L, "kindle" to 30 * 60L),
+                hasDailyCommitment = false
+            )
+        )
+
+        assertEquals(RuleAccessEvaluator.DenialReason.DailyCommitmentMissing, denial?.reason)
+    }
+
+    @Test
+    fun completeToUnlock_dailyCommitmentDoesNotChangeRulesWithoutTheSetting() {
+        val denial = RuleAccessEvaluator.evaluateRule(
+            rule = completeRule(),
+            day = 1,
+            minuteOfDay = 10 * 60,
+            state = RuleAccessEvaluator.RuleRuntimeState(
+                requirementProgressSeconds = mapOf("duo" to 10 * 60L, "kindle" to 30 * 60L)
+            )
+        )
+
+        assertNull(denial)
+    }
+
+    @Test
     fun completeToUnlock_inactiveScheduleDoesNotDeny() {
         val rule = completeRule(startMinute = 8 * 60, endMinute = 18 * 60)
         val denial = RuleAccessEvaluator.evaluateRule(

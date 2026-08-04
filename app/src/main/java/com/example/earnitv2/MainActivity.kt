@@ -492,6 +492,7 @@ class MainActivity : ComponentActivity() {
                             onSelectRuleType = ::startRuleType,
                             onEditRule = ::startEditingRule,
                             onToggleRuleEnabled = ::toggleRuleEnabled,
+                            onToggleDailyCommitment = ::toggleDailyCommitment,
                             onPauseRuleFor = ::pauseRuleFor,
                             onResumeRule = ::resumeRule,
                             onPauseTimerTick = ::refreshDashboardState,
@@ -1375,6 +1376,12 @@ class MainActivity : ComponentActivity() {
         refreshDashboardState()
     }
 
+    private fun toggleDailyCommitment(rule: EarnItRuleStore.Rule, enabled: Boolean) {
+        if (rule.type != EarnItRuleStore.RuleType.CompleteToUnlock) return
+        EarnItRuleStore.saveRule(this, rule.copy(requiresDailyCommitment = enabled))
+        refreshDashboardState()
+    }
+
     private fun pauseRuleFor(rule: EarnItRuleStore.Rule, durationMillis: Long, reason: String? = null) {
         refreshStrictModeState()
         if (isRuleProtected(rule)) {
@@ -1883,6 +1890,7 @@ internal fun Dashboard(
     onSelectRuleType: (EarnItRuleStore.RuleType) -> Unit,
     onEditRule: (EarnItRuleStore.Rule) -> Unit,
     onToggleRuleEnabled: (EarnItRuleStore.Rule) -> Unit,
+    onToggleDailyCommitment: (EarnItRuleStore.Rule, Boolean) -> Unit,
     onPauseRuleFor: (EarnItRuleStore.Rule, Long, String?) -> Unit,
     onResumeRule: (EarnItRuleStore.Rule) -> Unit,
     onPauseTimerTick: () -> Unit,
@@ -2085,6 +2093,7 @@ internal fun Dashboard(
                 onEditRule = onEditRule,
                 onPauseRuleFor = onPauseRuleFor,
                 onResumeRule = onResumeRule,
+                onToggleDailyCommitment = onToggleDailyCommitment,
                 isProtectedByStrictMode = StrictModePolicy.isRuleProtected(
                     strictModeState = globalStrictModeConfiguration?.toLegacyStrictModeState()
                         ?: StrictModeState(),
@@ -2663,6 +2672,7 @@ fun DashboardPreview() {
             onSelectRuleType = {},
             onEditRule = {},
             onToggleRuleEnabled = {},
+            onToggleDailyCommitment = { _, _ -> },
             onPauseRuleFor = { _, _, _ -> },
             onResumeRule = {},
             onPauseTimerTick = {},
