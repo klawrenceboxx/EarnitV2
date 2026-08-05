@@ -9,8 +9,14 @@ val localProperties = Properties().apply {
     val file = rootProject.file("local.properties")
     if (file.exists()) file.inputStream().use { load(it) }
 }
-fun feedbackConfig(name: String): String =
-    (localProperties.getProperty(name) ?: System.getenv(name) ?: "").replace("\\", "\\\\").replace("\"", "\\\"")
+val environmentProperties = Properties().apply {
+    val file = rootProject.file(".env")
+    if (file.exists()) file.inputStream().use { load(it) }
+}
+fun buildConfigValue(name: String): String =
+    (System.getenv(name) ?: localProperties.getProperty(name) ?: environmentProperties.getProperty(name) ?: "")
+        .replace("\\", "\\\\")
+        .replace("\"", "\\\"")
 
 android {
     namespace = "com.example.earnitv2"
@@ -28,8 +34,10 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        buildConfigField("String", "FEEDBACK_SUPABASE_URL", "\"${feedbackConfig("FEEDBACK_SUPABASE_URL")}\"")
-        buildConfigField("String", "FEEDBACK_SUPABASE_ANON_KEY", "\"${feedbackConfig("FEEDBACK_SUPABASE_ANON_KEY")}\"")
+        buildConfigField("String", "FEEDBACK_SUPABASE_URL", "\"${buildConfigValue("FEEDBACK_SUPABASE_URL")}\"")
+        buildConfigField("String", "FEEDBACK_SUPABASE_ANON_KEY", "\"${buildConfigValue("FEEDBACK_SUPABASE_ANON_KEY")}\"")
+        buildConfigField("String", "POSTHOG_PROJECT_TOKEN", "\"${buildConfigValue("POSTHOG_PROJECT_TOKEN")}\"")
+        buildConfigField("String", "POSTHOG_HOST", "\"${buildConfigValue("POSTHOG_HOST")}\"")
     }
 
     buildTypes {
@@ -66,6 +74,7 @@ android {
 }
 
 dependencies {
+    implementation("com.posthog:posthog-android:3.+")
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.runtime.compose)
