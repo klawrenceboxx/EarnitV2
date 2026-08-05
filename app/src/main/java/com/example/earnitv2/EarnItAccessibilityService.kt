@@ -13,6 +13,7 @@ import android.os.SystemClock
 import android.provider.Settings
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
+import com.posthog.PostHog
 import java.util.Calendar
 
 class EarnItAccessibilityService : AccessibilityService() {
@@ -704,6 +705,14 @@ class EarnItAccessibilityService : AccessibilityService() {
 
         lastBlockedLaunchAt = System.currentTimeMillis()
         AnalyticsEventStore.recordBlockedAttempt(this, rule.id, lastBlockedLaunchAt)
+        PostHog.capture(
+            "blocked_access_attempted",
+            properties = mapOf(
+                "rule_type" to rule.type.name,
+                "denial_reason" to reason.name,
+                "target_type" to if (blockedDomain == null) "app" else "website"
+            )
+        )
         val primaryEarnApp = rule.earnApps.firstOrNull()
         val intent = Intent(this, BlockedActivity::class.java).apply {
             putExtra(BlockedActivity.EXTRA_RULE_ID, rule.id)

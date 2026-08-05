@@ -40,6 +40,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Modifier
+import com.posthog.PostHog
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.example.earnitv2.ui.theme.EarnitV2Theme
@@ -393,7 +394,13 @@ class MainActivity : ComponentActivity() {
                             proFlowState = proFlowState,
                             onProFlowChange = { proFlowState = it },
                             onCloseProFlow = { proFlowState = null },
-                            onPurchasePlan = purchaseProvider::purchase,
+                            onPurchasePlan = { plan ->
+                                PostHog.capture(
+                                    "subscription_purchase_started",
+                                    properties = mapOf("plan_id" to plan.id, "billing_period" to plan.billingPeriod.name.lowercase())
+                                )
+                                purchaseProvider.purchase(plan)
+                            },
                             onRestorePurchases = purchaseProvider::restorePurchases,
                             onSimulateEntitlement = entitlementRepository::simulate,
                             onResetEntitlement = entitlementRepository::reset,
@@ -412,6 +419,10 @@ class MainActivity : ComponentActivity() {
                                 if (PremiumSessionPolicy.canStartDeepWork(featurePolicy)) {
                                     deepWorkSetupOpen = false
                                     deepWorkSession = DeepWorkStore.begin(this, goal)
+                                    PostHog.capture(
+                                        "deep_work_started",
+                                        properties = mapOf("has_goal" to (goal != null))
+                                    )
                                 } else {
                                     deepWorkSetupOpen = false
                                     openProGate(PremiumEntryPoint.DeepWork)
@@ -419,7 +430,20 @@ class MainActivity : ComponentActivity() {
                             },
                             onActivateDeepWork = { deepWorkSession = DeepWorkStore.activate(this, deepWorkSession) },
                             onContinueDeepWork = { elapsed -> deepWorkSession = DeepWorkStore.continueOpenEnded(this, deepWorkSession, elapsed) },
-                            onFinishDeepWork = { elapsed -> DeepWorkStore.finish(this, deepWorkSession, elapsed); deepWorkSession = DeepWorkSession(); refreshDashboardState() },
+                            onFinishDeepWork = { elapsed ->
+                                val completedSession = deepWorkSession
+                                DeepWorkStore.finish(this, completedSession, elapsed)
+                                PostHog.capture(
+                                    "deep_work_completed",
+                                    properties = mapOf(
+                                        "elapsed_seconds" to elapsed,
+                                        "has_goal" to (completedSession.goalSeconds != null),
+                                        "linked_to_rule" to (completedSession.linkedRuleId != null)
+                                    )
+                                )
+                                deepWorkSession = DeepWorkSession()
+                                refreshDashboardState()
+                            },
                             onOpenUsageAccessSettings = ::openUsageAccessSettings,
                             onOpenAccessibilitySettings = ::openAccessibilitySettings,
                             onContinueSetup = ::continueOnboardingSetup,
@@ -1391,6 +1415,10 @@ class MainActivity : ComponentActivity() {
         val expiresAt = System.currentTimeMillis() + durationMillis.coerceAtLeast(1L)
         EarnItPauseStore.pauseUntil(this, rule.id, expiresAt, reason)
         EarnItRuleStore.setRuleEnabled(this, rule.id, false)
+        PostHog.capture(
+            "rule_paused",
+            properties = mapOf("rule_type" to rule.type.name, "duration_minutes" to durationMillis / 60_000L)
+        )
         refreshDashboardState()
     }
 
@@ -1406,6 +1434,10 @@ class MainActivity : ComponentActivity() {
             openProGate(PremiumEntryPoint.RuleLimit)
             return
         }
+        PostHog.capture(
+            "rule_resumed",
+            properties = mapOf("rule_type" to rule.type.name)
+        )
         refreshDashboardState()
     }
 
@@ -1420,6 +1452,10 @@ class MainActivity : ComponentActivity() {
         }
         EarnItRuleStore.deleteRule(this, rule.id)
         EarnItPauseStore.clearPause(this, rule.id)
+        PostHog.capture(
+            "rule_deleted",
+            properties = mapOf("rule_type" to rule.type.name)
+        )
         if (editingRuleTemplate?.id == rule.id) {
             cancelEditingRule()
         }
@@ -1588,6 +1624,7 @@ class MainActivity : ComponentActivity() {
                 return
             }
         }
+        val eventName = if (builderEntryContext == RuleBuilderEntryContext.Create) "rule_created" else "rule_updated"
         val saveResult = EarnItRuleStore.saveRule(
             this,
             rule,
@@ -1597,6 +1634,16 @@ class MainActivity : ComponentActivity() {
             openProGate(PremiumEntryPoint.RuleLimit)
             return
         }
+        PostHog.capture(
+            eventName,
+            properties = mapOf(
+                "rule_type" to rule.type.name,
+                "earn_app_count" to rule.earnApps.size,
+                "reward_app_count" to rule.blockedApps.size,
+                "website_count" to rule.normalizedBlockedDomains.size,
+                "requirement_count" to rule.requirements.size
+            )
+        )
         editingRuleTemplate = null
         builderEntryContext = null
         builderReturnRuleDetailId = null
@@ -1674,12 +1721,26 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun completeFirstLaunchAndCreateRule() {
+        captureOnboardingCompleted("create_first_rule")
         finishOnboarding()
         startAddingRule()
     }
 
     private fun completeOnboardingAndGoHome() {
+        captureOnboardingCompleted("go_home")
         finishOnboarding()
+    }
+
+    private fun captureOnboardingCompleted(completionPath: String) {
+        val permissions = currentOnboardingPermissions()
+        PostHog.capture(
+            "onboarding_completed",
+            properties = mapOf(
+                "completion_path" to completionPath,
+                "usage_access_granted" to permissions.earningProgressAllowed,
+                "accessibility_granted" to permissions.appBlockingAllowed
+            )
+        )
     }
 
     private fun leaveOnboardingIncomplete() {

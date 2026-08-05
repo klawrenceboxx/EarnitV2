@@ -6,6 +6,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
+import com.posthog.PostHog
 import org.json.JSONObject
 import java.io.File
 import java.util.concurrent.Executors
@@ -100,6 +101,15 @@ class FeedbackViewModel(application: Application) : AndroidViewModel(application
         executor.execute {
             state = when (val result = repository.submit(submission)) {
                 is FeedbackSubmitResult.Success -> {
+                    PostHog.capture(
+                        "feedback_submitted",
+                        properties = mapOf(
+                            "category" to state.category?.name.orEmpty(),
+                            "entry_source" to state.entrySource.name,
+                            "has_screenshot" to (state.screenshotPath != null),
+                            "is_crash_follow_up" to (state.crash != null)
+                        )
+                    )
                     clearDraft(deleteAttachment = true)
                     FeedbackUiState(phase = FeedbackPhase.SUCCESS, referenceId = result.referenceId, entrySource = state.entrySource)
                 }
