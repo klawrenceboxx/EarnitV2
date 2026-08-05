@@ -15,6 +15,14 @@ const hash = async (value: string) =>
     .map((byte) => byte.toString(16).padStart(2, "0")).join("");
 
 Deno.serve(async (request) => {
+  if (request.method === "OPTIONS") {
+    return new Response(null, { status: 204, headers: {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "POST, OPTIONS",
+      "Access-Control-Allow-Headers": "authorization, apikey, content-type, idempotency-key",
+      "Access-Control-Max-Age": "86400",
+    }});
+  }
   if (request.method !== "POST") return json(405, { success: false, code: "method_not_allowed" });
   if (!request.headers.get("content-type")?.toLowerCase().startsWith("application/json")) {
     return json(415, { success: false, code: "content_type" });
