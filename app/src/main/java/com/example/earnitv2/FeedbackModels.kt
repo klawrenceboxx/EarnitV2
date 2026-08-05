@@ -1,4 +1,4 @@
-package com.example.earnitv2
+package com.kaleel.earnitv2
 
 import org.json.JSONObject
 import java.util.UUID

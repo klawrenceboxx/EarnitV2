@@ -1,4 +1,4 @@
-package com.example.earnitv2
+package com.kaleel.earnitv2
 
 import android.content.Context
 import android.hardware.Sensor
@@ -34,7 +34,7 @@ object CrashMarkerStore {
         }.getOrNull()
     }
     fun markFake(context: Context) {
-        save(context, IllegalStateException::class.java.name, "com.example.earnitv2.DebugFeedback.fake(DebugFeedback.kt:1)", "Debug")
+        save(context, IllegalStateException::class.java.name, "com.kaleel.earnitv2.DebugFeedback.fake(DebugFeedback.kt:1)", "Debug")
     }
     internal fun save(context: Context, exceptionClass: String, stack: String, route: String) {
         val value = JSONObject()

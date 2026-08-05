@@ -1,4 +1,4 @@
-package com.example.earnitv2
+package com.kaleel.earnitv2
 
 sealed class ProtectedTarget {
     data class App(val packageName: String, val name: String) : ProtectedTarget()

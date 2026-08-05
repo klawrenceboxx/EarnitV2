@@ -1,4 +1,4 @@
-package com.example.earnitv2
+package com.kaleel.earnitv2
 
 internal enum class StrictModeCommitmentPreset(
     val fixedDurationMillis: Long?

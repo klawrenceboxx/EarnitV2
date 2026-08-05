@@ -1,4 +1,4 @@
-package com.example.earnitv2
+package com.kaleel.earnitv2
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
@@ -44,13 +44,13 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import com.example.earnitv2.ui.theme.WarmCoral
-import com.example.earnitv2.ui.theme.WarmInk
-import com.example.earnitv2.ui.theme.WarmOutline
-import com.example.earnitv2.ui.theme.WarmSurface
-import com.example.earnitv2.ui.theme.WarmSurfaceRaised
-import com.example.earnitv2.ui.theme.WarmText
-import com.example.earnitv2.ui.theme.WarmTextMuted
+import com.kaleel.earnitv2.ui.theme.WarmCoral
+import com.kaleel.earnitv2.ui.theme.WarmInk
+import com.kaleel.earnitv2.ui.theme.WarmOutline
+import com.kaleel.earnitv2.ui.theme.WarmSurface
+import com.kaleel.earnitv2.ui.theme.WarmSurfaceRaised
+import com.kaleel.earnitv2.ui.theme.WarmText
+import com.kaleel.earnitv2.ui.theme.WarmTextMuted
 
 enum class ProRoute { Gate, Intro, Plans, Compare, Restore, PurchaseStatus }
 

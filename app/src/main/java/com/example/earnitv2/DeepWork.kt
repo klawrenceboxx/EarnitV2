@@ -1,4 +1,4 @@
-package com.example.earnitv2
+package com.kaleel.earnitv2
 
 import android.app.NotificationManager
 import android.content.Context

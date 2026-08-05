@@ -1,4 +1,4 @@
-package com.example.earnitv2
+package com.kaleel.earnitv2
 
 import android.app.AppOpsManager
 import android.app.TimePickerDialog
@@ -43,7 +43,7 @@ import androidx.compose.ui.Modifier
 import com.posthog.PostHog
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import com.example.earnitv2.ui.theme.EarnitV2Theme
+import com.kaleel.earnitv2.ui.theme.EarnitV2Theme
 import kotlin.concurrent.thread
 import kotlinx.coroutines.delay
 import java.time.LocalDate
@@ -1799,7 +1799,7 @@ class MainActivity : ComponentActivity() {
     }
 
     companion object {
-        internal const val EXTRA_OPEN_RULE_DETAIL_ID = "com.example.earnitv2.extra.OPEN_RULE_DETAIL_ID"
+        internal const val EXTRA_OPEN_RULE_DETAIL_ID = "com.kaleel.earnitv2.extra.OPEN_RULE_DETAIL_ID"
         private const val APP_LIST_REFRESH_INTERVAL_MS = 60_000L
         private const val STATE_ANALYTICS_DATE = "analytics_selected_date"
     }

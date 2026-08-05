@@ -1,4 +1,4 @@
-package com.example.earnitv2
+package com.kaleel.earnitv2
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas

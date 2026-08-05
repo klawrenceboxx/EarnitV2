@@ -1,4 +1,4 @@
-package com.example.earnitv2
+package com.kaleel.earnitv2
 
 import android.app.Application
 import androidx.compose.ui.test.assertIsEnabled
@@ -9,7 +9,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
 import androidx.test.core.app.ApplicationProvider
-import com.example.earnitv2.ui.theme.EarnitV2Theme
+import com.kaleel.earnitv2.ui.theme.EarnitV2Theme
 import org.junit.Rule
 import org.junit.Test
 

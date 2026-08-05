@@ -1,4 +1,4 @@
-package com.example.earnitv2
+package com.kaleel.earnitv2
 
 object AppPackages {
     const val DEFAULT_PRODUCTIVE_APP = "com.duolingo"

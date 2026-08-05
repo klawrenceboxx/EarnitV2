@@ -1,4 +1,4 @@
-package com.example.earnitv2
+package com.kaleel.earnitv2
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
@@ -39,8 +39,8 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import com.example.earnitv2.ui.theme.OnboardingSuccessContainer
-import com.example.earnitv2.ui.theme.OnboardingSuccessIcon
+import com.kaleel.earnitv2.ui.theme.OnboardingSuccessContainer
+import com.kaleel.earnitv2.ui.theme.OnboardingSuccessIcon
 
 @Composable
 fun EarnItOnboarding(

@@ -1,4 +1,4 @@
-package com.example.earnitv2.ui.theme
+package com.kaleel.earnitv2.ui.theme
 
 import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme

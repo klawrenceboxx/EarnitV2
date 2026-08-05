@@ -1,4 +1,4 @@
-package com.example.earnitv2.ui.theme
+package com.kaleel.earnitv2.ui.theme
 
 import androidx.compose.ui.graphics.Color
 

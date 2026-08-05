@@ -1,4 +1,4 @@
-package com.example.earnitv2
+package com.kaleel.earnitv2
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
@@ -35,7 +35,7 @@ import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import com.example.earnitv2.ui.theme.EarnitV2Theme
+import com.kaleel.earnitv2.ui.theme.EarnitV2Theme
 
 enum class FirstLaunchStep {
     ValueIntroduction,

@@ -1,4 +1,4 @@
-package com.example.earnitv2
+package com.kaleel.earnitv2
 
 import android.content.ActivityNotFoundException
 import android.content.Intent
@@ -45,8 +45,8 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
-import com.example.earnitv2.ui.theme.EarnitV2Theme
-import com.example.earnitv2.ui.theme.WarmInk
+import com.kaleel.earnitv2.ui.theme.EarnitV2Theme
+import com.kaleel.earnitv2.ui.theme.WarmInk
 import java.util.Calendar
 
 class BlockedActivity : ComponentActivity() {
@@ -210,13 +210,13 @@ class BlockedActivity : ComponentActivity() {
     }
 
     companion object {
-        const val EXTRA_RULE_ID = "com.example.earnitv2.extra.RULE_ID"
-        const val EXTRA_BLOCKED_APP_NAME = "com.example.earnitv2.extra.BLOCKED_APP_NAME"
-        const val EXTRA_BLOCKED_PACKAGE = "com.example.earnitv2.extra.BLOCKED_PACKAGE"
-        const val EXTRA_BLOCKED_DOMAIN = "com.example.earnitv2.extra.BLOCKED_DOMAIN"
-        const val EXTRA_PRODUCTIVE_APP_NAME = "com.example.earnitv2.extra.PRODUCTIVE_APP_NAME"
-        const val EXTRA_PRODUCTIVE_PACKAGE = "com.example.earnitv2.extra.PRODUCTIVE_PACKAGE"
-        const val EXTRA_BLOCKED_REASON = "com.example.earnitv2.extra.BLOCKED_REASON"
+        const val EXTRA_RULE_ID = "com.kaleel.earnitv2.extra.RULE_ID"
+        const val EXTRA_BLOCKED_APP_NAME = "com.kaleel.earnitv2.extra.BLOCKED_APP_NAME"
+        const val EXTRA_BLOCKED_PACKAGE = "com.kaleel.earnitv2.extra.BLOCKED_PACKAGE"
+        const val EXTRA_BLOCKED_DOMAIN = "com.kaleel.earnitv2.extra.BLOCKED_DOMAIN"
+        const val EXTRA_PRODUCTIVE_APP_NAME = "com.kaleel.earnitv2.extra.PRODUCTIVE_APP_NAME"
+        const val EXTRA_PRODUCTIVE_PACKAGE = "com.kaleel.earnitv2.extra.PRODUCTIVE_PACKAGE"
+        const val EXTRA_BLOCKED_REASON = "com.kaleel.earnitv2.extra.BLOCKED_REASON"
     }
 }
 

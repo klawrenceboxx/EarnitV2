@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "907343286316",
+    "project_id": "earnit-a63d6",
+    "storage_bucket": "earnit-a63d6.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:907343286316:android:8a1d107e6e9282785b0189",
+        "android_client_info": {
+          "package_name": "com.kaleel.earnitv2"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDXg1mbd7G4tAg2AEhyYu5Vvjo8n5dhlIM"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

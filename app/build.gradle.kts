@@ -1,6 +1,8 @@
 import java.util.Properties
 
 plugins {
+    id("com.google.gms.google-services")
+    id("com.google.firebase.crashlytics")
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
 }
@@ -19,7 +21,7 @@ fun buildConfigValue(name: String): String =
         .replace("\"", "\\\"")
 
 android {
-    namespace = "com.example.earnitv2"
+    namespace = "com.kaleel.earnitv2"
     compileSdk {
         version = release(36) {
             minorApiLevel = 1
@@ -27,7 +29,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.example.earnitv2"
+        applicationId = "com.kaleel.earnitv2"
         minSdk = 26
         targetSdk = 36
         versionCode = 1
@@ -74,6 +76,9 @@ android {
 }
 
 dependencies {
+    implementation(platform("com.google.firebase:firebase-bom:34.17.0"))
+    implementation("com.google.firebase:firebase-analytics")
+    implementation("com.google.firebase:firebase-crashlytics")
     implementation("com.posthog:posthog-android:3.+")
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
