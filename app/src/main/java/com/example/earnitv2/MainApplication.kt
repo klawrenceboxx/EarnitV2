@@ -9,16 +9,22 @@ import java.util.UUID
 class MainApplication : Application() {
     override fun onCreate() {
         super.onCreate()
-        PostHogAndroid.setup(
-            this,
-            PostHogAndroidConfig(
-                apiKey = "phc_xkRMrxG2F7PWh24BtpWPDxLgqZRdtY6hCnfaeHyAV3vT",
-                host = "https://us.i.posthog.com"
-            ).apply {
-                captureScreenViews = true
-            }
-        )
-        ProductAnalytics.identify(installationId())
+        val projectToken = BuildConfig.POSTHOG_PROJECT_TOKEN
+        val host = BuildConfig.POSTHOG_HOST
+        if (projectToken.isBlank()) {
+            requirePostHogConfiguration("POSTHOG_PROJECT_TOKEN")
+        } else if (host.isBlank()) {
+            requirePostHogConfiguration("POSTHOG_HOST")
+        } else {
+            PostHogAndroid.setup(
+                this,
+                PostHogAndroidConfig(apiKey = projectToken, host = host).apply {
+                    captureScreenViews = true
+                    errorTrackingConfig.autoCapture = true
+                }
+            )
+            ProductAnalytics.identify(installationId())
+        }
     }
 
     // Reads the same UUID written by FeedbackDiagnosticsCollector so both share one stable ID.
@@ -26,6 +32,12 @@ class MainApplication : Application() {
         val prefs = getSharedPreferences("feedback_identity", Context.MODE_PRIVATE)
         return prefs.getString("installation_id", null) ?: UUID.randomUUID().toString().also {
             prefs.edit().putString("installation_id", it).apply()
+        }
+    }
+
+    private fun requirePostHogConfiguration(variableName: String) {
+        if (BuildConfig.DEBUG) {
+            error("$variableName is missing. PostHog events will be silently dropped until it is configured.")
         }
     }
 }
