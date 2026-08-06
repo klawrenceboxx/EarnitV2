@@ -60,16 +60,15 @@
                 <action android:name="com.kaleel.earnitv2.BF_EVENING_REMINDER" />
                 <action android:name="com.kaleel.earnitv2.BF_SNOOZE_MORNING" />
             </intent-filter>
-        </receiver>
-        <!-- BOOT_COMPLETED is sent by the system process (a different UID), so this entry
-             must be exported=true or the system cannot deliver it. -->
-        <receiver
-            android:name=".BenjaminFranklinReceiver"
-            android:exported="true">
+
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
             </intent-filter>
+
         </receiver>
+        <!-- BOOT_COMPLETED is sent by the system process (a different UID), so this entry
+             must be exported=true or the system cannot deliver it. -->
+
 
         <service
             android:name=".EarnItAccessibilityService"

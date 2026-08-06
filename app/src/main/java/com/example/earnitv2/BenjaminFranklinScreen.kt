@@ -46,6 +46,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.TimePicker
 import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -118,6 +119,18 @@ fun BenjaminFranklinDashboard(
             reminders = updated
             BenjaminFranklinStore.saveReminderPreferences(context, updated)
             BenjaminFranklinNotificationScheduler.rescheduleAll(context)
+        }
+    }
+
+    // Milestone notifications fire automatically (no toggle), so we request POST_NOTIFICATIONS
+    // proactively here. If the user grants via this path, both milestones and BF reminders work.
+    // If they dismiss, milestone notifications are silently skipped until permission is granted
+    // through the reminder toggle path. LaunchedEffect(Unit) fires once per composition entry.
+    LaunchedEffect(Unit) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) !=
+                android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            notifPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
         }
     }
 

@@ -3,9 +3,13 @@ package com.kaleel.earnitv2
 import android.accessibilityservice.AccessibilityService
 import android.app.AppOpsManager
 import android.app.usage.UsageStatsManager
+import android.content.BroadcastReceiver
 import android.content.ComponentName
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ApplicationInfo
+import androidx.core.content.ContextCompat
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -32,6 +36,17 @@ class EarnItAccessibilityService : AccessibilityService() {
     private var activeBrowserPackage: String? = null
     private var browserRetryCount = 0
     private var foregroundRecheckCount = 0
+
+    // Registered dynamically in onServiceConnected; ACTION_USER_PRESENT cannot be declared
+    // in the manifest on API 26+ (not in the implicit-broadcast exemption list).
+    private val unlockReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent?) {
+            if (intent?.action == Intent.ACTION_USER_PRESENT) {
+                UnlockMilestoneStore.onUnlock(context)
+            }
+        }
+    }
+    private var unlockReceiverRegistered = false
 
     private val browserRetryRunnable = object : Runnable {
         override fun run() {
@@ -131,6 +146,18 @@ class EarnItAccessibilityService : AccessibilityService() {
                 activeRule = spendRule
                 handler.postDelayed(this, CONSUMPTION_TICK_MILLIS)
             }
+        }
+    }
+
+    override fun onServiceConnected() {
+        super.onServiceConnected()
+        if (!unlockReceiverRegistered) {
+            ContextCompat.registerReceiver(
+                this, unlockReceiver,
+                IntentFilter(Intent.ACTION_USER_PRESENT),
+                ContextCompat.RECEIVER_EXPORTED
+            )
+            unlockReceiverRegistered = true
         }
     }
 
@@ -253,6 +280,10 @@ class EarnItAccessibilityService : AccessibilityService() {
         clearBrowserObservation()
         stopTrackedAppHandoffSession()
         stopActiveBlockedUsage()
+        if (unlockReceiverRegistered) {
+            unregisterReceiver(unlockReceiver)
+            unlockReceiverRegistered = false
+        }
         super.onDestroy()
     }
 
