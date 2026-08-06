@@ -192,6 +192,8 @@ class MainActivity : ComponentActivity() {
     private var selectedRuleDetailId by mutableStateOf<String?>(null)
     private var settingsOpen by mutableStateOf(false)
     private var analyticsOpen by mutableStateOf(false)
+    private var franklinDashboardOpen by mutableStateOf(false)
+    private var franklinCalendarOpen by mutableStateOf(false)
     private var analyticsRange by mutableStateOf(defaultAnalyticsRange())
     private var analyticsSelectedDate by mutableStateOf(LocalDate.now())
     private var analyticsState by mutableStateOf<AnalyticsUiState>(AnalyticsUiState.Loading)
@@ -372,6 +374,8 @@ class MainActivity : ComponentActivity() {
                             selectedRuleDetailId = selectedRuleDetailId,
                             settingsOpen = settingsOpen,
                             analyticsOpen = analyticsOpen,
+                            franklinDashboardOpen = franklinDashboardOpen,
+                            franklinCalendarOpen = franklinCalendarOpen,
                             analyticsRange = analyticsRange,
                             analyticsState = analyticsState,
                             analyticsInsights = analyticsInsights,
@@ -456,6 +460,10 @@ class MainActivity : ComponentActivity() {
                             onOpenAnalyticsApp = { analyticsAppPackage = it },
                             onBackFromAnalyticsApp = { analyticsAppPackage = null },
                             onCloseSettings = { settingsOpen = false },
+                            onOpenBenjaminFranklin = { franklinDashboardOpen = true },
+                            onCloseBenjaminFranklin = { franklinDashboardOpen = false },
+                            onOpenBenjaminFranklinCalendar = { franklinCalendarOpen = true },
+                            onCloseBenjaminFranklinCalendar = { franklinCalendarOpen = false },
                             pendingFeedbackCount = feedbackViewModel.pendingCount(),
                             shakeToReportEnabled = shakeEnabled,
                             shakeSettingError = shakeSettingError,
@@ -1878,6 +1886,8 @@ internal fun Dashboard(
     selectedRuleDetailId: String?,
     settingsOpen: Boolean,
     analyticsOpen: Boolean,
+    franklinDashboardOpen: Boolean,
+    franklinCalendarOpen: Boolean,
     analyticsRange: AnalyticsRange,
     analyticsSelectedDate: LocalDate,
     analyticsState: AnalyticsUiState,
@@ -1919,6 +1929,10 @@ internal fun Dashboard(
     onOpenAnalyticsApp: (String) -> Unit,
     onBackFromAnalyticsApp: () -> Unit,
     onCloseSettings: () -> Unit,
+    onOpenBenjaminFranklin: () -> Unit,
+    onCloseBenjaminFranklin: () -> Unit,
+    onOpenBenjaminFranklinCalendar: () -> Unit,
+    onCloseBenjaminFranklinCalendar: () -> Unit,
     pendingFeedbackCount: Int,
     shakeToReportEnabled: Boolean,
     shakeSettingError: String?,
@@ -2086,6 +2100,17 @@ internal fun Dashboard(
                 onRequestMethodChange = onRequestStrictModeMethodChange,
                 modifier = modifier
             )
+        } else if (franklinCalendarOpen) {
+            BenjaminFranklinCalendarScreen(
+                onBack = onCloseBenjaminFranklinCalendar,
+                modifier = modifier
+            )
+        } else if (franklinDashboardOpen) {
+            BenjaminFranklinDashboard(
+                onBack = onCloseBenjaminFranklin,
+                onOpenHistory = onOpenBenjaminFranklinCalendar,
+                modifier = modifier
+            )
         } else if (analyticsOpen) {
             AnalyticsScreen(
                 range = analyticsRange,
@@ -2123,6 +2148,7 @@ internal fun Dashboard(
                 onOpenPremiumSimulator = onOpenPremiumSimulator,
                 onBack = onCloseSettings,
                 onOpenAnalytics = onOpenAnalytics,
+                onOpenBenjaminFranklin = onOpenBenjaminFranklin,
                 onOpenStrictMode = onOpenStrictMode,
                 onOpenUsageAccessSettings = onOpenUsageAccessSettings,
                 onOpenAccessibilitySettings = onOpenAccessibilitySettings,
@@ -2660,6 +2686,8 @@ fun DashboardPreview() {
             selectedRuleDetailId = null,
             settingsOpen = false,
             analyticsOpen = false,
+            franklinDashboardOpen = false,
+            franklinCalendarOpen = false,
             analyticsRange = AnalyticsRange.SevenDays,
             analyticsSelectedDate = LocalDate.now(),
             analyticsState = AnalyticsUiState.Loading,
@@ -2701,6 +2729,10 @@ fun DashboardPreview() {
             onOpenAnalyticsApp = {},
             onBackFromAnalyticsApp = {},
             onCloseSettings = {},
+            onOpenBenjaminFranklin = {},
+            onCloseBenjaminFranklin = {},
+            onOpenBenjaminFranklinCalendar = {},
+            onCloseBenjaminFranklinCalendar = {},
             pendingFeedbackCount = 0,
             shakeToReportEnabled = false,
             shakeSettingError = null,

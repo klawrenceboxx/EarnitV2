@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -129,6 +130,8 @@ internal fun EarnItRuleDetail(
     var otherPauseReason by remember(rule.id) { mutableStateOf("") }
     var pauseCountdownSeconds by remember(rule.id) { mutableStateOf(10) }
     var customPauseMinutes by remember(rule.id) { mutableStateOf("45") }
+    var quickPauseActive by remember(rule.id) { mutableStateOf(false) }
+    var quickPauseCountdown by remember(rule.id) { mutableStateOf(10) }
     var bfHistoryOpen by remember(rule.id) { mutableStateOf(false) }
 
     LaunchedEffect(pausedUntilMillis) {
@@ -158,6 +161,19 @@ internal fun EarnItRuleDetail(
             if (pauseSheetState == PauseSheetState.Counting) pauseSheetState = PauseSheetState.Reason
         }
     }
+    LaunchedEffect(quickPauseActive) {
+        if (quickPauseActive) {
+            quickPauseCountdown = 10
+            while (quickPauseCountdown > 0 && quickPauseActive) {
+                delay(1_000)
+                quickPauseCountdown -= 1
+            }
+            if (quickPauseActive) {
+                onPauseRuleFor(rule, FIVE_MINUTES_MILLIS, null)
+                quickPauseActive = false
+            }
+        }
+    }
 
     val statusState = ruleDetailStatusCardState(
         rule = rule,
@@ -168,6 +184,7 @@ internal fun EarnItRuleDetail(
     val logicalBack = {
         when {
             editGateState != EditGateState.Hidden -> editGateState = EditGateState.Hidden
+            quickPauseActive -> quickPauseActive = false
             pauseSheetState != PauseSheetState.Hidden -> pauseSheetState = PauseSheetState.Hidden
             else -> onBack()
         }
@@ -189,6 +206,26 @@ internal fun EarnItRuleDetail(
             )
         }
         return
+    }
+
+    if (quickPauseActive) {
+        AlertDialog(
+            onDismissRequest = { quickPauseActive = false },
+            title = { Text("Pause for 5 minutes?") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Pausing in $quickPauseCountdown second${if (quickPauseCountdown == 1) "" else "s"}…")
+                    LinearProgressIndicator(
+                        progress = { 1f - quickPauseCountdown / 10f },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { quickPauseActive = false }) { Text("Cancel") }
+            }
+        )
     }
 
     if (pauseSheetState != PauseSheetState.Hidden) {
@@ -243,7 +280,7 @@ internal fun EarnItRuleDetail(
             rule = rule,
             onBack = logicalBack,
             onEditRule = { editGateState = EditGateState.Confirm },
-            onQuickPause = { onPauseRuleFor(rule, FIVE_MINUTES_MILLIS, null) },
+            onQuickPause = { quickPauseActive = true },
             onMorePauseOptions = { pauseSheetState = PauseSheetState.Options },
             onOpenStrictMode = onOpenStrictMode,
             onDeleteRule = onDeleteRule

@@ -251,6 +251,7 @@ internal fun EarnItSettings(
     onOpenPremiumSimulator: () -> Unit = {},
     onBack: () -> Unit,
     onOpenAnalytics: () -> Unit,
+    onOpenBenjaminFranklin: () -> Unit = {},
     onOpenStrictMode: () -> Unit,
     onOpenUsageAccessSettings: () -> Unit,
     onOpenAccessibilitySettings: () -> Unit,
@@ -281,48 +282,90 @@ internal fun EarnItSettings(
             }
         }
 
-        Card(
-            modifier = Modifier.fillMaxWidth().clickable(onClick = onOpenPro),
-            shape = RoundedCornerShape(18.dp),
-            colors = CardDefaults.cardColors(
-                containerColor = if (entitlementState.grantsPremium) {
-                    MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = .48f)
-                } else {
-                    MaterialTheme.colorScheme.primaryContainer.copy(alpha = .32f)
-                }
-            ),
-            border = BorderStroke(
-                1.dp,
-                if (entitlementState.grantsPremium) MaterialTheme.colorScheme.tertiary
-                else MaterialTheme.colorScheme.primary.copy(alpha = .7f)
-            )
-        ) {
-            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    SettingsSymbolBadge(symbol = "♛", emphasized = true)
-                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                        Text("EarnIt Pro", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                        Text(
-                            if (entitlementState.grantsPremium) {
+        if (entitlementState.grantsPremium) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(20.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = .28f)
+                ),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.tertiary.copy(alpha = .5f))
+            ) {
+                Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        SettingsSymbolBadge(symbol = "♛", emphasized = true)
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text("EarnIt Pro", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                            Text(
                                 if (entitlementState.offline) "Active from your last check while we reconnect."
-                                else "Unlimited Rules, Strict Mode, Deep Work, and full insights."
-                            } else {
-                                "Unlimited Rules, Strict Mode, Deep Work, and full insights."
-                            },
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                                else "Unlimited Rules · Deep Work · Strict Mode · Insights",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        SettingsStatusBadge("Active")
                     }
-                    SettingsStatusBadge(if (entitlementState.grantsPremium) "Active" else "View Pro")
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = .5f))
+                    Column(verticalArrangement = Arrangement.spacedBy(0.dp)) {
+                        Surface(
+                            modifier = Modifier.fillMaxWidth().clickable(onClick = onManageSubscription),
+                            color = androidx.compose.ui.graphics.Color.Transparent
+                        ) {
+                            Row(
+                                Modifier.padding(vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text("Manage Subscription", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                                Text("›", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.titleMedium)
+                            }
+                        }
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = .3f))
+                        Surface(
+                            modifier = Modifier.fillMaxWidth().clickable(onClick = onRestorePurchases),
+                            color = androidx.compose.ui.graphics.Color.Transparent
+                        ) {
+                            Row(
+                                Modifier.padding(vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text("Restore Purchases", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                                Text("›", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.titleMedium)
+                            }
+                        }
+                    }
                 }
-                if (entitlementState.grantsPremium) {
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        TextButton(onClick = onManageSubscription, modifier = Modifier.weight(1f)) {
-                            Text("Manage")
+            }
+        } else {
+            Card(
+                modifier = Modifier.fillMaxWidth().clickable(onClick = onOpenPro),
+                shape = RoundedCornerShape(20.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = .28f)
+                ),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = .5f))
+            ) {
+                Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        SettingsSymbolBadge(symbol = "♛", emphasized = true)
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text("EarnIt Pro", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                            Text(
+                                "Unlimited Rules, Deep Work, Strict Mode & weekly insights.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
-                        TextButton(onClick = onRestorePurchases, modifier = Modifier.weight(1f)) {
-                            Text("Restore")
-                        }
+                    }
+                    Button(
+                        onClick = onOpenPro,
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                    ) {
+                        Text("Unlock Pro", fontWeight = FontWeight.SemiBold)
                     }
                 }
             }
@@ -359,6 +402,30 @@ internal fun EarnItSettings(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.titleLarge
                 )
+            }
+        }
+
+        Card(
+            modifier = Modifier.fillMaxWidth().clickable(onClick = onOpenBenjaminFranklin),
+            shape = RoundedCornerShape(18.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth().heightIn(min = 78.dp).padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                SettingsSymbolBadge(symbol = "B", emphasized = true)
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                    Text("Benjamin Franklin Mode", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        "View today's commitment, reminders, and history",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Text("›", modifier = Modifier.clearAndSetSemantics { }, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.titleLarge)
             }
         }
 

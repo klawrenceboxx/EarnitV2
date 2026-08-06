@@ -1,6 +1,8 @@
 package com.kaleel.earnitv2
 
 import android.app.Application
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.content.Context
 import com.posthog.android.PostHogAndroid
 import com.posthog.android.PostHogAndroidConfig
@@ -9,6 +11,7 @@ import java.util.UUID
 class MainApplication : Application() {
     override fun onCreate() {
         super.onCreate()
+        createNotificationChannels()
         val projectToken = BuildConfig.POSTHOG_PROJECT_TOKEN
         val host = BuildConfig.POSTHOG_HOST
         if (projectToken.isBlank()) {
@@ -33,6 +36,18 @@ class MainApplication : Application() {
         return prefs.getString("installation_id", null) ?: UUID.randomUUID().toString().also {
             prefs.edit().putString("installation_id", it).apply()
         }
+    }
+
+    private fun createNotificationChannels() {
+        val manager = getSystemService(NotificationManager::class.java)
+        val channel = NotificationChannel(
+            BenjaminFranklinReceiver.CHANNEL_ID,
+            "Daily Commitment Reminders",
+            NotificationManager.IMPORTANCE_DEFAULT
+        ).apply {
+            description = "Morning and evening reminders for Benjamin Franklin Mode commitments."
+        }
+        manager.createNotificationChannel(channel)
     }
 
     private fun requirePostHogConfiguration(variableName: String) {

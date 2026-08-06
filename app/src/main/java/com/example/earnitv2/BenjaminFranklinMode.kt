@@ -14,7 +14,16 @@ data class DailyCommitment(
     val completedAtMillis: Long? = null
 )
 
-enum class CompletionStatus { Pending, Completed, Missed }
+enum class CompletionStatus { Pending, Completed, Missed, NotReviewed }
+
+data class BfReminderPreferences(
+    val morningEnabled: Boolean = false,
+    val morningHour: Int = 8,
+    val morningMinute: Int = 0,
+    val eveningEnabled: Boolean = false,
+    val eveningHour: Int = 20,
+    val eveningMinute: Int = 0
+)
 
 object BenjaminFranklinStore {
     private const val PREFS = "benjamin_franklin_mode"
@@ -28,13 +37,21 @@ object BenjaminFranklinStore {
             .getString(PREFIX + date, null) ?: return null
         val values = raw.split(SEPARATOR)
         val commitment = values.getOrNull(0)?.takeIf { it.isNotBlank() } ?: return null
+        val storedStatus = values.getOrNull(3)
+            ?.let { runCatching { CompletionStatus.valueOf(it) }.getOrNull() }
+            ?: CompletionStatus.Pending
+        // Past entries left as Pending (e.g. app was uninstalled/cleared) are treated as NotReviewed.
+        val resolvedStatus = if (storedStatus == CompletionStatus.Pending && date.isBefore(LocalDate.now())) {
+            CompletionStatus.NotReviewed
+        } else {
+            storedStatus
+        }
         return DailyCommitment(
             date = date,
             commitment = commitment,
             estimatedMinutes = values.getOrNull(1)?.toIntOrNull()?.coerceAtLeast(1) ?: 1,
             importance = values.getOrNull(2)?.takeIf { it.isNotBlank() },
-            completionStatus = values.getOrNull(3)?.let { runCatching { CompletionStatus.valueOf(it) }.getOrNull() }
-                ?: CompletionStatus.Pending,
+            completionStatus = resolvedStatus,
             reflection = values.getOrNull(4)?.takeIf { it.isNotBlank() },
             createdAtMillis = values.getOrNull(5)?.toLongOrNull() ?: 0L,
             completedAtMillis = values.getOrNull(6)?.toLongOrNull()
@@ -62,6 +79,29 @@ object BenjaminFranklinStore {
         ))
     }
 
+    fun getReminderPreferences(context: Context): BfReminderPreferences {
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        return BfReminderPreferences(
+            morningEnabled = prefs.getBoolean("reminder_morning_enabled", false),
+            morningHour = prefs.getInt("reminder_morning_hour", 8),
+            morningMinute = prefs.getInt("reminder_morning_minute", 0),
+            eveningEnabled = prefs.getBoolean("reminder_evening_enabled", false),
+            eveningHour = prefs.getInt("reminder_evening_hour", 20),
+            eveningMinute = prefs.getInt("reminder_evening_minute", 0)
+        )
+    }
+
+    fun saveReminderPreferences(context: Context, prefs: BfReminderPreferences) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putBoolean("reminder_morning_enabled", prefs.morningEnabled)
+            .putInt("reminder_morning_hour", prefs.morningHour)
+            .putInt("reminder_morning_minute", prefs.morningMinute)
+            .putBoolean("reminder_evening_enabled", prefs.eveningEnabled)
+            .putInt("reminder_evening_hour", prefs.eveningHour)
+            .putInt("reminder_evening_minute", prefs.eveningMinute)
+            .apply()
+    }
+
     private fun save(context: Context, record: DailyCommitment) {
         val raw = listOf(
             record.commitment.replace(SEPARATOR, " "), record.estimatedMinutes.toString(),
@@ -69,6 +109,7 @@ object BenjaminFranklinStore {
             record.reflection.orEmpty().replace(SEPARATOR, " "), record.createdAtMillis.toString(),
             record.completedAtMillis?.toString().orEmpty()
         ).joinToString(SEPARATOR)
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString(PREFIX + record.date, raw).apply()
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putString(PREFIX + record.date, raw).apply()
     }
 }

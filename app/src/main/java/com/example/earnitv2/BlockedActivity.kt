@@ -72,11 +72,15 @@ class BlockedActivity : ComponentActivity() {
             EarnitV2Theme(darkTheme = true, dynamicColor = false) {
                 BackHandler(onBack = ::returnHome)
                 if (blockedReason == RuleAccessEvaluator.DenialReason.DailyCommitmentMissing) {
-                    DailyCommitmentScreen(onCommit = { commitment, minutes, importance ->
-                        BenjaminFranklinStore.saveToday(this, commitment, minutes, importance)
-                        updateRuleFromIntent(intent)
-                        blockedPackage?.let { packageName -> openApp(packageName, blockedAppName) } ?: returnHome()
-                    })
+                    DailyCommitmentScreen(
+                        blockedAppName = blockedAppName ?: "this app",
+                        onCommit = { commitment, minutes, importance ->
+                            BenjaminFranklinStore.saveToday(this, commitment, minutes, importance)
+                            updateRuleFromIntent(intent)
+                            blockedPackage?.let { packageName -> openApp(packageName, blockedAppName) } ?: returnHome()
+                        },
+                        onNotNow = ::returnHome
+                    )
                 } else BlockedScreen(
                     blockedAppName = blockedAppName,
                     blockedPackage = blockedPackage,
@@ -588,7 +592,11 @@ fun blockedDescription(reason: RuleAccessEvaluator.DenialReason, blockedAppName:
 }
 
 @Composable
-private fun DailyCommitmentScreen(onCommit: (String, Int, String) -> Unit) {
+private fun DailyCommitmentScreen(
+    blockedAppName: String,
+    onCommit: (String, Int, String) -> Unit,
+    onNotNow: () -> Unit
+) {
     var commitment by remember { mutableStateOf("") }
     var estimatedMinutes by remember { mutableStateOf("60") }
     var importance by remember { mutableStateOf("") }
@@ -598,8 +606,10 @@ private fun DailyCommitmentScreen(onCommit: (String, Int, String) -> Unit) {
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         Text(text = "Benjamin Franklin Mode", style = MaterialTheme.typography.titleMedium)
-        Text(text = "What good shall I accomplish today?", style = MaterialTheme.typography.headlineSmall)
-        Text(text = "Choose one intentional commitment before unlocking this app.", style = MaterialTheme.typography.bodyMedium)
+        Text(
+            text = "Before $blockedAppName can unlock, choose what good you will accomplish today.",
+            style = MaterialTheme.typography.headlineSmall
+        )
         TextField(value = commitment, onValueChange = { commitment = it }, label = { Text("Today's commitment") }, modifier = Modifier.fillMaxWidth())
         TextField(value = estimatedMinutes, onValueChange = { estimatedMinutes = it.filter(Char::isDigit) }, label = { Text("Estimated duration (minutes)") }, modifier = Modifier.fillMaxWidth())
         TextField(value = importance, onValueChange = { importance = it }, label = { Text("Why is this important? (optional)") }, modifier = Modifier.fillMaxWidth())
@@ -607,7 +617,10 @@ private fun DailyCommitmentScreen(onCommit: (String, Int, String) -> Unit) {
             onClick = { onCommit(commitment.trim(), estimatedMinutes.toIntOrNull() ?: 0, importance) },
             enabled = commitment.isNotBlank() && (estimatedMinutes.toIntOrNull() ?: 0) > 0,
             modifier = Modifier.fillMaxWidth()
-        ) { Text("Commit for today") }
+        ) { Text("Set today's commitment") }
+        TextButton(onClick = onNotNow, modifier = Modifier.fillMaxWidth()) {
+            Text("Not now")
+        }
     }
 }
 
