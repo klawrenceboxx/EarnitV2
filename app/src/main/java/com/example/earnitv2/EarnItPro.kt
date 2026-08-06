@@ -128,30 +128,30 @@ fun PremiumGateDialog(
     ) {
         Column(
             Modifier.fillMaxWidth().verticalScroll(rememberScrollState())
-                .padding(start = 20.dp, end = 20.dp, bottom = 28.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+                .padding(start = 24.dp, end = 24.dp, top = 8.dp, bottom = 36.dp),
+            verticalArrangement = Arrangement.spacedBy(20.dp)
         ) {
             Surface(
-                shape = RoundedCornerShape(16.dp),
+                shape = RoundedCornerShape(20.dp),
                 color = WarmSurfaceRaised,
                 border = BorderStroke(1.dp, WarmOutline),
                 modifier = Modifier.semantics { contentDescription = copy.iconSemantic }
             ) {
-                Text(copy.icon, Modifier.padding(horizontal = 17.dp, vertical = 12.dp), color = WarmCoral, style = MaterialTheme.typography.headlineSmall)
+                Text(copy.icon, Modifier.padding(horizontal = 22.dp, vertical = 16.dp), color = WarmCoral, style = MaterialTheme.typography.headlineMedium)
             }
-            Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                Text(copy.title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, color = WarmText)
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(copy.title, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold, color = WarmText)
                 Text(copy.body, style = MaterialTheme.typography.bodyLarge, color = WarmTextMuted)
             }
             Surface(
                 color = WarmSurface,
-                shape = RoundedCornerShape(18.dp),
+                shape = RoundedCornerShape(20.dp),
                 border = BorderStroke(1.dp, WarmOutline)
             ) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                     copy.benefits.forEach { benefit ->
-                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Text("✓", color = WarmCoral, fontWeight = FontWeight.Bold)
+                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text("✓", color = WarmCoral, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyLarge)
                             Text(benefit, color = WarmText, style = MaterialTheme.typography.bodyMedium)
                         }
                     }
@@ -159,10 +159,10 @@ fun PremiumGateDialog(
             }
             Button(
                 onClick = onUpgrade,
-                modifier = Modifier.fillMaxWidth().heightIn(min = 54.dp),
+                modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = WarmCoral, contentColor = WarmInk)
             ) {
-                Text("See Pro plans")
+                Text("See Pro plans", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
             }
             TextButton(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) {
                 Text("Maybe later", color = WarmTextMuted)
@@ -248,23 +248,47 @@ fun EarnItProScreen(
 private fun ProIntro(onSeePlans: () -> Unit, onClose: () -> Unit, modifier: Modifier) {
     ProPage("EarnIt Pro", onClose, modifier) {
         Text("♛", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.displaySmall)
-        Text(
-            "More freedom.\nMore focus. More you.",
-            style = MaterialTheme.typography.headlineSmall,
-            fontWeight = FontWeight.Bold,
-            textAlign = TextAlign.Center
-        )
-        listOf(
-            "Unlimited active Rules" to "Create as many Rules as you need.",
-            "Deep Work Mode" to "Start focused sessions with stronger distraction blocking.",
-            "Strict Mode" to "Lock your Rules and stay committed.",
-            "7-Day Analytics & Insights" to "See patterns and progress over time."
-        ).forEach { (title, detail) -> ProFeatureRow(title, detail) }
-        Spacer(Modifier.weight(1f))
-        Button(onClick = onSeePlans, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) {
-            Text("See Plans")
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text(
+                "More freedom.\nMore focus.\nMore you.",
+                style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center
+            )
+            Text(
+                "EarnIt Pro unlocks the full toolkit for building better habits.",
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center
+            )
         }
-        TextButton(onClick = onClose) { Text("Maybe later") }
+        Surface(
+            shape = RoundedCornerShape(20.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
+        ) {
+            Column(
+                Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                listOf(
+                    "Unlimited active Rules" to "Create as many Rules as you need.",
+                    "Deep Work Mode" to "Start focused sessions with stronger distraction blocking.",
+                    "Strict Mode" to "Lock your Rules and stay committed.",
+                    "7-Day Analytics & Insights" to "See patterns and progress over time."
+                ).forEach { (title, detail) -> ProFeatureRow(title, detail) }
+            }
+        }
+        Spacer(Modifier.weight(1f))
+        Button(
+            onClick = onSeePlans,
+            modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)
+        ) {
+            Text("See Plans", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+        }
+        TextButton(onClick = onClose, modifier = Modifier.fillMaxWidth()) { Text("Maybe later") }
     }
 }
 
@@ -279,26 +303,31 @@ private fun PlanSelection(
     onBack: () -> Unit,
     modifier: Modifier
 ) {
-    ProPage("", onBack, modifier, spacing = 12) {
-        Surface(shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.primaryContainer) {
-            Text("✦", Modifier.padding(horizontal = 12.dp, vertical = 8.dp), color = MaterialTheme.colorScheme.primary)
+    ProPage("", onBack, modifier, spacing = 16) {
+        Surface(shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.primaryContainer) {
+            Text("✦", Modifier.padding(horizontal = 14.dp, vertical = 10.dp), color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.titleMedium)
         }
-        Text(
-            "Upgrade to EarnIt Pro",
-            style = MaterialTheme.typography.headlineSmall,
-            fontWeight = FontWeight.Bold,
-            textAlign = TextAlign.Center
-        )
-        Text(
-            "Unlock unlimited Rules, Deep Work, Strict Mode, and weekly insights.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center
-        )
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text(
+                "Upgrade to EarnIt Pro",
+                style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center
+            )
+            Text(
+                "Unlock unlimited Rules, Deep Work, Strict Mode, and weekly insights.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center
+            )
+        }
         PlanCard(
             plan = config.annual,
             selected = flow.selectedPlanId == config.annual.id,
-            badge = "Most Popular",
+            badge = "Best Value · Most Popular",
             supporting = "$${config.annualMonthlyEquivalent}/month equivalent",
             savings = "Save ${config.yearlySavingsPercent}%",
             trialText = if (config.annualTrialEnabled) "${config.annual.trialDays}-day free trial" else null,
@@ -309,14 +338,29 @@ private fun PlanSelection(
             selected = flow.selectedPlanId == config.monthly.id,
             onSelect = { onSelect(config.monthly) }
         )
-        listOf("Cancel anytime", "Works across your devices", "Secure payment with Google Play")
-            .forEach { Text("✓  $it", style = MaterialTheme.typography.bodySmall) }
+        Surface(
+            shape = RoundedCornerShape(14.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.30f)
+        ) {
+            Column(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                listOf("Cancel anytime", "Works across your devices", "Secure payment with Google Play")
+                    .forEach { trust ->
+                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text("✓", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+                            Text(trust, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+            }
+        }
         Button(
             onClick = onContinue,
-            modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
+            modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
             colors = ButtonDefaults.buttonColors(containerColor = WarmCoral, contentColor = WarmInk)
         ) {
-            Text("Continue")
+            Text("Continue", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
         }
         ProActionRow("Compare Plans", onCompare)
         ProActionRow("Restore Purchases", onRestore)
@@ -335,9 +379,9 @@ private fun ProActionRow(label: String, onClick: () -> Unit) {
         color = androidx.compose.ui.graphics.Color.Transparent,
         shape = RoundedCornerShape(12.dp)
     ) {
-        Row(Modifier.padding(horizontal = 10.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.padding(horizontal = 10.dp, vertical = 13.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(label, Modifier.weight(1f), color = WarmCoral, fontWeight = FontWeight.SemiBold)
-            Text("›", color = WarmCoral)
+            Text("›", color = WarmCoral, style = MaterialTheme.typography.titleMedium)
         }
     }
 }
@@ -358,30 +402,47 @@ private fun PlanCard(
             .clickable(role = Role.RadioButton, onClick = onSelect)
             .semantics { contentDescription = "${plan.displayName} plan, ${plan.formattedPrice}, ${if (selected) "selected" else "not selected"}" },
         colors = CardDefaults.cardColors(
-            containerColor = if (selected) WarmCoral.copy(alpha = .16f)
+            containerColor = if (selected) WarmCoral.copy(alpha = .12f)
             else MaterialTheme.colorScheme.surface
         ),
         border = BorderStroke(
             if (selected) 2.dp else 1.dp,
             if (selected) WarmCoral else MaterialTheme.colorScheme.outlineVariant
         ),
-        shape = RoundedCornerShape(16.dp)
+        shape = RoundedCornerShape(18.dp)
     ) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            badge?.let { Text(it, color = WarmCoral, style = MaterialTheme.typography.labelMedium) }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Column {
+        badge?.let {
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .background(WarmCoral.copy(alpha = if (selected) 0.90f else 0.75f))
+                    .padding(horizontal = 20.dp, vertical = 7.dp)
+            ) {
+                Text(it, color = WarmInk, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
+            }
+        }
+        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text(plan.displayName, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                     Text(
                         "${plan.formattedPrice}/${if (plan.billingPeriod == BillingPeriod.Annual) "year" else "month"}",
-                        style = MaterialTheme.typography.headlineSmall,
+                        style = MaterialTheme.typography.headlineMedium,
                         fontWeight = FontWeight.Bold
                     )
                 }
-                Text(if (selected) "◉" else "○", color = WarmCoral, style = MaterialTheme.typography.titleLarge)
+                Text(
+                    if (selected) "◉" else "○",
+                    color = if (selected) WarmCoral else MaterialTheme.colorScheme.outlineVariant,
+                    style = MaterialTheme.typography.headlineSmall
+                )
             }
-            supporting?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
-            savings?.let { Text(it, color = WarmCoral, style = MaterialTheme.typography.labelMedium) }
+            supporting?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            savings?.let { Text(it, color = WarmCoral, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold) }
             trialText?.let { Text(it, color = MaterialTheme.colorScheme.tertiary, style = MaterialTheme.typography.labelMedium) }
         }
     }
@@ -512,12 +573,17 @@ private fun PurchaseStatusScreen(
 
 @Composable
 private fun ProFeatureRow(title: String, detail: String) {
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-        Surface(shape = CircleShape, color = MaterialTheme.colorScheme.primaryContainer) {
-            Text("✦", Modifier.padding(10.dp), color = MaterialTheme.colorScheme.primary)
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp), verticalAlignment = Alignment.Top) {
+        Surface(shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.primaryContainer) {
+            Text(
+                "✦",
+                Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                color = MaterialTheme.colorScheme.primary,
+                style = MaterialTheme.typography.titleMedium
+            )
         }
-        Column(Modifier.weight(1f)) {
-            Text(title, fontWeight = FontWeight.SemiBold)
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Text(title, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodyLarge)
             Text(detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
@@ -532,7 +598,7 @@ private fun ProPage(
     content: @Composable ColumnScope.() -> Unit
 ) {
     Column(
-        modifier = modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+        modifier = modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp, vertical = 16.dp),
         verticalArrangement = Arrangement.spacedBy(spacing.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {

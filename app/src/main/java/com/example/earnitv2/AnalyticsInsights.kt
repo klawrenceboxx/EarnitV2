@@ -46,21 +46,30 @@ object AnalyticsInsightEngine {
         if (previousReward != null) changeCandidate(previousReward, summary.rewardSeconds, true)?.let(candidates::add)
         if (previousEarn != null) changeCandidate(previousEarn, summary.earnSeconds, false)?.let(candidates::add)
         if (previousReward != null && previousEarn != null && previousReward - summary.rewardSeconds >= AnalyticsThresholds.MIN_CHANGE_SECONDS && summary.earnSeconds - previousEarn >= AnalyticsThresholds.MIN_CHANGE_SECONDS) {
+            val rewardDrop = analyticsDuration(previousReward - summary.rewardSeconds)
+            val earnGain = analyticsDuration(summary.earnSeconds - previousEarn)
             candidates += InsightCandidate(InsightType.ProductiveReplacementPattern,
-                "You spent ${analyticsDuration(previousReward - summary.rewardSeconds)} less on Reward Apps and ${analyticsDuration(summary.earnSeconds - previousEarn)} more in Earn Apps.",
-                "These changes happened in the same period; EarnIt does not assume one caused the other.", 92)
+                "You shifted time from Reward to Earn Apps this period.",
+                "Reward down $rewardDrop, Earn up $earnGain. This is exactly the pattern EarnIt is designed to reinforce.", 92)
         }
         summary.dailyUsage.maxByOrNull { it.earnSeconds }?.takeIf { best -> best.earnSeconds >= 15 * 60 && summary.dailyUsage.count { it.earnSeconds >= best.earnSeconds * .8 } == 1 }?.let {
-            candidates += InsightCandidate(InsightType.MostProductiveDay, "${it.date.dayOfWeek.name.lowercase().replaceFirstChar(Char::uppercase)} was your most productive day.", score = 68)
+            val day = it.date.dayOfWeek.name.lowercase().replaceFirstChar(Char::uppercase)
+            candidates += InsightCandidate(InsightType.MostProductiveDay,
+                "$day was your strongest day.",
+                "You earned more time than any other day this period. Try repeating what made that day work.", score = 68)
         }
         summary.peakRewardWindow?.let {
-            candidates += InsightCandidate(InsightType.PeakDistractionWindow, "Most of your Reward App usage happens between ${formatHour(it.startHour)} and ${formatHour(it.endHourExclusive)}.", score = 76)
+            candidates += InsightCandidate(InsightType.PeakDistractionWindow,
+                "Your highest-risk window is ${formatHour(it.startHour)}–${formatHour(it.endHourExclusive)}.",
+                "Most of your Reward App usage clusters here. A Scheduled Block could protect your focus during this time.", score = 76)
         }
         summary.apps.firstOrNull { it.classification == AnalyticsClassification.Reward }?.takeIf { it.totalSeconds >= 20 * 60 }?.let {
-            candidates += InsightCandidate(InsightType.MostUsedRewardApp, "${it.appName} was your most-used Reward App at ${analyticsDuration(it.totalSeconds)}.", score = 62, relatedId = it.packageName)
+            candidates += InsightCandidate(InsightType.MostUsedRewardApp,
+                "${it.appName} took ${analyticsDuration(it.totalSeconds)} of your time.",
+                "Consider adding a Scheduled Block or time cap to keep it in check.", score = 62, relatedId = it.packageName)
         }
         summary.rulePerformance.filter { it.type == EarnItRuleStore.RuleType.ScheduledBlock && it.primaryMetric != null }.forEach {
-            candidates += InsightCandidate(InsightType.ScheduledBlockSuccess, it.primaryMetric!!, "Your Scheduled Block caught these launches during its active times.", 72, it.ruleId)
+            candidates += InsightCandidate(InsightType.ScheduledBlockSuccess, it.primaryMetric!!, "Your Scheduled Block held the line during its active window. Keep it in place.", 72, it.ruleId)
         }
         return candidates.map { candidate ->
             val today = LocalDate.now().toEpochDay()
@@ -77,9 +86,23 @@ object AnalyticsInsightEngine {
         val decreased = delta < 0
         val type = when { reward && decreased -> InsightType.RewardUsageDecreased; reward -> InsightType.RewardUsageIncreased; decreased -> InsightType.EarnUsageDecreased; else -> InsightType.EarnUsageIncreased }
         val noun = if (reward) "Reward Apps" else "Earn Apps"
-        val direction = if (decreased) "less" else "more"
         val amount = abs(delta)
-        val projection = if (reward && decreased) projectedYearlyHours(amount)?.let { "If that continues, that is roughly $it hours over a year." } else null
-        return InsightCandidate(type, "You spent ${analyticsDuration(amount)} $direction on $noun in this period.", projection, 80 + (amount / 900).toInt().coerceAtMost(15))
+        val title: String
+        val supporting: String?
+        if (reward && decreased) {
+            title = "Reward App usage dropped by ${analyticsDuration(amount)}."
+            supporting = projectedYearlyHours(amount)?.let { "If that continues, that's roughly $it fewer hours on distracting apps over a year." }
+                ?: "Keep the momentum — that's real progress."
+        } else if (reward) {
+            title = "$noun usage went up ${analyticsDuration(amount)}."
+            supporting = "A Scheduled Block during your peak hours could help bring this back down."
+        } else if (decreased) {
+            title = "Earn time dropped by ${analyticsDuration(amount)} this period."
+            supporting = "Just 10 extra minutes a day would recover that progress. Small consistency compounds fast."
+        } else {
+            title = "Earn time increased by ${analyticsDuration(amount)}."
+            supporting = "Keep building this habit — the gap between Earn and Reward is moving in the right direction."
+        }
+        return InsightCandidate(type, title, supporting, 80 + (amount / 900).toInt().coerceAtMost(15))
     }
 }
