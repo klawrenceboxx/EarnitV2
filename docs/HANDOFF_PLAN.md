@@ -64,7 +64,7 @@ Done when: the build is green and the checklist is filled in on the PR.
 | R3 | Screen off inside a reward app: the 1s tick stopped during sleep, then charged the whole gap on wake | Stop the clock on `ACTION_SCREEN_OFF`; cap a single tick at 10s | service `unlockReceiver`, `ProtectedUsageClock.tick` |
 | R4 | After unlock, service restart or app update, whatever was in front was not evaluated until its next window change (free use) | `enforceCurrentForeground()` on connect and on `USER_PRESENT` | `EarnItAccessibilityService` |
 | R5 | Accessibility switched off meant silent fail-open | Notification from `onUnbind` when enabled Rules exist | `ProtectionStatusNotifier` |
-| R6 | Processed Deep Work session ids grew without bound | Cleared on day rollover | `RewardLedger.ensureCurrentDay` |
+| R6 | Processed Deep Work session ids grew without bound | Cleared on day rollover | `RewardLedger.currentPrefs` |
 
 ### Device checklist (none of this has been run)
 
