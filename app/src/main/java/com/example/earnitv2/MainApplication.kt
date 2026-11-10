@@ -12,6 +12,8 @@ class MainApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannels()
+        ProtectionStatusNotifier.createChannel(this)
+        if (CloudSync.isSignedIn(this)) CloudSyncWorker.schedule(this)
         val projectToken = BuildConfig.POSTHOG_PROJECT_TOKEN
         val host = BuildConfig.POSTHOG_HOST
         if (projectToken.isBlank()) {

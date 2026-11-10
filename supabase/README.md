@@ -54,3 +54,13 @@ Submit text-only and screenshot reports, then confirm:
 - airplane mode produces a local queued report, and reconnecting lets WorkManager deliver it.
 
 The function never persists a raw IP address. It hashes a server-observed address together with a secret salt and the anonymous installation ID for an hourly abuse-control key.
+
+## Cloud Sync
+
+Opt-in Rule backup and sync uses the same project. Contract and merge rules: `docs/CLOUD_SYNC.md`.
+
+1. `npx supabase db push` applies `202611100001_cloud_sync.sql` (the `sync_records` table, row-level security, and the newest-write trigger).
+2. Dashboard → Authentication → Email Templates → Magic Link: add `{{ .Token }}` so the sign-in email shows the 6-digit code.
+3. No new Android configuration: sync reuses `FEEDBACK_SUPABASE_URL` and `FEEDBACK_SUPABASE_ANON_KEY`.
+
+Verify with two installs signed in to the same email: create a Rule on one, tap Sync now on both, and confirm it appears on the second; delete it on the second and confirm it disappears from the first. With a second account, confirm `select` on `sync_records` returns only that account's rows.

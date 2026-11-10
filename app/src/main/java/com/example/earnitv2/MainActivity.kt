@@ -125,6 +125,7 @@ internal fun unavailableRequirementAppPackages(
 class MainActivity : ComponentActivity() {
     private val feedbackViewModel: FeedbackViewModel by viewModels()
     private var feedbackOpen by mutableStateOf(false)
+    private var cloudSyncOpen by mutableStateOf(false)
     private var feedbackCrashPrompt by mutableStateOf<CrashDiagnostics?>(null)
     private lateinit var feedbackPreferences: FeedbackPreferences
     private var shakeSettingError by mutableStateOf<String?>(null)
@@ -315,7 +316,13 @@ class MainActivity : ComponentActivity() {
                     refreshDashboardState()
                 }
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    if (feedbackOpen) {
+                    if (cloudSyncOpen) {
+                        CloudSyncScreen(
+                            onBack = { cloudSyncOpen = false },
+                            onRulesChanged = ::refreshDashboardState,
+                            modifier = Modifier.padding(innerPadding)
+                        )
+                    } else if (feedbackOpen) {
                         FeedbackScreen(
                             viewModel = feedbackViewModel,
                             strictModeEnabled = strictModeState.lifecycleState.isStrictModeProtecting(),
@@ -468,6 +475,7 @@ class MainActivity : ComponentActivity() {
                             shakeToReportEnabled = shakeEnabled,
                             shakeSettingError = shakeSettingError,
                             onOpenFeedback = { openFeedback(FeedbackEntrySource.SETTINGS) },
+                            onOpenCloudSync = { cloudSyncOpen = true },
                             onShakeToReportChange = {
                                 shakeSettingError = if (feedbackPreferences.setShakeEnabled(it)) {
                                     null
@@ -627,6 +635,7 @@ class MainActivity : ComponentActivity() {
         activityResumed = true
         settingsLaunchInProgress = false
         refreshDashboardState()
+        CloudSync.syncIfStale(this)
         reconcileOnboardingWithPermissions()
         if (analyticsOpen) loadAnalytics(forceRefresh = true)
         syncShakeController()
@@ -1937,6 +1946,7 @@ internal fun Dashboard(
     shakeToReportEnabled: Boolean,
     shakeSettingError: String?,
     onOpenFeedback: () -> Unit,
+    onOpenCloudSync: () -> Unit = {},
     onShakeToReportChange: (Boolean) -> Unit,
     onDebugShakeFeedback: () -> Unit,
     onClearDebugFeedback: () -> Unit,
@@ -2159,6 +2169,7 @@ internal fun Dashboard(
                 shakeToReportEnabled = shakeToReportEnabled,
                 shakeSettingError = shakeSettingError,
                 onOpenFeedback = onOpenFeedback,
+                onOpenCloudSync = onOpenCloudSync,
                 onShakeToReportChange = onShakeToReportChange,
                 onDebugShakeFeedback = onDebugShakeFeedback,
                 onClearDebugFeedback = onClearDebugFeedback,

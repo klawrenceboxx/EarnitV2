@@ -74,6 +74,7 @@ All paths relative to `app/src/main/java/com/kaleel/earnitv2/` unless noted.
 | `EarnItRuleStore.kt` | Rule CRUD + serialization. Object singleton | `EarnItRuleStore`, `Rule`, `RuleType`, `LaunchableApp`, `RuleApp`, `TimeWindow` |
 | `RuleAccessEvaluator.kt` | Pure evaluation logic (zero Android deps). Returns `Result(denials, spendRule)` | `RuleAccessEvaluator`, `RuleRuntimeState`, `DenialReason` |
 | `RewardLedger.kt` | Earn/consume reward seconds. Reads `UsageStatsManager` for productive usage | `RewardLedger`, `LedgerSnapshot` |
+| `ProtectionStatusNotifier.kt` | Notifies when the Accessibility service is switched off while Rules are enabled | `ProtectionStatusNotifier` |
 | `ProtectedTarget.kt` | `ProtectedTarget` sealed class (App/Website). `ProtectedTargetResolver` picks app vs domain. `ProtectedUsageClock` tracks foreground ticks | `ProtectedTarget`, `ProtectedTargetResolver`, `ProtectedUsageClock` |
 
 **UI — Activities & screens**
@@ -173,6 +174,16 @@ All paths relative to `app/src/main/java/com/kaleel/earnitv2/` unless noted.
 | `SubscriptionConfig.kt` | Plan config + pricing (`$6.99/mo`, `$39.99/yr` placeholders). No Google Play Billing wired yet | `SubscriptionConfig`, `SubscriptionPlan` |
 | `AppPackages.kt` | Package name constants (Duolingo, Instagram, Lichess) | `AppPackages` |
 
+**Cloud Sync** (opt-in; contract in `docs/CLOUD_SYNC.md`)
+
+| File | Role | Key classes/functions |
+|---|---|---|
+| `CloudSyncCore.kt` | Pure sync logic, zero Android imports: JSON, Rule payload codec, journal, last-writer-wins planner | `SyncJson`, `RuleSyncCodec`, `SyncPlanner`, `SyncRecord` |
+| `CloudSyncEngine.kt` | One sync pass + session/journal persistence | `CloudSyncEngine`, `CloudSyncStore`, `CloudSyncBackend` |
+| `CloudSyncBackend.kt` | Supabase Auth (email code) + `sync_records` over plain HTTP | `SupabaseCloudSyncBackend` |
+| `CloudSyncWorker.kt` | WorkManager scheduling and app entry points | `CloudSync`, `CloudSyncWorker` |
+| `CloudSyncScreen.kt` | Settings → Cloud Sync sign-in and status UI | `CloudSyncScreen` |
+
 **Browser blocking**
 
 | File | Role |
@@ -215,13 +226,14 @@ enum class RuleType { EarnRewardTime, CompleteToUnlock, ScheduledBlock }
 | `earnit_reward_ledger` | Per-rule earn/consume balances |
 | `deep_work` | Deep Work session state |
 | `benjamin_franklin_mode` | Daily commitment records keyed by `LocalDate` |
-| `earnit_pause` | Active rule pauses with expiry |
+| `earnit_rule_pauses` | Active rule pauses with expiry |
 | `earnit_debug_entitlement` | Simulated entitlement state (debug/internal only) |
 | `earnit_analytics_events` | Blocked attempt counts keyed by `blocked\|date\|ruleId` |
 | `earnit_analytics_insights` | Insight display history (type, relatedId, timesShown, lastShownEpochDay) |
 | `earnit_setup` | Onboarding: `onboarding_seen`, `onboarding_step`, `onboarding_replay_active` |
 | `feedback_identity` | `installation_id` UUID (shared by PostHog and feedback diagnostics) |
 | `feedback_crash_marker` | Pending crash diagnostics from previous session (consumed once on next launch) |
+| `earnit_cloud_sync` | Cloud Sync session tokens, per-Rule sync journal, device id. Excluded from Android backup |
 
 ### Rule serialization
 

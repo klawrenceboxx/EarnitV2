@@ -262,6 +262,7 @@ internal fun EarnItSettings(
     shakeToReportEnabled: Boolean = false,
     shakeSettingError: String? = null,
     onOpenFeedback: () -> Unit = {},
+    onOpenCloudSync: () -> Unit = {},
     onShakeToReportChange: (Boolean) -> Unit = {},
     onDebugShakeFeedback: () -> Unit = {},
     onClearDebugFeedback: () -> Unit = {},
@@ -426,6 +427,30 @@ internal fun EarnItSettings(
                     )
                 }
                 Text("›", modifier = Modifier.clearAndSetSemantics { }, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.titleLarge)
+            }
+        }
+
+        Card(
+            modifier = Modifier.fillMaxWidth().clickable(onClick = onOpenCloudSync),
+            shape = RoundedCornerShape(18.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth().heightIn(min = 78.dp).padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                SettingsSymbolBadge(symbol = "\u21C5")
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                    Text("Cloud Sync", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        "Back up your Rules and keep devices matched",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Text("\u203A", modifier = Modifier.clearAndSetSemantics { }, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.titleLarge)
             }
         }
 

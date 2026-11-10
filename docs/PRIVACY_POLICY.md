@@ -1,7 +1,7 @@
 # Privacy Policy — EarnIt
 
 **Effective date:** August 6, 2026
-**Last updated:** August 6, 2026
+**Last updated:** November 10, 2026
 
 ---
 
@@ -9,7 +9,7 @@
 
 EarnIt is a productivity app that helps you manage your screen time by requiring productive app usage before accessing distracting apps. This policy explains what data EarnIt collects, why, and how it is handled.
 
-**The short version:** Almost everything EarnIt does stays on your device. We do not sell your data. We do not require an account. The only data that ever leaves your device is anonymous crash reports, anonymous product analytics, and feedback you choose to submit.
+**The short version:** Almost everything EarnIt does stays on your device. We do not sell your data. We do not require an account. The only data that ever leaves your device is anonymous crash reports, anonymous product analytics, feedback you choose to submit, and, only if you turn on Cloud Sync, your Rules.
 
 ---
 
@@ -17,7 +17,7 @@ EarnIt is a productivity app that helps you manage your screen time by requiring
 
 ### 1.1 Data stored on your device only
 
-The following data is created and stored entirely on your device. It is never transmitted to any server.
+The following data is created and stored entirely on your device. It is never transmitted to any server, with one exception: your Rules are uploaded if you choose to turn on Cloud Sync (section 1.6).
 
 | Data | Purpose |
 |---|---|
@@ -29,7 +29,7 @@ The following data is created and stored entirely on your device. It is never tr
 | Onboarding and setup progress | Remembering whether you have completed setup |
 | Analytics history | Populating the Today and 7-day analytics views |
 
-**We do not upload your app usage history, your Rules, your commitments, or your personal usage patterns to any server.**
+**We do not upload your app usage history, your commitments, or your personal usage patterns to any server. Your Rules are uploaded only if you turn on Cloud Sync.**
 
 ### 1.2 Anonymous installation identifier
 
@@ -84,6 +84,20 @@ Feedback is submitted to our backend (Supabase) and used only to understand and 
 
 Feedback data is stored securely and deleted when no longer needed for support purposes.
 
+### 1.6 Cloud Sync (optional, off by default)
+
+Cloud Sync backs up your Rules and keeps them matched across your devices. It is off until you sign in from Settings > Cloud Sync. If you never sign in, nothing in this section applies to you.
+
+When Cloud Sync is on, we store on our backend (Supabase):
+
+- Your email address, used only to sign you in with a one-time code
+- Your Rules: the apps you earn with, the apps and websites you block (app identifiers, app names, and website domains), exchange rate, schedule, and requirements
+- A random device identifier and the time each Rule was last changed, used to merge changes between devices
+
+Cloud Sync does **not** upload your app usage history, Reward Time balances, analytics, Deep Work sessions, or daily commitments.
+
+Only your signed-in account can read or change your synced Rules. We do not use your email for marketing. Signing out stops syncing and leaves your Rules on your device. To have your account and synced Rules deleted, contact us at the email below.
+
 ---
 
 ## 2. Permissions We Request
@@ -95,7 +109,7 @@ Feedback data is stored securely and deleted when no longer needed for support p
 | **Post Notifications** | Used to send optional daily commitment reminders for Benjamin Franklin Mode. You can disable these at any time in your device's notification settings. |
 | **Receive Boot Completed** | Used to reschedule Benjamin Franklin Mode notification reminders after your device restarts. |
 | **Schedule Exact Alarm** | Used to deliver Benjamin Franklin Mode reminders at your chosen times. |
-| **Internet** | Used to submit feedback and send anonymous analytics events and crash reports. |
+| **Internet** | Used to submit feedback, send anonymous analytics events and crash reports, and sync your Rules if you turn on Cloud Sync. |
 
 ---
 
@@ -109,7 +123,7 @@ Data is shared only with the following service providers, and only to the extent
 |---|---|---|
 | PostHog | Anonymous product analytics | Anonymous events, installation ID |
 | Firebase (Google) | Crash reporting | Crash diagnostics, installation ID |
-| Supabase | Feedback storage | Feedback submissions (only when you submit feedback) |
+| Supabase | Feedback storage; optional Cloud Sync | Feedback submissions (only when you submit feedback); your email and Rules (only if you turn on Cloud Sync) |
 
 All providers are used solely to operate and improve EarnIt.
 
@@ -123,6 +137,7 @@ All providers are used solely to operate and improve EarnIt.
 | Anonymous analytics events | Retained by PostHog per their data retention settings |
 | Crash reports | Retained by Firebase Crashlytics per their data retention settings |
 | Feedback submissions | Retained as long as needed for support purposes, then deleted |
+| Cloud Sync account and synced Rules | Kept until you ask us to delete your account |
 
 ---
 
@@ -137,6 +152,7 @@ EarnIt is not directed at children under the age of 13. We do not knowingly coll
 - **Analytics:** Anonymous analytics are enabled by default. If you wish to opt out, contact us at the email below and we will provide instructions.
 - **Crash reports:** Crash reporting is enabled by default to help us fix bugs. If you wish to opt out, contact us.
 - **Feedback:** Submitting feedback is entirely optional. Email and screenshot fields are optional within the form.
+- **Cloud Sync:** Off by default. Sign out at any time in Settings > Cloud Sync; contact us to delete your account and synced Rules.
 - **Notifications:** You can disable Benjamin Franklin Mode reminders at any time in Android Settings > Apps > EarnIt > Notifications.
 - **App data:** You can clear all on-device data by going to Android Settings > Apps > EarnIt > Storage > Clear Data.
 
