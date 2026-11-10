@@ -32,9 +32,18 @@ class ProtectedUsageClock {
         accountedAtMillis = nowElapsedMillis
     }
 
-    fun tick(nowElapsedMillis: Long): Long {
+    /**
+     * Seconds to charge since the last tick. A gap longer than [maxGapSeconds] means ticks stopped
+     * (the device slept or the service was frozen) rather than the target being used, so only the
+     * cap is charged and the clock re-anchors to now.
+     */
+    fun tick(nowElapsedMillis: Long, maxGapSeconds: Long = Long.MAX_VALUE): Long {
         if (key == null || accountedAtMillis == 0L || nowElapsedMillis <= accountedAtMillis) return 0L
         val seconds = (nowElapsedMillis - accountedAtMillis) / 1_000L
+        if (seconds > maxGapSeconds.coerceAtLeast(1L)) {
+            accountedAtMillis = nowElapsedMillis
+            return maxGapSeconds.coerceAtLeast(1L)
+        }
         if (seconds > 0L) accountedAtMillis += seconds * 1_000L
         return seconds
     }

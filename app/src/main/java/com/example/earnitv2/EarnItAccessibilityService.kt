@@ -41,11 +41,21 @@ class EarnItAccessibilityService : AccessibilityService() {
     // in the manifest on API 26+ (not in the implicit-broadcast exemption list).
     private val unlockReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent?) {
-            if (intent?.action == Intent.ACTION_USER_PRESENT) {
-                UnlockMilestoneStore.onUnlock(context)
+            when (intent?.action) {
+                Intent.ACTION_USER_PRESENT -> {
+                    UnlockMilestoneStore.onUnlock(context)
+                    // Unlocking can return straight to a protected app without a new window
+                    // event, so re-evaluate whatever is in front once the keyguard is gone.
+                    scheduleForegroundEnforcement(FOREGROUND_ENFORCEMENT_DELAY_MILLIS)
+                }
+                // Stop the reward clock the moment the screen turns off. Without this the tick
+                // resumes after sleep and charges the whole time the phone was in a pocket.
+                Intent.ACTION_SCREEN_OFF -> stopActiveBlockedUsage()
             }
         }
     }
+
+    private val foregroundEnforcementRunnable = Runnable { enforceCurrentForeground() }
     private var unlockReceiverRegistered = false
 
     private val browserRetryRunnable = object : Runnable {
@@ -154,11 +164,21 @@ class EarnItAccessibilityService : AccessibilityService() {
         if (!unlockReceiverRegistered) {
             ContextCompat.registerReceiver(
                 this, unlockReceiver,
-                IntentFilter(Intent.ACTION_USER_PRESENT),
+                IntentFilter(Intent.ACTION_USER_PRESENT).apply { addAction(Intent.ACTION_SCREEN_OFF) },
                 ContextCompat.RECEIVER_EXPORTED
             )
             unlockReceiverRegistered = true
         }
+        ProtectionStatusNotifier.clear(this)
+        // The service starts with no memory of what is in front (first enable, app update,
+        // crash restart). Evaluate it now instead of waiting for the next window change.
+        scheduleForegroundEnforcement(FOREGROUND_ENFORCEMENT_DELAY_MILLIS)
+    }
+
+    override fun onUnbind(intent: Intent?): Boolean {
+        // Accessibility was switched off (or revoked by the system): nothing is being blocked.
+        ProtectionStatusNotifier.notifyProtectionOff(this)
+        return super.onUnbind(intent)
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -226,23 +246,7 @@ class EarnItAccessibilityService : AccessibilityService() {
             return
         }
 
-        val deepWork = DeepWorkStore.load(this)
-        if (deepWork.phase == DeepWorkPhase.Active || deepWork.displayPhase(SystemClock.elapsedRealtime(), eventAtMillis) == DeepWorkPhase.GoalComplete) {
-            val deepWorkRule = deepWork.linkedRuleId?.let { EarnItRuleStore.findRule(this, it) }
-            val deepWorkBlockedApp = deepWorkRule?.blockedAppForPackage(foregroundPackage)
-            if (deepWorkRule != null && deepWorkBlockedApp != null) {
-                stopActiveBlockedUsage()
-                launchBlockedActivity(deepWorkRule, deepWorkBlockedApp.name, deepWorkBlockedApp.packageName, RuleAccessEvaluator.DenialReason.OutOfRewardTime)
-                return
-            }
-            if (deepWorkRule == null && foregroundPackage in DeepWorkStore.standaloneBlockedPackages(this)) {
-                val appName = runCatching { packageManager.getApplicationLabel(packageManager.getApplicationInfo(foregroundPackage, 0)).toString() }.getOrDefault("Blocked app")
-                val standaloneRule = EarnItRuleStore.Rule(productivePackage = "", productiveName = "Deep Work", blockedApps = listOf(EarnItRuleStore.RuleApp(foregroundPackage, appName)), rewardSecondsPerProductiveSecond = 1, activeDays = EarnItRuleStore.allDays.toSet(), startMinute = 0, endMinute = 1_440, type = EarnItRuleStore.RuleType.ScheduledBlock)
-                stopActiveBlockedUsage()
-                launchBlockedActivity(standaloneRule, appName, foregroundPackage, RuleAccessEvaluator.DenialReason.ScheduledBlockActive)
-                return
-            }
-        }
+        if (blockForDeepWorkIfNeeded(foregroundPackage, eventAtMillis)) return
 
         creditLatestProgress(rules)
 
@@ -268,11 +272,61 @@ class EarnItAccessibilityService : AccessibilityService() {
         launchBlockedActivity(primaryDenial.rule, blockedApp.name, blockedApp.packageName, primaryDenial.reason)
     }
 
+    /** Blocks [foregroundPackage] if an active Deep Work session protects it. Returns true when it did. */
+    private fun blockForDeepWorkIfNeeded(foregroundPackage: String, eventAtMillis: Long): Boolean {
+        val deepWork = DeepWorkStore.load(this)
+        if (deepWork.phase == DeepWorkPhase.Active || deepWork.displayPhase(SystemClock.elapsedRealtime(), eventAtMillis) == DeepWorkPhase.GoalComplete) {
+            val deepWorkRule = deepWork.linkedRuleId?.let { EarnItRuleStore.findRule(this, it) }
+            val deepWorkBlockedApp = deepWorkRule?.blockedAppForPackage(foregroundPackage)
+            if (deepWorkRule != null && deepWorkBlockedApp != null) {
+                stopActiveBlockedUsage()
+                launchBlockedActivity(deepWorkRule, deepWorkBlockedApp.name, deepWorkBlockedApp.packageName, RuleAccessEvaluator.DenialReason.OutOfRewardTime)
+                return true
+            }
+            if (deepWorkRule == null && foregroundPackage in DeepWorkStore.standaloneBlockedPackages(this)) {
+                val appName = runCatching { packageManager.getApplicationLabel(packageManager.getApplicationInfo(foregroundPackage, 0)).toString() }.getOrDefault("Blocked app")
+                val standaloneRule = EarnItRuleStore.Rule(productivePackage = "", productiveName = "Deep Work", blockedApps = listOf(EarnItRuleStore.RuleApp(foregroundPackage, appName)), rewardSecondsPerProductiveSecond = 1, activeDays = EarnItRuleStore.allDays.toSet(), startMinute = 0, endMinute = 1_440, type = EarnItRuleStore.RuleType.ScheduledBlock)
+                stopActiveBlockedUsage()
+                launchBlockedActivity(standaloneRule, appName, foregroundPackage, RuleAccessEvaluator.DenialReason.ScheduledBlockActive)
+                return true
+            }
+        }
+        return false
+    }
+
+    private fun scheduleForegroundEnforcement(delayMillis: Long) {
+        handler.removeCallbacks(foregroundEnforcementRunnable)
+        handler.postDelayed(foregroundEnforcementRunnable, delayMillis)
+    }
+
+    /**
+     * Applies the Rules to whatever is in front right now, without waiting for an accessibility
+     * event. Used after the service (re)connects, after unlock, and after a debounced block.
+     */
+    private fun enforceCurrentForeground() {
+        val foregroundPackage = rootInActiveWindow?.packageName?.toString() ?: return
+        if (isEarnItPackage(foregroundPackage, packageName)) return
+        val rules = EarnItRuleStore.getRules(this)
+        if (browserPageObserver.isSupportedBrowser(foregroundPackage)) {
+            if (activeBrowserPackage != foregroundPackage) {
+                handler.removeCallbacks(browserRetryRunnable)
+                browserRetryCount = 0
+                activeBrowserPackage = foregroundPackage
+            }
+            handleBrowserForeground(rules, foregroundPackage)
+            return
+        }
+        if (blockForDeepWorkIfNeeded(foregroundPackage, System.currentTimeMillis())) return
+        creditLatestProgress(rules)
+        handleForegroundApp(rules, foregroundPackage)
+    }
+
     override fun onInterrupt() {
         stopTrackedAppHandoffSession()
     }
 
     override fun onDestroy() {
+        handler.removeCallbacks(foregroundEnforcementRunnable)
         handler.removeCallbacks(foregroundWindowRecheckRunnable)
         handler.removeCallbacks(websiteRedirectRetryRunnable)
         pendingWebsiteBlock = null
@@ -493,7 +547,7 @@ class EarnItAccessibilityService : AccessibilityService() {
         if (activeBlockedPackage == null) return
         if (rule.type != EarnItRuleStore.RuleType.EarnRewardTime) return
 
-        val elapsedSeconds = usageClock.tick(SystemClock.elapsedRealtime())
+        val elapsedSeconds = usageClock.tick(SystemClock.elapsedRealtime(), MAX_CONSUMPTION_GAP_SECONDS)
         if (elapsedSeconds <= 0L) return
         RewardLedger.consumeRewardSeconds(this, rule, elapsedSeconds)
     }
@@ -732,7 +786,12 @@ class EarnItAccessibilityService : AccessibilityService() {
         ignoreDebounce: Boolean = false,
         blockedDomain: String? = null
     ) {
-        if (!ignoreDebounce && !canLaunchBlockedActivity()) return
+        if (!ignoreDebounce && !canLaunchBlockedActivity()) {
+            // Debouncing must delay the block, never drop it: otherwise reopening a blocked app
+            // within the debounce window leaves it usable until its next window change.
+            scheduleForegroundEnforcement(BLOCKED_ACTIVITY_DEBOUNCE_MILLIS + FOREGROUND_ENFORCEMENT_DELAY_MILLIS)
+            return
+        }
 
         lastBlockedLaunchAt = System.currentTimeMillis()
         AnalyticsEventStore.recordBlockedAttempt(this, rule.id, lastBlockedLaunchAt)
@@ -785,6 +844,8 @@ class EarnItAccessibilityService : AccessibilityService() {
         const val TAG = "EarnItAccessibility"
         const val CONSUMPTION_TICK_MILLIS = 1_000L
         const val BLOCKED_ACTIVITY_DEBOUNCE_MILLIS = 2_000L
+        const val FOREGROUND_ENFORCEMENT_DELAY_MILLIS = 300L
+        const val MAX_CONSUMPTION_GAP_SECONDS = 10L
         const val BROWSER_RETRY_DELAY_MILLIS = 200L
         const val MAX_BROWSER_RETRIES = 6
         const val MAX_FOREGROUND_RECHECKS = 25

@@ -50,7 +50,13 @@ object RewardLedger {
             return Snapshot(creditedSeconds, rewardIssuedSeconds, rewardConsumedSeconds)
         }
 
-        val updatedRewardIssuedSeconds = rewardIssuedSeconds + issueRewardSeconds(newlyEarnedSeconds, rule)
+        // Issue from cumulative totals so the sub-second remainder of each credit is carried
+        // forward instead of being truncated away on every small increment.
+        val updatedRewardIssuedSeconds = rewardIssuedSeconds + incrementalRewardSeconds(
+            previouslyCreditedSeconds = creditedSeconds,
+            nowCreditedSeconds = safeProductiveSeconds,
+            rewardSecondsPerProductiveSecond = rule.rewardSecondsPerProductiveSecond
+        )
         prefs.edit()
             .putLong(ruleKey(rule, KEY_PRODUCTIVE_CREDITED_SECONDS), safeProductiveSeconds)
             .putLong(ruleKey(rule, KEY_REWARD_ISSUED_SECONDS), updatedRewardIssuedSeconds)
@@ -384,17 +390,30 @@ object RewardLedger {
                 currentRuleSignature = ruleSignature
             )
         ) {
+            // A same-day reset means the Rule was edited, not that a new day started. Time already
+            // spent today must survive the edit, otherwise editing a Rule refunds every consumed
+            // minute (usage is re-credited from UsageStats while consumption would restart at zero).
+            val plan = ledgerResetPlan(
+                storedDay = prefs.getString(dayKey, null),
+                currentDay = today,
+                storedConsumedSeconds = prefs.getLong(ruleKey(rule, KEY_REWARD_CONSUMED_SECONDS), 0L),
+                storedDeepWorkCreditedSeconds = prefs.getLong(ruleKey(rule, KEY_DEEP_WORK_CREDITED_SECONDS), 0L),
+                rewardSecondsPerProductiveSecond = rule.rewardSecondsPerProductiveSecond
+            )
             val editor = prefs.edit()
             clearRulePackageKeys(prefs, editor, rule, KEY_REQUIREMENT_PROGRESS_SECONDS)
             clearRulePackageKeys(prefs, editor, rule, KEY_TRACKED_HANDOFF_SECONDS)
             clearRulePackageKeys(prefs, editor, rule, KEY_TRACKED_HANDOFF_CREDIT_CURSOR)
+            if (!plan.keepProcessedDeepWorkSessions) {
+                editor.remove(ruleKey(rule, KEY_DEEP_WORK_PROCESSED_SESSION_IDS))
+            }
             editor
                 .putString(dayKey, today)
                 .putString(signatureKey, ruleSignature)
                 .putLong(ruleKey(rule, KEY_PRODUCTIVE_CREDITED_SECONDS), 0L)
-                .putLong(ruleKey(rule, KEY_REWARD_ISSUED_SECONDS), 0L)
-                .putLong(ruleKey(rule, KEY_REWARD_CONSUMED_SECONDS), 0L)
-                .putLong(ruleKey(rule, KEY_DEEP_WORK_CREDITED_SECONDS), 0L)
+                .putLong(ruleKey(rule, KEY_REWARD_ISSUED_SECONDS), plan.rewardIssuedSeconds)
+                .putLong(ruleKey(rule, KEY_REWARD_CONSUMED_SECONDS), plan.rewardConsumedSeconds)
+                .putLong(ruleKey(rule, KEY_DEEP_WORK_CREDITED_SECONDS), plan.deepWorkCreditedSeconds)
                 .commit()
         }
         return prefs
@@ -425,10 +444,6 @@ object RewardLedger {
                 prefs.getLong(KEY_REWARD_CONSUMED_SECONDS, 0L)
             )
             .commit()
-    }
-
-    private fun issueRewardSeconds(productiveSeconds: Long, rule: EarnItRuleStore.Rule): Long {
-        return productiveSeconds * rule.rewardSecondsPerProductiveSecond.coerceAtLeast(1) / 10L
     }
 
     private fun ruleKey(rule: EarnItRuleStore.Rule, key: String): String {
@@ -520,3 +535,50 @@ internal fun shouldResetRuleLedger(
     storedRuleSignature: String?,
     currentRuleSignature: String
 ): Boolean = storedDay != currentDay || storedRuleSignature != currentRuleSignature
+
+/**
+ * Reward seconds owed for moving the credited productive total from [previouslyCreditedSeconds] to
+ * [nowCreditedSeconds]. Computed as a difference of cumulative totals so that many small credits
+ * issue exactly the same reward as one large credit.
+ */
+internal fun incrementalRewardSeconds(
+    previouslyCreditedSeconds: Long,
+    nowCreditedSeconds: Long,
+    rewardSecondsPerProductiveSecond: Int
+): Long {
+    val rate = rewardSecondsPerProductiveSecond.coerceAtLeast(1)
+    val before = previouslyCreditedSeconds.coerceAtLeast(0L) * rate / 10L
+    val after = nowCreditedSeconds.coerceAtLeast(0L) * rate / 10L
+    return (after - before).coerceAtLeast(0L)
+}
+
+internal data class LedgerResetPlan(
+    val rewardIssuedSeconds: Long,
+    val rewardConsumedSeconds: Long,
+    val deepWorkCreditedSeconds: Long,
+    val keepProcessedDeepWorkSessions: Boolean
+)
+
+/**
+ * What a ledger reset keeps. A new day starts from zero. A same-day reset (the Rule's terms were
+ * edited) keeps consumed time and already-credited Deep Work; app usage is re-credited from
+ * UsageStats at the new terms on the next credit pass.
+ */
+internal fun ledgerResetPlan(
+    storedDay: String?,
+    currentDay: String,
+    storedConsumedSeconds: Long,
+    storedDeepWorkCreditedSeconds: Long,
+    rewardSecondsPerProductiveSecond: Int
+): LedgerResetPlan {
+    if (storedDay != currentDay) {
+        return LedgerResetPlan(0L, 0L, 0L, keepProcessedDeepWorkSessions = false)
+    }
+    val deepWorkSeconds = storedDeepWorkCreditedSeconds.coerceAtLeast(0L)
+    return LedgerResetPlan(
+        rewardIssuedSeconds = deepWorkRewardSeconds(deepWorkSeconds, rewardSecondsPerProductiveSecond),
+        rewardConsumedSeconds = storedConsumedSeconds.coerceAtLeast(0L),
+        deepWorkCreditedSeconds = deepWorkSeconds,
+        keepProcessedDeepWorkSessions = true
+    )
+}

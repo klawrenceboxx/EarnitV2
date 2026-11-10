@@ -123,7 +123,7 @@ internal fun EarnItRuleDetail(
     val rule = homeRule.rule
     var nowMillis by remember(rule.id) { mutableStateOf(System.currentTimeMillis()) }
     var editGateState by remember(rule.id) { mutableStateOf(EditGateState.Hidden) }
-    var editCountdownSeconds by remember(rule.id) { mutableStateOf(10) }
+    var editCountdownSeconds by remember(rule.id) { mutableStateOf(EDIT_GATE_COUNTDOWN_SECONDS) }
     var pauseSheetState by remember(rule.id) { mutableStateOf(PauseSheetState.Hidden) }
     var selectedPauseOption by remember(rule.id) { mutableStateOf<PauseOption?>(null) }
     var pauseReason by remember(rule.id) { mutableStateOf<String?>(null) }
@@ -143,7 +143,7 @@ internal fun EarnItRuleDetail(
     }
     LaunchedEffect(editGateState) {
         if (editGateState == EditGateState.Counting) {
-            editCountdownSeconds = 10
+            editCountdownSeconds = EDIT_GATE_COUNTDOWN_SECONDS
             while (editCountdownSeconds > 0 && editGateState == EditGateState.Counting) {
                 delay(1_000)
                 editCountdownSeconds -= 1
@@ -600,6 +600,9 @@ internal fun EarnItBackButton(onBack: () -> Unit) {
 }
 
 internal const val EARNIT_BACK_LABEL = "< Back"
+
+/** Wait before a Rule can be edited. Long enough that an impulse usually passes. */
+internal const val EDIT_GATE_COUNTDOWN_SECONDS = 15
 
 @Composable
 private fun EditRuleGateCard(
