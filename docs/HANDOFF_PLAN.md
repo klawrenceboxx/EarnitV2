@@ -22,6 +22,8 @@ Branch with work in progress: `claude/reliability-audit-cloud-sync` (this branch
 |---|---|
 | 0. Build verification of this branch | Not started. Blocks everything |
 | 1. Core reliability audit (roadmap 01) | Logic fixes written and unit-tested off-Gradle. Device checks and several findings open |
+| 1A. Strict Mode charger lockout | Diagnosed, not fixed. Do this right after workstream 0 |
+| 1B. Full-app audit | Scoped below. Only the blocking engine and ledger have been audited so far |
 | 2. Anti-bypass friction (roadmap 03) | Two bypasses fixed, edit gate set to 15s. Delete path and others open |
 | 3. Cloud sync | Client, tests, migration, docs written. Not built, not run against Supabase |
 | 4. iOS | Blocked: the iOS code is not on GitHub |
@@ -110,6 +112,103 @@ Done when: the build is green and the checklist is filled in on the PR.
     stray `git diff` dump (no secrets found); delete it. `isMinifyEnabled = false` in release is
     still undecided.
 
+## Workstream 1A: Strict Mode charger lockout (reported by Kaleel)
+
+Symptom: with Charger protection, plugging the phone in still doesn't let you end Strict Mode.
+
+Cause: every gate checks `ChargingState.isActivelyCharging`, which is
+`plugged != 0 && status == BATTERY_STATUS_CHARGING` (`Charger.kt`). A plugged-in phone often
+reports a different status:
+
+- `STATUS_FULL` at 100%.
+- `STATUS_NOT_CHARGING` when charging is paused: Samsung "Protect battery" (stops at 80–85%),
+  Pixel Adaptive Charging, OEM optimised charging, or a weak USB port.
+- `STATUS_DISCHARGING` for a moment right after plugging in, before the next battery broadcast.
+
+In all of these, the "Disable Strict Mode" button stays disabled ("Connect charger to
+deactivate"), the confirm dialog closes itself (`EarnItStrictMode.kt`, the `LaunchedEffect` on
+`isActivelyCharging`), and `confirmGlobalChargerDeactivation` / `authorizeCharger` /
+`beginOrRestoreCharger` in `StrictModeFoundation.kt` reject the attempt. On a phone with
+battery protection on and the battery above the limit, Strict Mode can't be ended at all.
+`ChargerTest.acUsbWirelessAndOtherSourcesRequireActiveCharging` asserts this behaviour, so it
+was deliberate. But the friction the feature promises is "go and plug in your phone", not
+"the battery must be taking current".
+
+Fix:
+
+1. Gate on `isPlugged` everywhere the charger is used as authorization: `StrictModeFoundation.kt`
+   (`confirmGlobalChargerDeactivation`, `authorizeCharger`, `beginOrRestoreCharger`),
+   `EarnItStrictMode.kt` (button state, dialog auto-close, authorize button) and
+   `chargerDeactivationButtonUi`. Keep `isActivelyCharging` only for display, if at all.
+2. Update `ChargerTest`: plugged plus `NOT_CHARGING`, `FULL` or `DISCHARGING` must authorize;
+   unplugged must not.
+3. `AndroidChargingStateObserver.observe` only runs between `onStart` and `onStop`. Confirm the
+   state is re-read when the user plugs in while EarnIt is in the background and then returns
+   (`onStart` calls `observe`, which reads `currentState()`, so this should hold; verify it).
+4. Device test: battery full; Samsung Protect battery on above 85%; Pixel Adaptive Charging;
+   wireless pad; a USB-C cable on a laptop port. Each must allow deactivation while plugged in
+   and block it when unplugged.
+
+Also confirm no other Strict Mode method can lock the user out: PIN forgotten (is there any
+recovery?), countdown across a reboot, and a deactivation request expiring mid-flow.
+
+## Workstream 1B: full-app audit
+
+Only the blocking engine, reward ledger and a few bypass paths have been audited. Workstream 1A
+is the kind of bug the rest of the app still hides. Audit every file, area by area, in the order
+below. About 23,700 lines of Kotlin in 63 files.
+
+### Method, per area
+
+1. Read every file in the area in full. For the large files (`MainActivity.kt` 2.8k lines,
+   `EarnItRuleBuilder.kt` 2.2k, `EarnItStrictMode.kt` 1.6k, `EarnItRuleDetail.kt` 1.4k,
+   `StrictModeFoundation.kt` 1.3k), read in sections and keep notes.
+2. Check against the questions for that area below, plus these for every area:
+   - Can the user get stuck, with no way forward or back (the 1A pattern)?
+   - Can the user get round a Rule or Strict Mode, by order of operations, timing, process death
+     or the system clock?
+   - What happens after process death, reboot, app update and clearing the app from recents?
+   - Does every error path tell the user something true, or fail silently?
+   - Is state written with `commit()` where a crash right after would lose it?
+3. Record each finding in the table below the moment it's found: id, area, file:line, severity,
+   what happens, how to reproduce, proposed fix. Severity: **S1** blocks the user or breaks a
+   promise (lockout, bypass, data loss, crash); **S2** wrong result or broken flow with a
+   workaround; **S3** polish.
+4. Fix S1s as found, each in its own commit with a regression test. Batch S2s per area. List S3s
+   and leave them for Kaleel to triage.
+5. Spawn the `code-reviewer` agent on each area's fixes before moving on.
+
+### Areas
+
+| # | Area | Files | Specific questions |
+|---|---|---|---|
+| A1 | Blocking engine | `EarnItAccessibilityService`, `RuleAccessEvaluator`, `ProtectedTarget`, `BrowserPage`, `BlockedDomain`, `TrackedAppHandoff`, `AppPackages` | Done in part (workstream 1). Remaining: findings 3–8, Chrome UI changes, other browsers (Firefox, Samsung Internet, Brave), incognito, Chrome custom tabs inside other apps |
+| A2 | Ledger and pauses | `RewardLedger`, `EarnItPauseStore`, `UnlockMilestoneStore` | Done in part. Remaining: findings 2, 3, 6; pause expiry while the phone is off; milestone counts across days |
+| A3 | Block screen | `BlockedActivity` | Back, Home, Recents, gesture nav, split screen; does any button lead into Settings or EarnIt where a Rule can be weakened; Daily Commitment screen can't be skipped |
+| A4 | Strict Mode | `StrictModeFoundation`, `StrictModeStore`, `StrictModePolicy`, `StrictModeCommitment`, `StrictModePin`, `Charger`, `EarnItStrictMode` | 1A first. Then: every lockout path for each method; legacy-to-global migration on upgrade; what Strict Mode actually protects (edit, pause, delete, Accessibility off, uninstall); whether the 7-day commitment can be shortened |
+| A5 | Rules UI | `EarnItRuleBuilder`, `EarnItRuleDetail`, `EarnItRuleTypeSelection`, `EarnItHome`, `EarnItAppPicker`, `EarnItAppIcon`, `RuleTypePresentation`, `CompleteToUnlockProgressUiState`, `EarnItUiState` | Invalid Rules (no blocked app, zero-length window, blocking EarnIt or the launcher or the dialer); uninstalled apps in a Rule; the edit gate and pause countdown can't be skipped; free-plan limit enforced at every entry point |
+| A6 | Deep Work | `DeepWork` | Reformat first. Finding 7; DND permission denied or revoked mid-session; ending early; standalone vs linked sessions |
+| A7 | Benjamin Franklin Mode | `BenjaminFranklinMode`, `BenjaminFranklinScreen`, `BenjaminFranklinNotificationScheduler`, `BenjaminFranklinReceiver` | Exact-alarm permission denied (Android 14 denies by default); time zone and DST changes; streak across a missed day; review after midnight |
+| A8 | Entitlement and Pro | `Entitlement`, `RuleEntitlementPolicy`, `PurchaseProvider`, `SubscriptionConfig`, `EarnItPro` | Can a release build reach the simulator or grant Pro; downgrade with more than 2 Rules picks the right ones; nothing pretends billing works |
+| A9 | Onboarding and setup | `EarnItOnboarding`, `EarnItOnboardingState`, `EarnItSetup` | Permission denied or granted out of order; returning from Settings; replay doesn't change Rules; the legacy setup flow is unreachable or removed |
+| A10 | Analytics | `AnalyticsScreen`, `AnalyticsModels`, `AnalyticsRepository`, `AnalyticsInsights` | Numbers match the ledger; day boundaries and DST; no Usage Access; insights never claim cause and effect (a recent commit changed wording toward that, check it) |
+| A11 | Feedback and crash reporting | `Feedback*`, `ProductAnalytics`, `MainApplication` | Offline queue survives restarts and doesn't grow forever; screenshot EXIF stripped; nothing sensitive in diagnostics; PostHog missing-key crash is debug-only |
+| A12 | Cloud Sync | `CloudSync*` | New code; covered by workstream 3 |
+| A13 | Navigation and app shell | `MainActivity`, `ui/theme/*` | Back stack can't strand the user; state survives rotation and process death; deep links from notifications land in the right place |
+| A14 | Manifest, permissions, build | `AndroidManifest.xml`, `res/xml/*`, `app/build.gradle.kts`, `proguard-rules.pro` | Exported components; `QUERY_ALL_PACKAGES` and Accessibility declarations Play will ask about; backup rules; release minify decision |
+| A15 | Privacy policy vs behaviour | `docs/PRIVACY_POLICY.md` | Every statement true of the code, finding 9 included |
+
+### Findings log
+
+Keep it in `docs/AUDIT_FINDINGS.md` (create it). Seed it with the open findings from workstream 1
+and 1A. One row per finding:
+
+| ID | Area | Sev | File:line | What happens | Repro | Fix | Status |
+|---|---|---|---|---|---|---|---|
+
+Done when: every area above has been read in full and marked done in the log, every S1 is fixed
+with a test, and the log is linked from the PR.
+
 ## Workstream 2: anti-bypass friction (roadmap 03)
 
 Done on this branch: edit gate raised from 10s to 15s (`EDIT_GATE_COUNTDOWN_SECONDS`); R2 above;
@@ -184,7 +283,7 @@ first, and fix finding 7 as part of "manual-session integrity".
 
 ## Suggested order
 
-0 → 1 device checklist → 2 (delete gate) → 3 → 5 can run in parallel with any of them → 6.
+0 → 1A → 1 device checklist → 1B (full audit, which absorbs 2) → 3 → 6. 5 can run in parallel with any of them.
 4 starts when the iOS repo exists.
 
 ## Needed from Kaleel
