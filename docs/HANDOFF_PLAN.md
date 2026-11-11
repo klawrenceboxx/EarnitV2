@@ -24,6 +24,7 @@ Branch with work in progress: `claude/reliability-audit-cloud-sync` (this branch
 | 1. Core reliability audit (roadmap 01) | Logic fixes written and unit-tested off-Gradle. Device checks and several findings open |
 | 1A. Strict Mode charger lockout | Diagnosed, not fixed. Do this right after workstream 0 |
 | 1B. Full-app audit | Scoped below. Only the blocking engine and ledger have been audited so far |
+| 1C. Pickup notifications | Diagnosed, not fixed. Needs two product answers from Kaleel |
 | 2. Anti-bypass friction (roadmap 03) | Two bypasses fixed, edit gate set to 15s. Delete path and others open |
 | 3. Cloud sync | Client, tests, migration, docs written. Not built, not run against Supabase |
 | 4. iOS | Blocked: the iOS code is not on GitHub |
@@ -152,6 +153,45 @@ Fix:
 Also confirm no other Strict Mode method can lock the user out: PIN forgotten (is there any
 recovery?), countdown across a reboot, and a deactivation request expiring mid-flow.
 
+## Workstream 1C: pickup notifications (reported by Kaleel)
+
+Symptom: the app is meant to notify you as your phone pickups add up, but the notifications
+mostly don't come.
+
+Cause, in `UnlockMilestoneStore.kt`:
+
+1. **The count never resets.** It's a lifetime total with milestones at 5, 10, 25, 50, 100 and
+   200, and each fires once ever. Most people unlock their phone 50–100 times a day, so all six
+   fire within the first day or two of install and then never again. That matches "lacking".
+2. **Wrong channel.** It posts on the Benjamin Franklin reminders channel (`bf_reminders`).
+   Turning those reminders off silences pickups too, and pickups can't be controlled on their own.
+3. **Wrong message.** The copy congratulates ("You're building a habit", "You're one of the few
+   who sticks with it") for picking the phone up, which is the behaviour EarnIt exists to reduce.
+4. **Only counted while the Accessibility service is running** (the receiver is registered in
+   `EarnItAccessibilityService.onServiceConnected`). Pickups while it's off or restarting are lost.
+   Acceptable, but say so on whatever screen shows the number.
+5. **Not tested.** No unit test covers it.
+
+Fix:
+
+1. Count per local day, reset at midnight (store the date with the count, as `RewardLedger` does).
+   Handle time zone changes by using the stored date, not elapsed time.
+2. Notify at each step of a fixed increment during the day, once per step per day. Default
+   proposal: every 25 pickups (25, 50, 75, 100…). See questions for Kaleel.
+3. Its own channel, "Pickup check-ins", created in `MainApplication`, plus an on/off switch and
+   increment picker in Settings. Default on.
+4. Neutral, factual copy in the app's voice: "That's 50 pickups today." with today's reward time
+   used in the body if it's cheap to get. No praise, no alarm.
+5. Pure-Kotlin counter logic with unit tests: increments, once-per-step, midnight reset, a day
+   with no unlocks, clock moved backwards.
+6. Device check: lock/unlock 25 times and get one notification; cross midnight and confirm the
+   count resets; disable the channel and confirm Benjamin Franklin reminders still arrive.
+7. Check whether `ACTION_USER_PRESENT` fires on a phone with no screen lock. If not, count
+   `ACTION_SCREEN_ON` instead when no keyguard is set.
+
+Questions for Kaleel before building: what increment (every 10, 25, 50, or chosen by the user)?
+And should it say something different once you're past your usual daily count?
+
 ## Workstream 1B: full-app audit
 
 Only the blocking engine, reward ledger and a few bypass paths have been audited. Workstream 1A
@@ -183,7 +223,7 @@ below. About 23,700 lines of Kotlin in 63 files.
 | # | Area | Files | Specific questions |
 |---|---|---|---|
 | A1 | Blocking engine | `EarnItAccessibilityService`, `RuleAccessEvaluator`, `ProtectedTarget`, `BrowserPage`, `BlockedDomain`, `TrackedAppHandoff`, `AppPackages` | Done in part (workstream 1). Remaining: findings 3–8, Chrome UI changes, other browsers (Firefox, Samsung Internet, Brave), incognito, Chrome custom tabs inside other apps |
-| A2 | Ledger and pauses | `RewardLedger`, `EarnItPauseStore`, `UnlockMilestoneStore` | Done in part. Remaining: findings 2, 3, 6; pause expiry while the phone is off; milestone counts across days |
+| A2 | Ledger and pauses | `RewardLedger`, `EarnItPauseStore`, `UnlockMilestoneStore` (see 1C) | Done in part. Remaining: findings 2, 3, 6; pause expiry while the phone is off; milestone counts across days |
 | A3 | Block screen | `BlockedActivity` | Back, Home, Recents, gesture nav, split screen; does any button lead into Settings or EarnIt where a Rule can be weakened; Daily Commitment screen can't be skipped |
 | A4 | Strict Mode | `StrictModeFoundation`, `StrictModeStore`, `StrictModePolicy`, `StrictModeCommitment`, `StrictModePin`, `Charger`, `EarnItStrictMode` | 1A first. Then: every lockout path for each method; legacy-to-global migration on upgrade; what Strict Mode actually protects (edit, pause, delete, Accessibility off, uninstall); whether the 7-day commitment can be shortened |
 | A5 | Rules UI | `EarnItRuleBuilder`, `EarnItRuleDetail`, `EarnItRuleTypeSelection`, `EarnItHome`, `EarnItAppPicker`, `EarnItAppIcon`, `RuleTypePresentation`, `CompleteToUnlockProgressUiState`, `EarnItUiState` | Invalid Rules (no blocked app, zero-length window, blocking EarnIt or the launcher or the dialer); uninstalled apps in a Rule; the edit gate and pause countdown can't be skipped; free-plan limit enforced at every entry point |
@@ -283,7 +323,7 @@ first, and fix finding 7 as part of "manual-session integrity".
 
 ## Suggested order
 
-0 → 1A → 1 device checklist → 1B (full audit, which absorbs 2) → 3 → 6. 5 can run in parallel with any of them.
+0 → 1A → 1C → 1 device checklist → 1B (full audit, which absorbs 2) → 3 → 6. 5 can run in parallel with any of them.
 4 starts when the iOS repo exists.
 
 ## Needed from Kaleel
@@ -292,3 +332,4 @@ first, and fix finding 7 as part of "manual-session integrity".
 2. Decide: unpause the Supabase project and apply the sync migration?
 3. Decide finding 2 (how a recreated Rule should earn).
 4. Confirm the cloud sync decisions above, or say which to change.
+5. Pickup notifications: what increment, and any change in tone past your usual count (workstream 1C).
